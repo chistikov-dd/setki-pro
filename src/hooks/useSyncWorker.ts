@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { retrySync, isRetryableError } from '../utils/retry';
 import { logger, LOG_CATEGORIES } from '../utils/logger';
 import { syncChanges, syncToLocalServer } from '../services/api';

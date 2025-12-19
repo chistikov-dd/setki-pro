@@ -98,7 +98,7 @@ export function useAdminEventsWebSocket({
       }
     };
 
-    ws.onerror = (event) => {
+    ws.onerror = () => {
       const error = new Error('Admin WebSocket error');
       logger.error(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket error', {}, error);
       if (onError) {

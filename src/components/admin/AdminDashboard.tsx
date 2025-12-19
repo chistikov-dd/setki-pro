@@ -12,7 +12,7 @@ import { JudgeTablesMonitor } from './JudgeTablesMonitor';
 import { ActiveMatchesMonitor } from './ActiveMatchesMonitor';
 import { SyncProgress } from './SyncProgress';
 import { TournamentCardSkeleton, SkeletonList } from '../ui/Skeleton';
-import { ToastContainer } from '../ui/Toast';
+import { ToastContainer, Toast } from '../ui/Toast';
 import { useToast } from '../../hooks/useToast';
 import { useAdminEventsWebSocket } from '../../hooks/useAdminEventsWebSocket';
 import type { ServerMode } from '../../stores/serverModeStore';
@@ -39,7 +39,7 @@ export const AdminDashboard = () => {
   const [showServerModeDialog, setShowServerModeDialog] = useState(false);
 
   // Toast уведомления
-  const { toasts, showToast } = useToast();
+  const { toasts, showToast, hideToast } = useToast();
 
   // WebSocket для административных событий (подключение/отключение судей)
   useAdminEventsWebSocket({
@@ -58,7 +58,7 @@ export const AdminDashboard = () => {
         5000
       );
     },
-    onError: (error) => {
+    onError: () => {
       showToast('Ошибка WebSocket соединения с сервером', 'error', 3000);
     },
   });
@@ -354,7 +354,17 @@ export const AdminDashboard = () => {
       </Dialog>
 
       {/* Toast Notifications */}
-      <ToastContainer toasts={toasts} />
+      <ToastContainer>
+        {toasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            duration={toast.duration}
+            onClose={() => hideToast(toast.id)}
+          />
+        ))}
+      </ToastContainer>
     </div>
   );
 };

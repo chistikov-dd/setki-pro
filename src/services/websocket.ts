@@ -75,7 +75,7 @@ export class MatchWebSocket {
           }
         };
 
-        this.ws.onerror = (error) => {
+        this.ws.onerror = () => {
           const appError = ErrorFactory.websocketError(
             'WebSocket connection error',
             { matchId: this.matchId }
