@@ -57,6 +57,8 @@ describe('retryAsync', () => {
     const fn = vi.fn().mockRejectedValue(error);
 
     const promise = retryAsync(fn, { maxAttempts: 3, initialDelay: 100 });
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // Attempt 1 fails
     await vi.advanceTimersByTimeAsync(0);
@@ -87,6 +89,8 @@ describe('retryAsync', () => {
       backoffMultiplier: 2,
       onRetry,
     });
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // Attempt 1 fails
     await vi.advanceTimersByTimeAsync(0);
@@ -127,6 +131,8 @@ describe('retryAsync', () => {
       backoffMultiplier: 2,
       onRetry,
     });
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // Attempt 1 fails
     await vi.advanceTimersByTimeAsync(0);
@@ -173,6 +179,8 @@ describe('retryAsync', () => {
       initialDelay: 100,
       shouldRetry,
     });
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // First attempt fails with retryable error
     await vi.advanceTimersByTimeAsync(0);
@@ -271,6 +279,8 @@ describe('retryWebSocket', () => {
     const onRetry = vi.fn();
 
     const promise = retryWebSocket(fn, { onRetry });
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // 5 attempts with delays: 1000, 2000, 4000, 8000
     await vi.advanceTimersByTimeAsync(0); // Attempt 1
@@ -302,6 +312,8 @@ describe('retrySync', () => {
     const fn = vi.fn().mockRejectedValue(new Error('sync failed'));
 
     const promise = retrySync(fn);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // 3 attempts with delays: 2000, 4000
     await vi.advanceTimersByTimeAsync(0); // Attempt 1
@@ -328,6 +340,8 @@ describe('retryCritical', () => {
     const fn = vi.fn().mockRejectedValue(new Error('critical failure'));
 
     const promise = retryCritical(fn);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     // Start attempts
     await vi.advanceTimersByTimeAsync(0); // Attempt 1

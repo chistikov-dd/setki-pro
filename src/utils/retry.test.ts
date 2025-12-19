@@ -47,6 +47,8 @@ describe('retryAsync', () => {
     };
 
     const promise = retryAsync(fn, options);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     await expect(async () => {
       await vi.runAllTimersAsync();
@@ -71,6 +73,8 @@ describe('retryAsync', () => {
     };
 
     const promise = retryAsync(fn, options);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     try {
       await vi.runAllTimersAsync();
@@ -99,6 +103,8 @@ describe('retryAsync', () => {
     };
 
     const promise = retryAsync(fn, options);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     try {
       await vi.runAllTimersAsync();
@@ -133,6 +139,8 @@ describe('retryAsync', () => {
     };
 
     const promise = retryAsync(fn, options);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     await expect(async () => {
       await vi.runAllTimersAsync();
@@ -154,6 +162,8 @@ describe('retryAsync', () => {
     };
 
     const promise = retryAsync(fn, options);
+    // Prevent unhandled rejection warnings
+    promise.catch(() => {});
 
     try {
       await vi.runAllTimersAsync();
@@ -193,6 +203,8 @@ describe('CircuitBreaker', () => {
     for (let i = 0; i < 3; i++) {
       try {
         const promise = breaker.execute(fn);
+        // Prevent unhandled rejection warnings
+        promise.catch(() => {});
         await vi.runAllTimersAsync();
         await promise;
       } catch {
@@ -203,6 +215,8 @@ describe('CircuitBreaker', () => {
     // Circuit should now be open
     await expect(async () => {
       const promise = breaker.execute(fn);
+      // Prevent unhandled rejection warnings
+      promise.catch(() => {});
       await vi.runAllTimersAsync();
       await promise;
     }).rejects.toThrow('Circuit breaker is OPEN');
@@ -223,6 +237,8 @@ describe('CircuitBreaker', () => {
     for (let i = 0; i < 3; i++) {
       try {
         const promise = breaker.execute(fn);
+        // Prevent unhandled rejection warnings
+        promise.catch(() => {});
         await vi.runAllTimersAsync();
         await promise;
       } catch {
@@ -253,6 +269,8 @@ describe('CircuitBreaker', () => {
     for (let i = 0; i < 2; i++) {
       try {
         const promise = breaker.execute(fn);
+        // Prevent unhandled rejection warnings
+        promise.catch(() => {});
         await vi.runAllTimersAsync();
         await promise;
       } catch {
@@ -272,6 +290,8 @@ describe('CircuitBreaker', () => {
     for (let i = 0; i < 2; i++) {
       try {
         const promise = breaker.execute(fn);
+        // Prevent unhandled rejection warnings
+        promise.catch(() => {});
         await vi.runAllTimersAsync();
         await promise;
       } catch {
