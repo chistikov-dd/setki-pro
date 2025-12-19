@@ -1,0 +1,774 @@
+import { useEffect, useState, useRef } from 'react';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { emit } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { useShallow } from 'zustand/react/shallow';
+import { useMatchStore, matchStoreSelectors } from '../../stores/matchStore';
+import { useSessionStore } from '../../stores/sessionStore';
+import { useMatchTimer } from '../../hooks/useMatchTimer';
+import { useToast } from '../../hooks/useToast';
+import { useMatchWebSocket } from '../../hooks/useMatchWebSocket';
+import { useSound } from '../../hooks/useSound';
+import { useSyncWorker } from '../../hooks/useSyncWorker';
+import type { Match, Participant } from '../../types';
+import { MatchTimer } from './MatchTimer';
+import { ParticipantPanel } from './ParticipantPanel';
+import { MatchEndDialog } from './MatchEndDialog';
+import { TimerEditDialog } from './TimerEditDialog';
+import { ResetConfirmDialog } from './ResetConfirmDialog';
+import { ExitConfirmDialog } from './ExitConfirmDialog';
+import { HelpDialog } from './HelpDialog';
+import { Toast, ToastContainer } from '../ui/Toast';
+import { Button } from '../ui/Button';
+import { Wifi, WifiOff } from 'lucide-react';
+
+interface MatchScreenProps {
+  match: Match;
+  categoryName?: string;
+  onExit: () => void;
+}
+
+/**
+ * Custom hook для debounced emit события match-update
+ * Отправляет обновления максимум 1 раз в секунду вместо 60 раз в минуту
+ */
+function useDebouncedMatchUpdate(
+  publicWindowOpen: boolean,
+  matchData: {
+    redFighter: Participant | null;
+    blueFighter: Participant | null;
+    redScore: number;
+    blueScore: number;
+    remainingSeconds: number;
+    isRunning: boolean;
+  },
+  delay: number = 1000 // 1 секунда
+) {
+  const timeoutRef = useRef<number | null>(null);
+  const lastDataRef = useRef(matchData);
+
+  useEffect(() => {
+    lastDataRef.current = matchData;
+
+    if (!publicWindowOpen) return;
+
+    // Очистить предыдущий таймер
+    if (timeoutRef.current !== null) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    // Установить новый таймер (trailing edge)
+    timeoutRef.current = window.setTimeout(() => {
+      emit('match-update', lastDataRef.current).catch((error) => {
+        console.error('[PublicDisplay] Ошибка при отправке события:', error);
+      });
+    }, delay);
+
+    // Cleanup
+    return () => {
+      if (timeoutRef.current !== null) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [publicWindowOpen, matchData.redScore, matchData.blueScore, matchData.remainingSeconds, matchData.isRunning, delay]);
+}
+
+export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
+  const [showEndDialog, setShowEndDialog] = useState(false);
+  const [showTimerEditDialog, setShowTimerEditDialog] = useState(false);
+  const [showResetDialog, setShowResetDialog] = useState(false);
+  const [showExitDialog, setShowExitDialog] = useState(false);
+  const [showHelpDialog, setShowHelpDialog] = useState(false);
+  const [publicWindowOpen, setPublicWindowOpen] = useState(false);
+  const [autoEndDialogShown, setAutoEndDialogShown] = useState(false);
+
+  const { toasts, showToast, hideToast } = useToast();
+  const { playSound } = useSound();
+  const { currentSession } = useSessionStore();
+
+  // Zustand селекторы с shallow comparison для оптимизации ре-рендеров
+  const { redFighter, blueFighter } = useMatchStore(useShallow(matchStoreSelectors.fighters));
+  const { redScore, blueScore } = useMatchStore(useShallow(matchStoreSelectors.scores));
+  const { redWarnings, blueWarnings } = useMatchStore(useShallow(matchStoreSelectors.warnings));
+  const actions = useMatchStore(useShallow(matchStoreSelectors.actions)); // ВАЖНО: useShallow для избежания re-render
+  const initialTimerSeconds = useMatchStore(matchStoreSelectors.initialTimerSeconds);
+  // match уже есть в пропсах - не нужен из store
+
+  // Timer managed locally with useMatchTimer hook (not in store)
+  // Fallback to 300 seconds (5 minutes) if initialTimerSeconds is undefined
+  const timer = useMatchTimer(initialTimerSeconds || 300);
+
+  // WebSocket для real-time синхронизации между столами
+  const { isConnected: wsConnected, sendScoreUpdate, sendMatchStart, sendMatchEnd, sendTimerUpdate } = useMatchWebSocket({
+    matchId: match.id,
+    pinCode: currentSession?.pin_code,
+    autoConnect: true,
+    onScoreUpdate: (data) => {
+      console.log('[WebSocket] Score update from another table:', data);
+
+      // Применяем удалённое обновление с timestamp-based conflict resolution
+      const applied = actions.applyRemoteUpdate(data, data.timestamp || new Date().toISOString());
+
+      if (applied) {
+        showToast('Обновление с другого стола', 'info', 1500);
+      }
+    },
+    onMatchStart: () => {
+      console.log('[WebSocket] Match started on another table');
+    },
+    onMatchEnd: () => {
+      console.log('[WebSocket] Match ended on another table');
+      showToast('Матч завершен на другом столе', 'info', 3000);
+    },
+  });
+
+  // Background синхронизация с backend (каждые 30 секунд)
+  useSyncWorker({
+    enabled: true,
+    interval: 30000, // 30 секунд
+    onSyncSuccess: (count) => {
+      if (count > 0) {
+        console.log(`[SyncWorker] Synced ${count} changes to backend`);
+      }
+    },
+    onSyncError: (error) => {
+      console.error('[SyncWorker] Sync error:', error);
+      // Не показываем toast чтобы не отвлекать судью, логируем только в консоль
+    },
+  });
+
+  const handleTimerClick = () => {
+    if (timer.isRunning) {
+      // Не разрешаем редактировать во время работы таймера
+      return;
+    }
+    setShowTimerEditDialog(true);
+  };
+
+  const handleTimerEditConfirm = (minutes: number, seconds: number) => {
+    const totalSeconds = minutes * 60 + seconds;
+    timer.setDuration(totalSeconds);
+    setShowTimerEditDialog(false);
+  };
+
+  const handleResetClick = () => {
+    setShowResetDialog(true);
+  };
+
+  const handleResetConfirm = async () => {
+    await actions.resetAll();
+    timer.reset(initialTimerSeconds);
+    setShowResetDialog(false);
+  };
+
+  const handleExitClick = () => {
+    setShowExitDialog(true);
+  };
+
+  const handleExitConfirm = () => {
+    setShowExitDialog(false);
+    onExit();
+  };
+
+  // Wrapper для undoLastAction с уведомлением
+  const handleUndo = async () => {
+    const events = useMatchStore.getState().events;
+    if (events.length === 0) {
+      showToast('Нет действий для отмены', 'warning', 2000);
+      return;
+    }
+
+    try {
+      await actions.undoLastAction();
+      showToast('Действие отменено', 'success', 2000);
+    } catch (error) {
+      console.error('Failed to undo:', error);
+      showToast('Ошибка при отмене действия', 'error', 3000);
+    }
+  };
+
+  // Wrapper для addScore с WebSocket синхронизацией и звуком
+  const handleAddScore = async (participant: 'red' | 'blue', points: number, actionName: string) => {
+    // Проиграть звук
+    playSound('score', points);
+
+    // Обновить локальный state через matchStore
+    await actions.addScore(participant, points, actionName);
+
+    // Отправить событие через WebSocket для синхронизации с другими столами
+    if (wsConnected && sendScoreUpdate) {
+      const participantId = participant === 'red'
+        ? redFighter?.id
+        : blueFighter?.id;
+
+      if (participantId) {
+        // Получаем актуальные значения после обновления (оптимизация: один вызов getState)
+        const currentState = useMatchStore.getState();
+
+        sendScoreUpdate({
+          participant_id: participantId,
+          action_type: actionName,
+          points,
+          round_number: 1, // TODO: поддержка раундов
+          timestamp: currentState.lastUpdateTimestamp || new Date().toISOString(),
+          red_score: currentState.redScore,
+          blue_score: currentState.blueScore,
+          red_warnings: currentState.redWarnings,
+          blue_warnings: currentState.blueWarnings,
+        });
+      }
+    }
+  };
+
+  // Wrapper для addWarning с WebSocket синхронизацией и звуком
+  const handleAddWarning = async (participant: 'red' | 'blue') => {
+    // Проиграть звук предупреждения
+    playSound('warning');
+
+    // Обновить локальный state через matchStore
+    await actions.addWarning(participant);
+
+    // Отправить событие через WebSocket
+    if (wsConnected && sendScoreUpdate) {
+      const participantId = participant === 'red'
+        ? redFighter?.id
+        : blueFighter?.id;
+
+      if (participantId) {
+        // Получаем актуальные значения после обновления
+        const currentState = useMatchStore.getState();
+
+        sendScoreUpdate({
+          participant_id: participantId,
+          action_type: 'warning',
+          points: 0,
+          round_number: 1,
+          timestamp: currentState.lastUpdateTimestamp || new Date().toISOString(),
+          red_score: currentState.redScore,
+          blue_score: currentState.blueScore,
+          red_warnings: currentState.redWarnings,
+          blue_warnings: currentState.blueWarnings,
+        });
+      }
+    }
+  };
+
+  // Initialize match on mount
+  useEffect(() => {
+    console.log('MatchScreen: Initializing match:', match);
+    const matchDuration = 300; // 5 minutes (TODO: from config)
+
+    // Get cleanup function reference once
+    const cleanup = useMatchStore.getState().cleanup;
+    const initMatch = useMatchStore.getState().initMatch;
+
+    initMatch(match, matchDuration)
+      .then(() => {
+        // Отправляем match_start после успешной инициализации
+        if (sendMatchStart) {
+          sendMatchStart();
+          console.log('[WebSocket] Sent match_start event');
+        }
+      })
+      .catch((error) => {
+        console.error('MatchScreen: Failed to initialize match:', error);
+      });
+
+    // Автоматически открыть публичное табло
+    openPublicDisplay();
+
+    return () => {
+      cleanup();
+      // Закрыть публичное окно при выходе
+      if (publicWindowOpen) {
+        WebviewWindow.getByLabel('public-display').then((publicWindow) => {
+          if (publicWindow) {
+            publicWindow.close().catch(console.error);
+          }
+        }).catch(console.error);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.id]); // Только match.id, actions игнорируем
+
+  // Звук для последних 10 секунд таймера
+  useEffect(() => {
+    if (timer.isRunning && timer.remainingSeconds <= 10 && timer.remainingSeconds > 0) {
+      playSound('timer');
+    }
+    // Звук окончания времени
+    if (timer.remainingSeconds === 0) {
+      playSound('end');
+    }
+  }, [timer.remainingSeconds, timer.isRunning, playSound]);
+
+  // Звук при старте таймера
+  useEffect(() => {
+    if (timer.isRunning) {
+      playSound('start');
+    }
+  }, [timer.isRunning]); // Не добавляем playSound в зависимости чтобы избежать повторных вызовов
+
+  // Debounced timer_update через WebSocket (каждые 5 секунд для оптимизации)
+  useEffect(() => {
+    // Отправляем только если изменения по 5 секунд или изменился статус (running/paused)
+    if (wsConnected && sendTimerUpdate && (timer.remainingSeconds % 5 === 0 || timer.remainingSeconds === 0)) {
+      sendTimerUpdate(timer.remainingSeconds, timer.isRunning);
+    }
+  }, [timer.remainingSeconds, timer.isRunning, wsConnected, sendTimerUpdate]);
+
+  // Открыть публичный дисплей в новом окне через Tauri API
+  const openPublicDisplay = async () => {
+    console.log('[PublicDisplay] Попытка открыть публичное окно через Tauri...');
+
+    // If already open, don't create another one
+    if (publicWindowOpen) {
+      console.log('[PublicDisplay] Окно уже открыто согласно state');
+      return;
+    }
+
+    try {
+      // Get available monitors
+      interface MonitorInfo {
+        name: string | null;
+        position_x: number;
+        position_y: number;
+        width: number;
+        height: number;
+        is_primary: boolean;
+      }
+
+      const monitors = await invoke<MonitorInfo[]>('get_available_monitors');
+      console.log('[PublicDisplay] Доступные мониторы:', monitors);
+
+      // Find secondary monitor (not primary)
+      const secondaryMonitor = monitors.find(m => !m.is_primary);
+
+      let windowX: number | undefined;
+      let windowY: number | undefined;
+      let windowWidth = 1920;
+      let windowHeight = 1080;
+      let centerWindow = true;
+
+      if (secondaryMonitor) {
+        // Place on secondary monitor
+        console.log('[PublicDisplay] Найден второй монитор, размещаю там:', secondaryMonitor.name);
+        windowX = secondaryMonitor.position_x;
+        windowY = secondaryMonitor.position_y;
+        windowWidth = secondaryMonitor.width;
+        windowHeight = secondaryMonitor.height;
+        centerWindow = false;
+      } else {
+        console.log('[PublicDisplay] Второй монитор не найден, открываю на текущем');
+      }
+
+      // Check if window already exists and close it first
+      const existingWindow = await WebviewWindow.getByLabel('public-display');
+      if (existingWindow) {
+        console.log('[PublicDisplay] Окно уже существует, закрываю старое...');
+        try {
+          await existingWindow.close();
+          // Small delay to ensure window is fully closed
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (err) {
+          console.warn('[PublicDisplay] Не удалось закрыть старое окно:', err);
+        }
+      }
+
+      console.log('[PublicDisplay] Создаю новый WebviewWindow...');
+      const webview = new WebviewWindow('public-display', {
+        url: '/',
+        title: 'Табло для зрителей',
+        width: windowWidth,
+        height: windowHeight,
+        x: windowX,
+        y: windowY,
+        resizable: true,
+        fullscreen: false,
+        center: centerWindow,
+        focus: true,
+      });
+
+      console.log('[PublicDisplay] WebviewWindow объект создан:', webview.label);
+
+      // Wait for window to be ready
+      webview.once('tauri://created', () => {
+        console.log('[PublicDisplay] Окно успешно создано и готово');
+        setPublicWindowOpen(true);
+      });
+
+      webview.once('tauri://error', (e) => {
+        console.error('[PublicDisplay] Ошибка создания окна:', e);
+        setPublicWindowOpen(false);
+      });
+
+      // Listen for window close event
+      webview.once('tauri://close-requested', () => {
+        console.log('[PublicDisplay] Окно закрыто пользователем');
+        setPublicWindowOpen(false);
+      });
+
+    } catch (error) {
+      console.error('[PublicDisplay] Ошибка при открытии окна:', error);
+      alert(`Ошибка при открытии публичного табло: ${error}`);
+      setPublicWindowOpen(false);
+    }
+  };
+
+  // Отправляем debounced обновления в публичное окно (max 1/sec вместо 60/min)
+  useDebouncedMatchUpdate(publicWindowOpen, {
+    redFighter,
+    blueFighter,
+    redScore,
+    blueScore,
+    remainingSeconds: timer.remainingSeconds,
+    isRunning: timer.isRunning,
+  });
+
+  // Global hotkeys
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      const session = useSessionStore.getState();
+
+      // Debug: log all keypresses
+      console.log('[Hotkey] Key pressed:', e.code, e.key);
+
+      // Ignore if any dialog open
+      if (showEndDialog || showTimerEditDialog || showResetDialog || showExitDialog || showHelpDialog) {
+        console.log('[Hotkey] Ignored - dialog open');
+        return;
+      }
+
+      // Ignore if input/textarea focused
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        console.log('[Hotkey] Ignored - input focused');
+        return;
+      }
+
+      // Space: Start/Pause timer
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (timer.isRunning) {
+          timer.pause();
+        } else {
+          timer.start();
+        }
+        return;
+      }
+
+      // Enter: Finish match
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        setShowEndDialog(true);
+        return;
+      }
+
+      // Ctrl+Z: Undo
+      if (e.ctrlKey && e.code === 'KeyZ') {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Scoring hotkeys
+      // QWER → красный (верхний): Q=+1, W=+2, E=+3, R=+4
+      // 1234 → синий (нижний): 1=+1, 2=+2, 3=+3, 4=+4
+
+      // Red corner (нижний): Q/W/E/R
+      const redKeyMap: { [key: string]: number } = {
+        'KeyQ': 1,
+        'KeyW': 2,
+        'KeyE': 3,
+        'KeyR': 4,
+      };
+
+      if (redKeyMap[e.code]) {
+        e.preventDefault();
+        console.log('[Hotkey] Red:', e.code, '→', redKeyMap[e.code], 'points');
+        const points = redKeyMap[e.code];
+        handleAddScore('red', points, `+${points}`);
+        return;
+      }
+
+      // Blue corner (нижний): 1/2/3/4
+      const blueKeyMap: { [key: string]: number } = {
+        'Digit1': 1,
+        'Digit2': 2,
+        'Digit3': 3,
+        'Digit4': 4,
+      };
+
+      if (blueKeyMap[e.code]) {
+        e.preventDefault();
+        const points = blueKeyMap[e.code];
+        handleAddScore('blue', points, `+${points}`);
+        return;
+      }
+
+      // Warnings (Z - blue, X - red)
+      // Allow adding warnings up to and including maxWarnings (e.g., if max=3, allow adding 1,2,3)
+      // Attempting to add 4th when max=3 will trigger disqualification
+      const config2 = session.currentSession?.scoring_config;
+      if (config2?.warnings.enabled) {
+        if (e.code === 'KeyZ') {
+          e.preventDefault();
+          handleAddWarning('blue');
+        } else if (e.code === 'KeyX') {
+          e.preventDefault();
+          handleAddWarning('red');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [showEndDialog, showTimerEditDialog, showResetDialog, showExitDialog, showHelpDialog, actions, timer]);
+
+  // Auto-finish when timer reaches 0 (only once)
+  useEffect(() => {
+    if (timer.remainingSeconds === 0 && !showEndDialog && !autoEndDialogShown) {
+      setShowEndDialog(true);
+      setAutoEndDialogShown(true);
+    }
+  }, [timer.remainingSeconds, showEndDialog, autoEndDialogShown]);
+
+  const handleFinishMatch = async (
+    resultType: 'points' | 'submission' | 'disqualification',
+    winnerId?: number
+  ) => {
+    await actions.finishMatch(resultType, winnerId);
+
+    // Отправляем match_end через WebSocket
+    if (wsConnected && sendMatchEnd) {
+      sendMatchEnd(winnerId, resultType);
+      console.log('[WebSocket] Sent match_end event');
+    }
+
+    setShowEndDialog(false);
+    onExit();
+  };
+
+  const scoringConfig = currentSession?.scoring_config;
+
+  // Если нет данных участников, показываем ошибку
+  if (!redFighter || !blueFighter) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-white">
+        <div className="text-center">
+          <p className="text-red-400 text-xl mb-4">Ошибка: участники не загружены</p>
+          <Button onClick={onExit}>Вернуться к сетке</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-white to-gray-100 flex flex-col select-none">
+      {/* Header */}
+      <div className="bg-white/50 border-b border-gray-400 px-3 py-2 sm:px-4 sm:py-2.5 lg:px-6 lg:py-3 flex items-center justify-between">
+        <div className="text-gray-900 text-xs sm:text-sm">
+          <span className="text-gray-700">Категория:</span> {categoryName || 'Не указана'}
+        </div>
+        <div className="flex items-center gap-4">
+          {/* WebSocket Status Indicator */}
+          <div
+            className="flex items-center gap-1.5 text-xs"
+            title={wsConnected ? 'Подключено к серверу' : 'Отключено от сервера'}
+          >
+            {wsConnected ? (
+              <>
+                <Wifi size={16} className="text-green-600" />
+                <span className="text-green-700 hidden sm:inline">Online</span>
+              </>
+            ) : (
+              <>
+                <WifiOff size={16} className="text-gray-400" />
+                <span className="text-gray-500 hidden sm:inline">Offline</span>
+              </>
+            )}
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={openPublicDisplay}
+            disabled={publicWindowOpen}
+          >
+            {publicWindowOpen ? '✓ Табло открыто' : 'Открыть табло для зрителей'}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowHelpDialog(true)}
+            className="w-8 h-8 p-0 flex items-center justify-center"
+            title="Справка по горячим клавишам"
+          >
+            ?
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleExitClick}
+          >
+            ← К сетке
+          </Button>
+        </div>
+      </div>
+
+      {/* Main content - Vertical layout */}
+      <div className="flex-1 flex flex-col overflow-hidden w-full">
+        {/* Blue Fighter Zone (верхний) - flex-1 */}
+        <div className="flex-1 min-h-0 w-full">
+          <ParticipantPanel
+            participant={blueFighter}
+            score={blueScore}
+            warnings={blueWarnings}
+            color="blue"
+            onAddScore={(points, actionName) => handleAddScore('blue', points, actionName)}
+            onAddWarning={() => handleAddWarning('blue')}
+            onRemoveWarning={() => actions.removeWarning('blue')}
+            hotkeys={['1', '2', '3', '4']}
+            maxWarnings={scoringConfig?.warnings.max_count || 3}
+          />
+        </div>
+
+        {/* Red Fighter Zone (нижний) - flex-1 */}
+        <div className="flex-1 min-h-0 w-full">
+          <ParticipantPanel
+            participant={redFighter}
+            score={redScore}
+            warnings={redWarnings}
+            color="red"
+            onAddScore={(points, actionName) => handleAddScore('red', points, actionName)}
+            onAddWarning={() => handleAddWarning('red')}
+            onRemoveWarning={() => actions.removeWarning('red')}
+            hotkeys={['Q', 'W', 'E', 'R']}
+            maxWarnings={scoringConfig?.warnings.max_count || 3}
+          />
+        </div>
+
+        {/* Timer Zone - flex-[1.2] (чуть больше остальных) */}
+        <div className="flex-[1.2] min-h-0 w-full border-t border-gray-400 overflow-hidden">
+          <div className="h-full w-full flex items-stretch">
+            {/* Left Controls */}
+            <div className="flex flex-col justify-center gap-3 px-4 flex-shrink-0">
+              {!timer.isRunning ? (
+                <Button
+                  variant="primary"
+                  size="xl"
+                  onClick={timer.start}
+                  disabled={timer.remainingSeconds === 0}
+                  className="whitespace-nowrap"
+                >
+                  Старт<br />(Space)
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="xl"
+                  onClick={timer.pause}
+                  className="whitespace-nowrap"
+                >
+                  Пауза<br />(Space)
+                </Button>
+              )}
+
+              <Button
+                variant="danger"
+                size="md"
+                onClick={handleResetClick}
+              >
+                Сброс всего
+              </Button>
+            </div>
+
+            {/* Center Timer */}
+            <div className="flex-1 min-w-0 overflow-hidden">
+              <MatchTimer
+                remainingSeconds={timer.remainingSeconds}
+                isRunning={timer.isRunning}
+                onStart={timer.start}
+                onPause={timer.pause}
+                onReset={() => timer.reset(initialTimerSeconds)}
+                onClick={handleTimerClick}
+              />
+            </div>
+
+            {/* Right Controls */}
+            <div className="flex flex-col justify-center gap-4 px-4 flex-shrink-0">
+              <Button
+                variant="primary"
+                size="xl"
+                onClick={() => setShowEndDialog(true)}
+                className="whitespace-nowrap"
+              >
+                Завершить<br />(Enter)
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* End Dialog */}
+      {showEndDialog && (
+        <MatchEndDialog
+          redFighter={redFighter}
+          blueFighter={blueFighter}
+          redScore={redScore}
+          blueScore={blueScore}
+          onFinish={handleFinishMatch}
+          onCancel={() => setShowEndDialog(false)}
+        />
+      )}
+
+      {/* Timer Edit Dialog */}
+      {showTimerEditDialog && (
+        <TimerEditDialog
+          currentSeconds={timer.remainingSeconds}
+          onConfirm={handleTimerEditConfirm}
+          onCancel={() => setShowTimerEditDialog(false)}
+        />
+      )}
+
+      {/* Reset Confirm Dialog */}
+      {showResetDialog && (
+        <ResetConfirmDialog
+          currentRedScore={redScore}
+          currentBlueScore={blueScore}
+          currentSeconds={timer.remainingSeconds}
+          totalSeconds={initialTimerSeconds}
+          onConfirm={handleResetConfirm}
+          onCancel={() => setShowResetDialog(false)}
+        />
+      )}
+
+      {/* Exit Confirm Dialog */}
+      {showExitDialog && (
+        <ExitConfirmDialog
+          onConfirm={handleExitConfirm}
+          onCancel={() => setShowExitDialog(false)}
+        />
+      )}
+
+      {/* Help Dialog */}
+      {showHelpDialog && (
+        <HelpDialog
+          onClose={() => setShowHelpDialog(false)}
+        />
+      )}
+
+      {/* Toast Notifications */}
+      <ToastContainer>
+        {toasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            duration={toast.duration}
+            onClose={() => hideToast(toast.id)}
+          />
+        ))}
+      </ToastContainer>
+    </div>
+  );
+}
