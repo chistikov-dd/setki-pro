@@ -3,15 +3,22 @@ import React from 'react';
 interface LoginChoiceProps {
   onSelectRole: (role: 'admin' | 'judge') => void;
   onOpenServerMode: () => void;
+  isAutoLoginInProgress?: boolean;
+  autoLoginRole?: 'admin' | 'judge' | null;
 }
 
-export const LoginChoice: React.FC<LoginChoiceProps> = ({ onSelectRole, onOpenServerMode }) => {
+export const LoginChoice: React.FC<LoginChoiceProps> = ({
+  onSelectRole,
+  onOpenServerMode,
+  isAutoLoginInProgress = false,
+  autoLoginRole = null
+}) => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-50 to-gray-100 p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-6xl px-2 sm:px-4">
         {/* Header */}
         <div className="text-center mb-8 sm:mb-10 lg:mb-14">
-          <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 mb-2 tracking-tight">
+          <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600 mb-2 tracking-tight">
             SETKI.PRO
           </h1>
           <p className="text-lg sm:text-xl lg:text-2xl text-gray-900 font-light tracking-wide">
@@ -23,16 +30,24 @@ export const LoginChoice: React.FC<LoginChoiceProps> = ({ onSelectRole, onOpenSe
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 lg:gap-6 mb-12 sm:mb-16 lg:mb-20">
           {/* Администратор */}
           <button
-            className="group text-left bg-white rounded-xl px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10 border border-gray-400 hover:border-blue-500 hover:shadow-lg transition-all duration-200"
+            className="group text-left bg-white rounded-xl px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10 border border-gray-400 hover:border-blue-500 hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={() => onSelectRole('admin')}
+            disabled={isAutoLoginInProgress}
           >
             {/* Icon */}
             <div className="mb-3 sm:mb-4 lg:mb-5">
               <div className="inline-flex p-3 sm:p-4 rounded-xl bg-blue-50 border border-blue-200">
-                <svg className="w-10 h-10 sm:w-12 sm:h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
+                {isAutoLoginInProgress && autoLoginRole === 'admin' ? (
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                )}
               </div>
             </div>
 
@@ -44,43 +59,63 @@ export const LoginChoice: React.FC<LoginChoiceProps> = ({ onSelectRole, onOpenSe
               Создание сессии турнира, управление столами, генерация PIN-кодов
             </p>
 
-            {/* Arrow indicator */}
+            {/* Arrow indicator or loading */}
             <div className="flex items-center text-blue-600 text-sm sm:text-base font-semibold group-hover:translate-x-1 transition-transform">
-              <span>Войти</span>
-              <svg className="w-4 h-4 sm:w-5 sm:h-5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-              </svg>
+              {isAutoLoginInProgress && autoLoginRole === 'admin' ? (
+                <span>Автоматический вход...</span>
+              ) : (
+                <>
+                  <span>Войти</span>
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                  </svg>
+                </>
+              )}
             </div>
           </button>
 
           {/* Судья */}
           <button
-            className="group text-left bg-white rounded-xl px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10 border border-gray-400 hover:border-emerald-500 hover:shadow-lg transition-all duration-200"
+            className="group text-left bg-white rounded-xl px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10 border border-gray-400 hover:border-emerald-500 hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={() => onSelectRole('judge')}
+            disabled={isAutoLoginInProgress}
           >
             {/* Icon */}
             <div className="mb-3 sm:mb-4 lg:mb-5">
               <div className="inline-flex p-3 sm:p-4 rounded-xl bg-emerald-50 border border-emerald-200">
-                <svg className="w-10 h-10 sm:w-12 sm:h-12 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
+                {isAutoLoginInProgress && autoLoginRole === 'judge' ? (
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-emerald-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                )}
               </div>
             </div>
 
             {/* Content */}
             <h3 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 sm:mb-3 group-hover:text-emerald-600 transition-colors">
-              Судья на столе
+              Судья за столом
             </h3>
             <p className="text-gray-800 text-sm sm:text-base leading-relaxed mb-4 sm:mb-5 lg:mb-6">
               Вход по PIN-коду для проведения поединков
             </p>
 
-            {/* Arrow indicator */}
+            {/* Arrow indicator or loading */}
             <div className="flex items-center text-emerald-600 text-sm sm:text-base font-semibold group-hover:translate-x-1 transition-transform">
-              <span>Войти</span>
-              <svg className="w-4 h-4 sm:w-5 sm:h-5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-              </svg>
+              {isAutoLoginInProgress && autoLoginRole === 'judge' ? (
+                <span>Автоматический вход...</span>
+              ) : (
+                <>
+                  <span>Войти</span>
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                  </svg>
+                </>
+              )}
             </div>
           </button>
         </div>

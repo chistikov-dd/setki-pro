@@ -410,7 +410,7 @@ async fn handle_socket(socket: WebSocket, state: LocalServerState, match_id: Str
                     println!("[WebSocket] Client sent close message for match {}", match_id_clone);
                     break;
                 }
-                Message::Ping(data) => {
+                Message::Ping(_data) => {
                     // Axum автоматически отправляет Pong, но можем логировать
                     println!("[WebSocket] Received ping for match {}", match_id_clone);
                 }
@@ -522,6 +522,7 @@ async fn handle_admin_socket(socket: WebSocket, state: LocalServerState) {
 }
 
 // Error handling
+#[allow(dead_code)]
 pub enum AppError {
     Database(sqlx::Error),
     Unauthorized(String),

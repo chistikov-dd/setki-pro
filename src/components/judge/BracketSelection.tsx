@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { getCachedBrackets, getBracketMatches } from '../../services/api';
+import { getCachedBrackets, getBracketMatches, getBracketTableAssignments, type BracketTableAssignment } from '../../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { BracketCardSkeleton, SkeletonList } from '../ui/Skeleton';
@@ -11,6 +11,7 @@ interface BracketSelectionProps {
   tournamentId: number;
   onBracketSelect: (bracketId: number, categoryName: string) => void;
   lastSelectedBracketId?: number | null;
+  reloadTrigger?: number; // Триггер для принудительной перезагрузки
 }
 
 const FILTERS_STORAGE_KEY = 'bracket_filters';
@@ -19,11 +20,19 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   tournamentId,
   onBracketSelect,
   lastSelectedBracketId,
+  reloadTrigger,
 }) => {
   const [brackets, setBrackets] = useState<BracketResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const bracketRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+
+  // Информация о занятых столах (bracket_id → table assignment)
+  const [tableAssignments, setTableAssignments] = useState<Map<number, BracketTableAssignment>>(new Map());
+
+  // Флаг для контроля автопрокрутки (срабатывает только при первом рендере после возврата)
+  const shouldScrollToSelected = useRef(false);
+  const previousSelectedBracketId = useRef<number | null>(null);
 
   // Кэш участников по сеткам (bracket_id -> список имен участников)
   const [participantsByBracket, setParticipantsByBracket] = useState<Record<number, string[]>>({});
@@ -59,24 +68,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   }, [filters]);
 
   useEffect(() => {
+    console.log('[BracketSelection] Перезагрузка сеток, reloadTrigger:', reloadTrigger);
     loadBrackets();
-  }, [tournamentId]);
-
-  // Автоматическая прокрутка к последней выбранной сетке
-  useEffect(() => {
-    if (lastSelectedBracketId && brackets.length > 0) {
-      const bracketElement = bracketRefs.current.get(lastSelectedBracketId);
-      if (bracketElement) {
-        // Небольшая задержка для завершения рендеринга
-        setTimeout(() => {
-          bracketElement.scrollIntoView({
-            behavior: 'smooth',
-            block: 'center',
-          });
-        }, 100);
-      }
-    }
-  }, [lastSelectedBracketId, brackets]);
+  }, [tournamentId, reloadTrigger]); // Добавлен reloadTrigger для перезагрузки
 
   const loadBrackets = async () => {
     setIsLoading(true);
@@ -85,6 +79,20 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     try {
       const data = await getCachedBrackets(tournamentId);
       setBrackets(data);
+
+      // Загрузить информацию о занятых столах
+      try {
+        const assignments = await getBracketTableAssignments(tournamentId);
+        const assignmentsMap = new Map<number, BracketTableAssignment>();
+        assignments.forEach((assignment) => {
+          assignmentsMap.set(assignment.bracket_id, assignment);
+        });
+        setTableAssignments(assignmentsMap);
+        console.log('[BracketSelection] Загружено занятых столов:', assignments.length);
+      } catch (err) {
+        console.error('[BracketSelection] Ошибка загрузки информации о столах:', err);
+        // Не критичная ошибка, продолжаем работу
+      }
 
       // Загрузить участников для каждой сетки (для поиска)
       const participantsMap: Record<number, string[]> = {};
@@ -102,6 +110,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
             });
 
             participantsMap[bracket.id] = Array.from(participants);
+            console.log(`[BracketSelection] Сетка ${bracket.id} (${bracket.category_name}): найдено ${participants.size} участников`);
           } catch (err) {
             console.error(`Ошибка загрузки матчей для сетки ${bracket.id}:`, err);
             participantsMap[bracket.id] = [];
@@ -110,6 +119,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       );
 
       setParticipantsByBracket(participantsMap);
+      console.log('[BracketSelection] Загрузка завершена, всего сеток:', data.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки сеток');
     } finally {
@@ -119,8 +129,45 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
   // Применить фильтры и сортировку
   const filteredBrackets = useMemo(() => {
-    return applySortAndFilter(brackets, filters, participantsByBracket);
+    const sorted = applySortAndFilter(brackets, filters, participantsByBracket);
+    // Отфильтровать сетки без участников
+    return sorted.filter(bracket => {
+      const participants = participantsByBracket[bracket.id];
+      return participants && participants.length > 0;
+    });
   }, [brackets, filters, participantsByBracket]);
+
+  // Отслеживаем изменение lastSelectedBracketId для определения момента возврата
+  useEffect(() => {
+    // Если lastSelectedBracketId изменился (появился новый ID), значит мы вернулись из сетки
+    if (lastSelectedBracketId && lastSelectedBracketId !== previousSelectedBracketId.current) {
+      shouldScrollToSelected.current = true;
+      previousSelectedBracketId.current = lastSelectedBracketId;
+    }
+  }, [lastSelectedBracketId]);
+
+  // Автоматическая прокрутка к последней выбранной сетке (только после возврата)
+  useEffect(() => {
+    if (shouldScrollToSelected.current && lastSelectedBracketId && filteredBrackets.length > 0) {
+      // Проверяем, что выбранная сетка присутствует в отфильтрованном списке
+      const isBracketVisible = filteredBrackets.some(b => b.id === lastSelectedBracketId);
+
+      if (isBracketVisible) {
+        const bracketElement = bracketRefs.current.get(lastSelectedBracketId);
+        if (bracketElement) {
+          // Небольшая задержка для завершения рендеринга
+          setTimeout(() => {
+            bracketElement.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center',
+            });
+            // Сбрасываем флаг после прокрутки
+            shouldScrollToSelected.current = false;
+          }, 150);
+        }
+      }
+    }
+  }, [lastSelectedBracketId, filteredBrackets]);
 
   const handleSelectBracket = (bracket: BracketResponse) => {
     onBracketSelect(bracket.id, bracket.category_name);
@@ -135,19 +182,6 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   };
 
   const hasActiveFilters = filters.searchQuery !== '' || filters.gender !== 'all';
-
-  const getBracketTypeLabel = (type: string) => {
-    switch (type) {
-      case 'single_elimination':
-        return 'Олимпийская система';
-      case 'double_elimination':
-        return 'Двойная олимпийская';
-      case 'round_robin':
-        return 'Круговая система';
-      default:
-        return type;
-    }
-  };
 
   const getStatusLabel = (status: string) => {
     switch (status) {
@@ -351,11 +385,20 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
               <CardHeader>
               <div className="flex items-start justify-between">
                 <CardTitle className="text-lg">{bracket.category_name}</CardTitle>
-                <span
-                  className={`text-xs font-medium px-2 py-1 rounded-full ${getStatusColor(bracket.status)}`}
-                >
-                  {getStatusLabel(bracket.status)}
-                </span>
+                <div className="flex items-center gap-2">
+                  {/* Индикатор занятого стола */}
+                  {tableAssignments.has(bracket.id) && (
+                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-blue-500/20 text-blue-600 border border-blue-500/50">
+                      Стол №{tableAssignments.get(bracket.id)!.table_number}
+                    </span>
+                  )}
+                  {/* Статус сетки */}
+                  <span
+                    className={`text-xs font-medium px-2 py-1 rounded-full ${getStatusColor(bracket.status)}`}
+                  >
+                    {getStatusLabel(bracket.status)}
+                  </span>
+                </div>
               </div>
             </CardHeader>
 
@@ -420,26 +463,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                 </div>
               )}
 
-              {/* Тип сетки */}
-              <div className="flex items-center text-sm">
-                <svg
-                  className="w-4 h-4 text-gray-800 mr-2"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                  />
-                </svg>
-                <span className="text-gray-800">{getBracketTypeLabel(bracket.bracket_type)}</span>
-              </div>
-
-              {/* Раунды */}
-              {bracket.total_rounds && (
+              {/* Количество участников */}
+              {participantsByBracket[bracket.id] && participantsByBracket[bracket.id].length > 0 && (
                 <div className="flex items-center text-sm">
                   <svg
                     className="w-4 h-4 text-gray-800 mr-2"
@@ -451,11 +476,33 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={2}
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
                     />
                   </svg>
                   <span className="text-gray-800">
-                    Раунд {bracket.current_round} из {bracket.total_rounds}
+                    Участников: {participantsByBracket[bracket.id].length}
+                  </span>
+                </div>
+              )}
+
+              {/* Количество пар */}
+              {participantsByBracket[bracket.id] && participantsByBracket[bracket.id].length > 1 && (
+                <div className="flex items-center text-sm">
+                  <svg
+                    className="w-4 h-4 text-gray-800 mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+                    />
+                  </svg>
+                  <span className="text-gray-800">
+                    Пар: {Math.ceil(participantsByBracket[bracket.id].length / 2)}
                   </span>
                 </div>
               )}

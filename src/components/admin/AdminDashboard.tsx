@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
-import { downloadTournament } from '../../services/api';
+import { useSyncWorker } from '../../hooks/useSyncWorker';
+import { downloadTournament, isTournamentDownloaded, clearTournamentCache } from '../../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/Dialog';
@@ -10,6 +11,7 @@ import { TournamentCard } from './TournamentCard';
 import { ServerModeSelector } from './ServerModeSelector';
 import { JudgeTablesMonitor } from './JudgeTablesMonitor';
 import { ActiveMatchesMonitor } from './ActiveMatchesMonitor';
+import { ActiveSessionsPanel } from './ActiveSessionsPanel';
 import { SyncProgress } from './SyncProgress';
 import { TournamentCardSkeleton, SkeletonList } from '../ui/Skeleton';
 import { ToastContainer, Toast } from '../ui/Toast';
@@ -26,6 +28,7 @@ export const AdminDashboard = () => {
     error,
     loadTournaments,
     loadTournamentSession,
+    clearSession,
     clearError,
   } = useSessionStore();
   const { mode: serverMode, setMode: setServerMode } = useServerModeStore();
@@ -37,9 +40,24 @@ export const AdminDashboard = () => {
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [showServerModeDialog, setShowServerModeDialog] = useState(false);
+  const [isTournamentCached, setIsTournamentCached] = useState(false);
+  const [showClearCacheDialog, setShowClearCacheDialog] = useState(false);
 
   // Toast уведомления
   const { toasts, showToast, hideToast } = useToast();
+
+  // Background синхронизация при старте приложения и каждые 30 секунд
+  useSyncWorker({
+    enabled: serverMode === 'online', // Только в online режиме (в local-server данные уже на этом компьютере)
+    interval: 30000,
+    serverMode: { mode: serverMode, serverUrl: null },
+    onSyncSuccess: () => {
+      console.log('[AdminDashboard] Background sync успешна');
+    },
+    onSyncError: (error) => {
+      console.error('[AdminDashboard] Background sync ошибка:', error);
+    },
+  });
 
   // WebSocket для административных событий (подключение/отключение судей)
   useAdminEventsWebSocket({
@@ -65,8 +83,26 @@ export const AdminDashboard = () => {
 
   // Загрузить турниры при монтировании
   useEffect(() => {
-    loadTournaments().catch(() => {});
-  }, [loadTournaments]);
+    loadTournaments()
+      .then(() => {
+        // Успешная загрузка - очистить ошибку если была
+        if (error) {
+          clearError();
+        }
+      })
+      .catch(() => {
+        // Ошибка уже установлена в store
+      });
+  }, [loadTournaments, error, clearError]);
+
+  // Проверить, скачан ли текущий турнир
+  useEffect(() => {
+    if (currentSession) {
+      isTournamentDownloaded(currentSession.tournament_id)
+        .then(setIsTournamentCached)
+        .catch(() => setIsTournamentCached(false));
+    }
+  }, [currentSession]);
 
   // Загрузить турнир для работы
   const handleLoadTournament = async () => {
@@ -78,8 +114,7 @@ export const AdminDashboard = () => {
 
     try {
       await loadTournamentSession(selectedTournamentId);
-      setSuccessMessage('Турнир загружен успешно!');
-      setShowSuccessDialog(true);
+      // Убрано уведомление "Турнир загружен успешно!" - турнир загружается без модального окна
     } catch (error) {
       console.error('Ошибка загрузки турнира:', error);
     }
@@ -102,12 +137,37 @@ export const AdminDashboard = () => {
       await downloadTournament(currentSession.tournament_id);
       setDownloadProgress('');
       setIsDownloading(false);
-      setSuccessMessage('Данные успешно загружены для offline работы!');
-      setShowSuccessDialog(true);
+      // Обновить статус кэша
+      setIsTournamentCached(true);
     } catch (error) {
       console.error('Ошибка скачивания:', error);
       setDownloadProgress('Ошибка загрузки данных');
       setIsDownloading(false);
+    }
+  };
+
+  // Очистить кеш турнира
+  const handleClearCacheClick = () => {
+    if (!currentSession) {
+      setSuccessMessage('Сначала загрузите турнир');
+      setShowSuccessDialog(true);
+      return;
+    }
+    setShowClearCacheDialog(true);
+  };
+
+  const confirmClearCache = async () => {
+    setShowClearCacheDialog(false);
+
+    if (!currentSession) return;
+
+    try {
+      await clearTournamentCache(currentSession.tournament_id);
+      setIsTournamentCached(false);
+      showToast('Кеш турнира успешно очищен', 'success', 3000);
+    } catch (error) {
+      console.error('Ошибка очистки кеша:', error);
+      showToast('Ошибка очистки кеша', 'error', 3000);
     }
   };
 
@@ -170,7 +230,23 @@ export const AdminDashboard = () => {
           <div className="mb-8">
             <Card variant="elevated">
               <CardHeader>
-                <CardTitle>Текущий турнир</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Текущий турнир</CardTitle>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      clearSession();
+                      setIsTournamentCached(false);
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Назад
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -178,9 +254,6 @@ export const AdminDashboard = () => {
                     <h3 className="text-2xl font-bold text-gray-900 mb-2">
                       {currentSession.tournament.title || `Турнир #${currentSession.tournament_id}`}
                     </h3>
-                    <p className="text-gray-800">
-                      Столов: {currentSession.total_tables} | Сеток: {currentSession.brackets.length}
-                    </p>
                   </div>
 
                   {/* PIN-код */}
@@ -191,7 +264,16 @@ export const AdminDashboard = () => {
                     </p>
                   </div>
 
-                  {/* Download Button */}
+                  {/* Download Status & Button */}
+                  {isTournamentCached && (
+                    <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-3 rounded-lg border border-emerald-200">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="font-medium">Данные загружены для offline работы</span>
+                    </div>
+                  )}
+
                   <div className="flex gap-4">
                     <Button
                       variant="primary"
@@ -199,8 +281,18 @@ export const AdminDashboard = () => {
                       disabled={isDownloading}
                       className="flex-1"
                     >
-                      {isDownloading ? 'Загрузка...' : 'Скачать данные для offline'}
+                      {isDownloading ? 'Загрузка...' : isTournamentCached ? 'Обновить данные' : 'Скачать данные для offline'}
                     </Button>
+                    {isTournamentCached && (
+                      <Button
+                        variant="ghost"
+                        onClick={handleClearCacheClick}
+                        disabled={isDownloading}
+                        className="text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                      >
+                        Очистить кеш
+                      </Button>
+                    )}
                   </div>
 
                   {downloadProgress && (
@@ -238,7 +330,7 @@ export const AdminDashboard = () => {
                     </p>
 
                     {/* Tournament Cards Grid */}
-                    <div className="grid grid-cols-1 gap-4 max-h-96 overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
                       {tournaments.map((tournament) => (
                         <TournamentCard
                           key={tournament.id}
@@ -284,6 +376,13 @@ export const AdminDashboard = () => {
           </div>
         )}
 
+        {/* Active Sessions Panel - Управление столами */}
+        {currentSession && (
+          <div className="mb-8">
+            <ActiveSessionsPanel />
+          </div>
+        )}
+
         {/* Sync Section */}
         {currentSession && (
           <div className="mb-8">
@@ -315,6 +414,35 @@ export const AdminDashboard = () => {
               fullWidth
             >
               Выйти
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clear Cache Confirmation Dialog */}
+      <Dialog open={showClearCacheDialog} onOpenChange={setShowClearCacheDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Очистить кеш турнира?</DialogTitle>
+            <DialogDescription>
+              Это действие удалит все загруженные данные турнира (сетки, матчи).
+              Потребуется повторная загрузка для offline работы.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 mt-6">
+            <Button
+              variant="secondary"
+              onClick={() => setShowClearCacheDialog(false)}
+              fullWidth
+            >
+              Отмена
+            </Button>
+            <Button
+              variant="danger"
+              onClick={confirmClearCache}
+              fullWidth
+            >
+              Очистить
             </Button>
           </div>
         </DialogContent>

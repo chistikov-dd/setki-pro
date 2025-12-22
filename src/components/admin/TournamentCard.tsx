@@ -48,9 +48,15 @@ export const TournamentCard = memo(({ tournament, isSelected, onClick }: Tournam
       aria-label={`Выбрать турнир ${tournament.name}`}
       aria-pressed={isSelected}
     >
-      <div className="flex gap-4">
-        {/* Tournament Image */}
-        <div className="flex-shrink-0 w-32 h-32 bg-gray-700 rounded-lg overflow-hidden">
+      <div className="space-y-3">
+        {/* Tournament Name */}
+        <h3 className="text-lg font-bold text-gray-900 truncate">
+          {tournament.name}
+        </h3>
+
+        <div className="flex gap-4">
+          {/* Tournament Image */}
+          <div className="flex-shrink-0 w-32 h-32 bg-gray-700 rounded-lg overflow-hidden">
           {tournament.image_url ? (
             <img
               src={tournament.image_url}
@@ -78,12 +84,9 @@ export const TournamentCard = memo(({ tournament, isSelected, onClick }: Tournam
 
         {/* Tournament Info */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between mb-2">
-            <h3 className="text-lg font-bold text-white truncate">
-              {tournament.name}
-            </h3>
+          <div className="mb-2">
             <span
-              className={`ml-2 px-2 py-1 text-xs font-medium text-white rounded ${getStatusColor(
+              className={`px-2 py-1 text-xs font-medium text-white rounded ${getStatusColor(
                 tournament.status
               )}`}
             >
@@ -123,6 +126,7 @@ export const TournamentCard = memo(({ tournament, isSelected, onClick }: Tournam
               <span>Сеток: {tournament.brackets_count}</span>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </Card>

@@ -8,11 +8,30 @@ interface MatchCardProps {
   match: Match;
   width?: number;
   onStartMatch?: (matchId: number) => void;
+  isEditMode?: boolean;
+  onDragStart?: (matchId: number, slot: 'participant1' | 'participant2', participantName: string, participantId?: number) => void;
+  onDragEnd?: () => void;
+  onDrop?: (matchId: number, slot: 'participant1' | 'participant2') => void;
+  isDragging?: boolean;
+  onAddParticipant?: (matchId: number, slot: 'participant1' | 'participant2') => void;
+  onRemoveParticipant?: (matchId: number, slot: 'participant1' | 'participant2') => void;
 }
 
 // Базовый компонент MatchCard
-function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
+function MatchCardBase({
+  match,
+  width = 180,
+  onStartMatch,
+  isEditMode = false,
+  onDragStart,
+  onDragEnd,
+  onDrop,
+  isDragging: _isDragging = false,
+  onAddParticipant,
+  onRemoveParticipant
+}: MatchCardProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const [dragOverSlot, setDragOverSlot] = useState<'participant1' | 'participant2' | null>(null);
 
   const participant1Name = match.participant1?.full_name
     ? removePatronymic(match.participant1.full_name)
@@ -31,12 +50,19 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
   const isCompleted = match.status === 'completed';
   const isInProgress = match.status === 'in_progress';
 
-  // Показывать кнопку только на матчах с участниками
-  const showButton = match.participant1 && match.participant2 && onStartMatch;
+  // Запретить редактирование начатых/завершённых матчей
+  const canEdit = isEditMode && match.status === 'scheduled';
+
+  // Показывать кнопку только на матчах с участниками и НЕ в режиме редактирования
+  const showButton = match.participant1 && match.participant2 && onStartMatch && !isEditMode;
 
   // Определение победителя для каждого участника
   const isParticipant1Winner = match.winner_id === match.participant1?.id;
   const isParticipant2Winner = match.winner_id === match.participant2?.id;
+
+  // Определение проигравшего (если матч завершен и есть победитель)
+  const isParticipant1Loser = isCompleted && match.winner_id && !isParticipant1Winner && match.participant1;
+  const isParticipant2Loser = isCompleted && match.winner_id && !isParticipant2Winner && match.participant2;
 
   // Текст кнопки в зависимости от статуса
   const getButtonText = () => {
@@ -61,6 +87,7 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
         ${isInProgress ? 'border-orange-500 shadow-orange-200' : 'border-gray-700'}
         ${isCompleted ? 'opacity-90' : ''}
         ${isHovered ? 'shadow-xl' : 'shadow-md'}
+        ${isEditMode && !canEdit ? 'opacity-60' : ''}
       `}
       style={{
         width: `${width}px`,
@@ -69,18 +96,79 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
       }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      title={isEditMode && !canEdit ? 'Редактирование недоступно: матч уже начат или завершён' : ''}
     >
       <CardContent className="p-0 h-full flex flex-col relative">
         {/* Участник 1 (Синий) */}
-        <div className={`
-          py-1.5 px-2 flex-1 flex items-center border-l-[6px] border-blue-700
-          ${isParticipant1Winner ? 'bg-green-50' : ''}
-        `}>
-          <div className="flex flex-col w-full min-w-0 flex-1">
+        <div
+          className={`
+            py-1.5 px-2 flex-1 flex items-center border-l-[6px] border-blue-700 relative select-none
+            ${isParticipant1Winner ? 'bg-green-50' : ''}
+            ${isParticipant1Loser ? 'bg-gray-200 opacity-60' : ''}
+            ${canEdit && participant1Name ? 'cursor-move hover:bg-blue-50' : ''}
+            ${dragOverSlot === 'participant1' ? 'bg-blue-100 ring-2 ring-blue-500' : ''}
+          `}
+          draggable={canEdit && !!participant1Name}
+          style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+          onDragStart={(e) => {
+            console.log('[MatchCard] DragStart participant1:', match.id, participant1Name, 'canEdit:', canEdit);
+            if (!canEdit || !participant1Name) {
+              e.preventDefault();
+              console.log('[MatchCard] DragStart cancelled - canEdit or participant1Name is false');
+              return;
+            }
+
+            // Устанавливаем данные для drag
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', participant1Name);
+
+            // Создаем ghost image (опционально)
+            const dragImage = e.currentTarget.cloneNode(true) as HTMLElement;
+            dragImage.style.opacity = '0.5';
+            document.body.appendChild(dragImage);
+            e.dataTransfer.setDragImage(dragImage, 0, 0);
+            setTimeout(() => document.body.removeChild(dragImage), 0);
+
+            onDragStart?.(match.id, 'participant1', participant1Name, match.participant1?.id);
+          }}
+          onDragEnd={(e) => {
+            console.log('[MatchCard] DragEnd, dropEffect:', e.dataTransfer.dropEffect);
+            // НЕ вызываем onDragEnd() если был успешный drop (dropEffect === 'move')
+            // Store сам очистит draggedParticipant после обработки drop
+            if (e.dataTransfer.dropEffect === 'none') {
+              console.log('[MatchCard] Drop не произошёл, очищаем draggedParticipant');
+              onDragEnd?.();
+            }
+          }}
+          onDragOver={(e) => {
+            if (canEdit) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              console.log('[MatchCard] DragOver participant1:', match.id);
+              setDragOverSlot('participant1');
+            }
+          }}
+          onDragLeave={() => {
+            console.log('[MatchCard] DragLeave participant1');
+            setDragOverSlot(null);
+          }}
+          onDrop={(e) => {
+            e.preventDefault(); // КРИТИЧНО!
+            e.stopPropagation();
+            console.log('[MatchCard] Drop participant1:', match.id, 'canEdit:', canEdit);
+            if (canEdit) {
+              onDrop?.(match.id, 'participant1');
+              setDragOverSlot(null);
+            }
+          }}
+        >
+          <div className={`flex flex-col w-full min-w-0 flex-1 ${canEdit ? 'pointer-events-none' : ''}`}>
             <div className="flex items-center justify-between gap-2">
               <span
                 className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
                   ${isParticipant1Winner ? 'font-bold' : ''}
+                  ${isParticipant1Loser ? 'line-through' : ''}
                 `}
                 style={{
                   display: '-webkit-box',
@@ -89,7 +177,7 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
                   overflow: 'hidden',
                   wordBreak: 'break-word'
                 }}
-                title={participant1Name}
+                title={participant1Name || ''}
               >
                 {participant1Name}
               </span>
@@ -100,26 +188,119 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
               )}
             </div>
             {club1 && (
-              <span className="text-[9px] text-gray-600 truncate mt-0.5" title={club1}>
+              <span className="text-xs text-gray-600 truncate mt-0.5" title={club1}>
                 {club1}
               </span>
             )}
           </div>
+          {canEdit && (
+            <div className="flex flex-col gap-1 ml-2 pointer-events-auto">
+              {!participant1Name ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddParticipant?.(match.id, 'participant1');
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="p-1.5 bg-green-500 hover:bg-green-600 rounded text-white shadow-sm"
+                  title="Добавить"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveParticipant?.(match.id, 'participant1');
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="p-1.5 bg-red-500 hover:bg-red-600 rounded text-white shadow-sm"
+                  title="Удалить"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Разделитель - толстая линия */}
         <div className="h-0.5 bg-gray-800" />
 
         {/* Участник 2 (Красный) */}
-        <div className={`
-          py-1.5 px-2 flex-1 flex items-center border-l-[6px] border-red-700
-          ${isParticipant2Winner ? 'bg-green-50' : ''}
-        `}>
-          <div className="flex flex-col w-full min-w-0 flex-1">
+        <div
+          className={`
+            py-1.5 px-2 flex-1 flex items-center border-l-[6px] border-red-700 relative select-none
+            ${isParticipant2Winner ? 'bg-green-50' : ''}
+            ${isParticipant2Loser ? 'bg-gray-200 opacity-60' : ''}
+            ${canEdit && participant2Name ? 'cursor-move hover:bg-red-50' : ''}
+            ${dragOverSlot === 'participant2' ? 'bg-red-100 ring-2 ring-red-500' : ''}
+          `}
+          draggable={canEdit && !!participant2Name}
+          style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+          onDragStart={(e) => {
+            console.log('[MatchCard] DragStart participant2:', match.id, participant2Name, 'canEdit:', canEdit);
+            if (!canEdit || !participant2Name) {
+              e.preventDefault();
+              console.log('[MatchCard] DragStart cancelled - canEdit or participant2Name is false');
+              return;
+            }
+
+            // Устанавливаем данные для drag
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', participant2Name);
+
+            // Создаем ghost image (опционально)
+            const dragImage = e.currentTarget.cloneNode(true) as HTMLElement;
+            dragImage.style.opacity = '0.5';
+            document.body.appendChild(dragImage);
+            e.dataTransfer.setDragImage(dragImage, 0, 0);
+            setTimeout(() => document.body.removeChild(dragImage), 0);
+
+            onDragStart?.(match.id, 'participant2', participant2Name, match.participant2?.id);
+          }}
+          onDragEnd={(e) => {
+            console.log('[MatchCard] DragEnd, dropEffect:', e.dataTransfer.dropEffect);
+            // НЕ вызываем onDragEnd() если был успешный drop (dropEffect === 'move')
+            // Store сам очистит draggedParticipant после обработки drop
+            if (e.dataTransfer.dropEffect === 'none') {
+              console.log('[MatchCard] Drop не произошёл, очищаем draggedParticipant');
+              onDragEnd?.();
+            }
+          }}
+          onDragOver={(e) => {
+            if (canEdit) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              console.log('[MatchCard] DragOver participant2:', match.id);
+              setDragOverSlot('participant2');
+            }
+          }}
+          onDragLeave={() => {
+            console.log('[MatchCard] DragLeave participant2');
+            setDragOverSlot(null);
+          }}
+          onDrop={(e) => {
+            e.preventDefault(); // КРИТИЧНО!
+            e.stopPropagation();
+            console.log('[MatchCard] Drop participant2:', match.id, 'canEdit:', canEdit);
+            if (canEdit) {
+              onDrop?.(match.id, 'participant2');
+              setDragOverSlot(null);
+            }
+          }}
+        >
+          <div className={`flex flex-col w-full min-w-0 flex-1 ${canEdit ? 'pointer-events-none' : ''}`}>
             <div className="flex items-center justify-between gap-2">
               <span
                 className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
                   ${isParticipant2Winner ? 'font-bold' : ''}
+                  ${isParticipant2Loser ? 'line-through' : ''}
                 `}
                 style={{
                   display: '-webkit-box',
@@ -128,7 +309,7 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
                   overflow: 'hidden',
                   wordBreak: 'break-word'
                 }}
-                title={participant2Name}
+                title={participant2Name || ''}
               >
                 {participant2Name}
               </span>
@@ -139,11 +320,44 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
               )}
             </div>
             {club2 && (
-              <span className="text-[9px] text-gray-600 truncate mt-0.5" title={club2}>
+              <span className="text-xs text-gray-600 truncate mt-0.5" title={club2}>
                 {club2}
               </span>
             )}
           </div>
+          {canEdit && (
+            <div className="flex flex-col gap-1 ml-2 pointer-events-auto">
+              {!participant2Name ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddParticipant?.(match.id, 'participant2');
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="p-1.5 bg-green-500 hover:bg-green-600 rounded text-white shadow-sm"
+                  title="Добавить"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveParticipant?.(match.id, 'participant2');
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="p-1.5 bg-red-500 hover:bg-red-600 rounded text-white shadow-sm"
+                  title="Удалить"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Кнопка при наведении (по центру карточки, ~50% высоты) */}
@@ -168,6 +382,9 @@ function MatchCardBase({ match, width = 180, onStartMatch }: MatchCardProps) {
 export const MatchCard = memo(MatchCardBase, (prevProps, nextProps) => {
   // Сравниваем width
   if (prevProps.width !== nextProps.width) return false;
+
+  // Сравниваем режим редактирования
+  if (prevProps.isEditMode !== nextProps.isEditMode) return false;
 
   // Сравниваем ключевые поля match объекта
   const prevMatch = prevProps.match;

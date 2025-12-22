@@ -131,7 +131,7 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
                   Вход судьи
                 </CardTitle>
                 <p className="text-gray-800 text-sm">
-                  Введите PIN-код от администратора стола
+                  Введите PIN-код от администратора столов
                 </p>
               </div>
             </div>
@@ -242,7 +242,7 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
                     Вы можете войти без подключения к интернету
                   </>
                 ) : (
-                  <>PIN-код можно получить у администратора стола</>
+                  <>PIN-код можно получить у администратора столов</>
                 )}
               </p>
             </div>

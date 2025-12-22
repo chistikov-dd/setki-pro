@@ -36,7 +36,14 @@ export function MatchEndDialog({
   const handleConfirm = () => {
     if (resultType === 'points') {
       // Winner determined by score
-      onFinish('points');
+      let winnerId: number | undefined;
+      if (redScore > blueScore) {
+        winnerId = redFighter?.id;
+      } else if (blueScore > redScore) {
+        winnerId = blueFighter?.id;
+      }
+      // Передаем winnerId явно, чтобы backend мог продвинуть победителя
+      onFinish('points', winnerId);
     } else {
       // Manual winner selection required
       if (!selectedWinner) {
@@ -54,7 +61,7 @@ export function MatchEndDialog({
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
       <div className="bg-white border border-gray-400 rounded-lg p-6 max-w-2xl w-full mx-4">
-        <h2 className="text-2xl font-bold text-white mb-6">Завершение поединка</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-6">Завершение поединка</h2>
 
         <div className="space-y-6">
           {/* Result Type Selection */}
@@ -92,18 +99,18 @@ export function MatchEndDialog({
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <Button
-                  variant={selectedWinner === 'red' ? 'red' : 'ghost'}
-                  size="lg"
-                  onClick={() => setSelectedWinner('red')}
-                >
-                  {removePatronymic(redFighter?.full_name || '') || 'Красный'}
-                </Button>
-                <Button
                   variant={selectedWinner === 'blue' ? 'blue' : 'ghost'}
                   size="lg"
                   onClick={() => setSelectedWinner('blue')}
                 >
                   {removePatronymic(blueFighter?.full_name || '') || 'Синий'}
+                </Button>
+                <Button
+                  variant={selectedWinner === 'red' ? 'red' : 'ghost'}
+                  size="lg"
+                  onClick={() => setSelectedWinner('red')}
+                >
+                  {removePatronymic(redFighter?.full_name || '') || 'Красный'}
                 </Button>
               </div>
             </div>
@@ -126,12 +133,12 @@ export function MatchEndDialog({
             </div>
 
             {resultType === 'points' && pointsWinner !== 'draw' && (
-              <div className="text-center text-sm text-green-400 mt-2">
+              <div className="text-center text-sm text-green-600 font-semibold mt-2">
                 Победитель: {pointsWinner === 'red' ? removePatronymic(redFighter?.full_name || '') : removePatronymic(blueFighter?.full_name || '')}
               </div>
             )}
             {resultType === 'points' && pointsWinner === 'draw' && (
-              <div className="text-center text-sm text-yellow-400 mt-2">
+              <div className="text-center text-sm text-yellow-600 font-semibold mt-2">
                 Ничья
               </div>
             )}

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
+import { useSyncWorker } from '../../hooks/useSyncWorker';
 import { Button } from '../ui/Button';
 import { BracketSelection } from './BracketSelection';
 import { TournamentBracket } from '../brackets/TournamentBracket';
@@ -11,6 +13,7 @@ import type { Match } from '../../types';
 export const JudgeDashboard: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { currentSession, loadTournamentSession } = useSessionStore();
+  const serverMode = useServerModeStore();
   const [selectedBracketId, setSelectedBracketId] = useState<number | null>(null);
   const [selectedBracketName, setSelectedBracketName] = useState<string>('');
   const [lastSelectedBracketId, setLastSelectedBracketId] = useState<number | null>(null);
@@ -19,6 +22,20 @@ export const JudgeDashboard: React.FC = () => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [activeMatch, setActiveMatch] = useState<Match | null>(null);
+  const [bracketSelectionReloadTrigger, setBracketSelectionReloadTrigger] = useState(0);
+
+  // Background синхронизация при старте приложения и каждые 30 секунд
+  useSyncWorker({
+    enabled: true,
+    interval: 30000,
+    serverMode,
+    onSyncSuccess: () => {
+      console.log('[JudgeDashboard] Background sync успешна');
+    },
+    onSyncError: (error) => {
+      console.error('[JudgeDashboard] Background sync ошибка:', error);
+    },
+  });
 
   // Загружаем сессию турнира только если её нет в localStorage
   useEffect(() => {
@@ -72,29 +89,33 @@ export const JudgeDashboard: React.FC = () => {
       const data = await getBracketMatches(bracketId);
 
       // Преобразуем MatchResponse в Match
-      const mappedMatches: Match[] = data.map((matchResponse: any) => ({
-        id: matchResponse.id,
-        bracket_id: matchResponse.bracket_id,
-        round_number: matchResponse.round_number,
-        match_number: matchResponse.match_number,
-        winner_id: matchResponse.winner_id,
-        status: matchResponse.status,
-        score_participant1: matchResponse.score_participant1 ?? 0,
-        score_participant2: matchResponse.score_participant2 ?? 0,
-        warnings_participant1: 0,
-        warnings_participant2: 0,
-        result_type: matchResponse.result_type,
-        participant1: matchResponse.participant1_id ? {
-          id: matchResponse.participant1_id,
-          fighter_id: matchResponse.participant1_id,
-          full_name: matchResponse.fighter1_name || 'TBD',
-        } : undefined,
-        participant2: matchResponse.participant2_id ? {
-          id: matchResponse.participant2_id,
-          fighter_id: matchResponse.participant2_id,
-          full_name: matchResponse.fighter2_name || 'TBD',
-        } : undefined,
-      }));
+      const mappedMatches: Match[] = data.map((matchResponse: any) => {
+        return {
+          id: matchResponse.id,
+          bracket_id: matchResponse.bracket_id,
+          round_number: matchResponse.round_number,
+          match_number: matchResponse.match_number,
+          winner_id: matchResponse.winner_id,
+          status: matchResponse.status,
+          score_participant1: matchResponse.score_participant1 ?? 0,
+          score_participant2: matchResponse.score_participant2 ?? 0,
+          warnings_participant1: 0,
+          warnings_participant2: 0,
+          result_type: matchResponse.result_type,
+          participant1: matchResponse.participant1 || (matchResponse.participant1_id ? {
+            id: matchResponse.participant1_id,
+            fighter_id: matchResponse.participant1_id,
+            full_name: matchResponse.fighter1_name || 'TBD',
+            club_name: matchResponse.fighter1_club || matchResponse.participant1?.club_name,
+          } : undefined),
+          participant2: matchResponse.participant2 || (matchResponse.participant2_id ? {
+            id: matchResponse.participant2_id,
+            fighter_id: matchResponse.participant2_id,
+            full_name: matchResponse.fighter2_name || 'TBD',
+            club_name: matchResponse.fighter2_club || matchResponse.participant2?.club_name,
+          } : undefined),
+        };
+      });
 
       setMatches(mappedMatches);
     } catch (error) {
@@ -147,6 +168,8 @@ export const JudgeDashboard: React.FC = () => {
     if (selectedBracketId) {
       loadMatches(selectedBracketId);
     }
+    // Также обновляем список сеток для актуализации статусов
+    handleBracketEdited();
   };
 
   const handleBackToBracketSelection = async () => {
@@ -161,6 +184,14 @@ export const JudgeDashboard: React.FC = () => {
     }
     // Сбрасываем только selectedBracketId, lastSelectedBracketId остается для прокрутки
     setSelectedBracketId(null);
+    // Обновить список сеток чтобы увидеть обновленные статусы
+    handleBracketEdited();
+  };
+
+  // Callback для перезагрузки BracketSelection после редактирования сетки
+  const handleBracketEdited = () => {
+    setBracketSelectionReloadTrigger(prev => prev + 1);
+    console.log('Запрос на перезагрузку списка сеток после редактирования');
   };
 
   // Если активен матч, показываем полноэкранный MatchScreen
@@ -218,6 +249,9 @@ export const JudgeDashboard: React.FC = () => {
                 matches={matches}
                 onStartMatch={handleStartMatch}
                 categoryName={selectedBracketName}
+                bracketId={selectedBracketId}
+                onMatchesReload={() => loadMatches(selectedBracketId)}
+                onBracketEdited={handleBracketEdited}
               />
             ) : (
               <div className="bg-white/30 border border-gray-400/50 rounded-lg p-8 text-center">
@@ -250,6 +284,7 @@ export const JudgeDashboard: React.FC = () => {
                   tournamentId={user.tournament_id}
                   onBracketSelect={handleBracketSelect}
                   lastSelectedBracketId={lastSelectedBracketId}
+                  reloadTrigger={bracketSelectionReloadTrigger}
                 />
               )
             ) : (

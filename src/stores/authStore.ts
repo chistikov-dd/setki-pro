@@ -14,6 +14,7 @@ interface AuthState {
 
   // Actions
   loginAsAdmin: (login: string, password: string) => Promise<void>;
+  loginAsAdminOffline: (login: string, userId: number) => void;
   loginAsJudge: (pinCode: string, judgeName: string, tableNumber: number) => Promise<void>;
   logout: () => void;
   clearError: () => void;
@@ -62,17 +63,43 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
+      // Offline вход админа (используя сохраненный токен)
+      loginAsAdminOffline: (login: string, userId: number) => {
+        logger.info(LOG_CATEGORIES.AUTH, 'Admin offline login', { login, userId });
+
+        // Создаем минимальный AuthResponse для offline режима
+        const offlineUser: AuthResponse = {
+          access_token: 'offline_token', // Токен уже в SQLite
+          user_id: userId,
+          role: 'admin',
+          tournament_id: undefined,
+          judge_name: undefined,
+          table_number: undefined,
+        };
+
+        set({
+          user: offlineUser,
+          isAuthenticated: true,
+          isLoading: false,
+          error: null,
+        });
+      },
+
       // Login as judge (PIN code)
       loginAsJudge: async (pinCode: string, judgeName: string, tableNumber: number) => {
         set({ isLoading: true, error: null });
         logger.info(LOG_CATEGORIES.AUTH, 'Judge login attempt', { judgeName, tableNumber });
 
+        console.log('[authStore] Начало входа судьи:', { pinCode, judgeName, tableNumber });
+
         try {
+          console.log('[authStore] Вызов loginByPin...');
           const response = await loginByPin({
             pin_code: pinCode,
             judge_name: judgeName,
             table_number: tableNumber
           });
+          console.log('[authStore] loginByPin успешно, ответ:', response);
 
           logger.info(LOG_CATEGORIES.AUTH, 'Judge login successful', {
             judgeName,
@@ -101,6 +128,11 @@ export const useAuthStore = create<AuthState>()(
             error: null,
           });
         } catch (error) {
+          // Детальное логирование ошибки
+          console.error('[authStore] Полная ошибка входа судьи:', error);
+          console.error('[authStore] Тип ошибки:', typeof error);
+          console.error('[authStore] Текст ошибки:', String(error));
+
           const appError = ErrorFactory.fromTauriError(error, { judgeName });
           logger.error(LOG_CATEGORIES.AUTH, 'Judge login failed', { judgeName }, appError);
 
@@ -124,21 +156,44 @@ export const useAuthStore = create<AuthState>()(
 
         // Освободить номер стола если это судья
         if (user?.role === 'referee' && user?.tournament_id && user?.table_number) {
-          try {
-            await releaseTableNumber(user.tournament_id, user.table_number);
-            logger.info(LOG_CATEGORIES.AUTH, 'Released table number', {
-              tournamentId: user.tournament_id,
-              tableNumber: user.table_number,
-            });
-          } catch (err) {
-            logger.error(
-              LOG_CATEGORIES.AUTH,
-              'Failed to release table number',
-              { tableNumber: user.table_number },
-              err instanceof Error ? err : undefined
-            );
+          let retries = 3;
+          let released = false;
+
+          while (retries > 0 && !released) {
+            try {
+              await releaseTableNumber(user.tournament_id, user.table_number);
+              logger.info(LOG_CATEGORIES.AUTH, 'Released table number', {
+                tournamentId: user.tournament_id,
+                tableNumber: user.table_number,
+              });
+              released = true;
+            } catch (err) {
+              retries--;
+              logger.warn(
+                LOG_CATEGORIES.AUTH,
+                `Failed to release table number (${3 - retries}/3 attempts)`,
+                { tableNumber: user.table_number },
+                err instanceof Error ? err : undefined
+              );
+
+              if (retries > 0) {
+                // Пауза перед следующей попыткой (500ms)
+                await new Promise(resolve => setTimeout(resolve, 500));
+              } else {
+                // Финальная ошибка после всех попыток
+                logger.error(
+                  LOG_CATEGORIES.AUTH,
+                  'Failed to release table number after 3 attempts',
+                  { tableNumber: user.table_number },
+                  err instanceof Error ? err : undefined
+                );
+              }
+            }
           }
         }
+
+        // НЕ очищаем credentials при выходе - для автоматического входа при следующем запуске
+        // Credentials остаются в SQLite для быстрого повторного входа
 
         apiLogout();
         set({

@@ -276,6 +276,24 @@ export class ErrorFactory {
   static fromTauriError(error: unknown, context?: Record<string, unknown>): AppError {
     const errorStr = String(error);
 
+    // Table already occupied error
+    if (errorStr.includes('уже занят') || errorStr.includes('already occupied')) {
+      // Извлекаем номер стола из сообщения
+      const match = errorStr.match(/(\d+)/);
+      const tableNumber = match ? match[1] : 'указанный';
+      return new AppError(
+        ErrorType.VALIDATION_ERROR,
+        `Номер стола ${tableNumber} уже занят другим судьей. Пожалуйста, выберите другой номер стола или обратитесь к администратору для освобождения стола.`,
+        errorStr,
+        ErrorSeverity.WARNING,
+        false,
+        {
+          originalError: errorStr,
+          ...context,
+        }
+      );
+    }
+
     // WebSocket errors (check BEFORE Network since it contains "connection")
     if (errorStr.includes('WebSocket') || errorStr.includes('websocket')) {
       return ErrorFactory.websocketError(errorStr, context);

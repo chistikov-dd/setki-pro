@@ -1,5 +1,10 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useState } from 'react';
 import { MatchCard } from './MatchCard';
+import { AddParticipantModal } from './AddParticipantModal';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { useBracketEditorStore } from '../../stores/bracketEditorStore';
+import { useAuthStore } from '../../stores/authStore';
+import { useToast } from '../../hooks/useToast';
 import type { Match } from '../../types';
 
 interface Round {
@@ -11,13 +16,131 @@ interface TournamentBracketProps {
   matches: Match[];
   onStartMatch: (matchId: number) => void;
   categoryName?: string;
+  bracketId?: number;
+  onMatchesReload?: () => void;
+  onBracketEdited?: () => void; // Callback для уведомления о редактировании сетки
 }
 
-export function TournamentBracket({ matches, onStartMatch, categoryName }: TournamentBracketProps) {
+export function TournamentBracket({ matches, onStartMatch, categoryName, bracketId, onMatchesReload, onBracketEdited }: TournamentBracketProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { user } = useAuthStore();
+  const { showToast } = useToast();
+  const {
+    isEditMode,
+    setEditMode,
+    startDrag,
+    endDrag,
+    dropParticipant,
+    openAddParticipantModal,
+    removeParticipant,
+  } = useBracketEditorStore();
+
+  // Получаем draggedParticipant отдельно, чтобы он обновлялся при каждом рендере
+  const draggedParticipant = useBracketEditorStore(state => state.draggedParticipant);
+
+  const [confirmRemove, setConfirmRemove] = useState<{
+    matchId: number;
+    slot: 'participant1' | 'participant2';
+  } | null>(null);
 
   // Мемоизация группировки матчей по раундам
   // Оптимизация: O(n*m) операций → пересчет только при изменении matches
+  const handleDragStart = (matchId: number, slot: 'participant1' | 'participant2', fighterName: string, fighterId?: number) => {
+    console.log('[TournamentBracket] handleDragStart вызван:', { matchId, slot, fighterName, fighterId });
+    startDrag({
+      matchId,
+      slot,
+      fighterName,
+      fighterId,
+    });
+    console.log('[TournamentBracket] startDrag выполнен');
+  };
+
+  const handleDrop = async (targetMatchId: number, targetSlot: 'participant1' | 'participant2') => {
+    // ВАЖНО: Получаем актуальное значение draggedParticipant ВНУТРИ функции
+    const currentDraggedParticipant = useBracketEditorStore.getState().draggedParticipant;
+
+    console.log('[TournamentBracket] handleDrop вызван:', {
+      targetMatchId,
+      targetSlot,
+      currentDraggedParticipant,
+      bracketId,
+      user: user?.role
+    });
+
+    if (!currentDraggedParticipant) {
+      console.warn('[TournamentBracket] handleDrop отменён: нет draggedParticipant');
+      return;
+    }
+
+    if (!bracketId) {
+      console.warn('[TournamentBracket] handleDrop отменён: нет bracketId');
+      return;
+    }
+
+    try {
+      console.log('[TournamentBracket] Вызов dropParticipant...');
+      await dropParticipant(
+        targetMatchId,
+        targetSlot,
+        bracketId,
+        user?.role === 'referee' ? user.judge_name : undefined,
+        user?.role === 'admin' ? user.user_id : undefined
+      );
+
+      console.log('[TournamentBracket] dropParticipant успешно выполнен');
+
+      // Перезагрузить матчи
+      onMatchesReload?.();
+      // Уведомить о редактировании для обновления BracketSelection
+      onBracketEdited?.();
+    } catch (error) {
+      console.error('[TournamentBracket] Ошибка в handleDrop:', error);
+    }
+  };
+
+  const handleAddParticipant = (matchId: number, slot: 'participant1' | 'participant2') => {
+    const match = matches.find(m => m.id === matchId);
+    if (match) {
+      openAddParticipantModal(match, slot);
+    }
+  };
+
+  const handleRemoveParticipant = (matchId: number, slot: 'participant1' | 'participant2') => {
+    setConfirmRemove({ matchId, slot });
+  };
+
+  const confirmRemoveParticipant = async () => {
+    if (!confirmRemove || !bracketId) return;
+
+    console.log('[TournamentBracket] Начало удаления участника:', {
+      bracketId,
+      matchId: confirmRemove.matchId,
+      slot: confirmRemove.slot,
+      user: user?.role,
+    });
+
+    try {
+      await removeParticipant(
+        bracketId,
+        confirmRemove.matchId,
+        confirmRemove.slot,
+        user?.role === 'referee' ? user.judge_name : undefined,
+        user?.role === 'admin' ? user.user_id : undefined
+      );
+
+      console.log('[TournamentBracket] Участник успешно удалён');
+      showToast('Участник удалён', 'success');
+      setConfirmRemove(null);
+      onMatchesReload?.();
+      // Уведомить о редактировании для обновления BracketSelection
+      onBracketEdited?.();
+    } catch (error) {
+      console.error('[TournamentBracket] Ошибка удаления участника:', error);
+      showToast(error instanceof Error ? error.message : 'Ошибка удаления участника', 'error');
+    }
+  };
+
   const rounds = useMemo(() => {
     const groupedRounds: Round[] = [];
     const maxRound = Math.max(...matches.map(m => m.round_number));
@@ -134,10 +257,59 @@ export function TournamentBracket({ matches, onStartMatch, categoryName }: Tourn
       {/* Категория турнирной сетки */}
       {categoryName && (
         <div className="mb-6 pb-4 border-b-2 border-gray-300">
-          <h3 className="text-2xl font-bold text-gray-900">
-            Категория: {categoryName}
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-2xl font-bold text-gray-900">
+              Категория: {categoryName}
+            </h3>
+            {bracketId && user && (
+              <button
+                onClick={() => setEditMode(!isEditMode, bracketId)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                  isEditMode
+                    ? 'bg-green-500 text-white hover:bg-green-600'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                }`}
+                title={isEditMode ? 'Выключить режим редактирования' : 'Включить режим редактирования'}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d={isEditMode
+                      ? "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                      : "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    }
+                  />
+                </svg>
+                {isEditMode ? 'Готово' : 'Редактировать'}
+              </button>
+            )}
+          </div>
+          {isEditMode && (
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+              <strong>Режим редактирования:</strong> Перетаскивайте участников между матчами или используйте кнопки + и × для добавления/удаления
+            </div>
+          )}
         </div>
+      )}
+      {bracketId && (
+        <AddParticipantModal
+          bracketId={bracketId}
+          onParticipantAdded={() => {
+            onMatchesReload?.();
+            onBracketEdited?.();
+          }}
+        />
+      )}
+
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Удаление участника"
+          message="Удалить участника из матча?"
+          onConfirm={confirmRemoveParticipant}
+          onCancel={() => setConfirmRemove(null)}
+        />
       )}
 
       <div
@@ -197,6 +369,13 @@ export function TournamentBracket({ matches, onStartMatch, categoryName }: Tourn
                       match={match}
                       width={CARD_WIDTH}
                       onStartMatch={onStartMatch}
+                      isEditMode={isEditMode}
+                      onDragStart={handleDragStart}
+                      onDragEnd={endDrag}
+                      onDrop={handleDrop}
+                      isDragging={draggedParticipant?.matchId === match.id}
+                      onAddParticipant={handleAddParticipant}
+                      onRemoveParticipant={handleRemoveParticipant}
                     />
                   </div>
                 );

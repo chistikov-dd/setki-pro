@@ -38,7 +38,7 @@ export const useSessionStore = create<SessionState>()(
       set({
         tournaments,
         isLoading: false,
-        error: null,
+        error: null, // Успешная загрузка - очищаем ошибки
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка загрузки турниров';
@@ -91,6 +91,7 @@ export const useSessionStore = create<SessionState>()(
       name: 'session-storage',
       partialize: (state) => ({
         currentSession: state.currentSession, // Сохраняем только сессию
+        // error НЕ сохраняем - всегда начинаем с чистого состояния
       }),
     }
   )

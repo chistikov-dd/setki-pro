@@ -69,7 +69,9 @@ Frontend → `invoke('command_name', { params })` → Rust Backend → SQLite/HT
 
 ### SQLite Schema
 
-`~/.local/share/pro.setki.keeper/setki.db`
+**Портативный режим**: `~/.setki-keeper/data/setki.db`
+- Linux/macOS: `~/.setki-keeper/data/setki.db`
+- Windows: `%USERPROFILE%\.setki-keeper\data\setki.db`
 
 **9 таблиц**: auth, brackets_cache, matches_cache, sync_queue, cached_pins, judge_sessions, bracket_reservations, match_events, table_numbers
 
@@ -251,11 +253,44 @@ const publicDisplay = new WebviewWindow('public-display', { url: '/public-displa
 - Синий: 1 (+1), 2 (+2), 3 (+3), 4 (+4), Z (предупреждение)
 - Общие: Space (таймер), Ctrl+Z (отмена), Enter (завершить)
 
+## Автоматическое продвижение победителя
+
+**НОВАЯ ФУНКЦИОНАЛЬНОСТЬ** (декабрь 2025): При победе участник автоматически переходит в следующий раунд турнирной сетки.
+
+### Ключевые особенности
+
+- **Автоматическое продвижение**: Победитель матча сразу добавляется в следующий матч
+- **Single Elimination**: Поддержка классической олимпийской системы
+- **Полные данные**: Передается не только ID, но и имя, клуб участника
+- **Offline-First**: Работает без интернета с синхронизацией через sync_queue
+- **Правильная логика**: Вычисление следующего матча по формуле `(match_number + 1) / 2`
+
+### Формула продвижения
+
+```
+next_round = current_round + 1
+next_match_number = (current_match_number + 1) / 2
+target_slot = match_number % 2 == 1 ? participant1 : participant2
+```
+
+### Пример для 8 участников
+
+```
+Раунд 1: Match 1.1, 1.2, 1.3, 1.4 (4 матча)
+         ↓
+Раунд 2: Match 2.1, 2.2 (2 матча)
+         ↓
+Раунд 3: Match 3.1 (финал)
+```
+
+**Детали**: См. `docs/WINNER_ADVANCEMENT.md`
+
 ## Статус проекта
 
 ### ✅ Завершено (декабрь 2025)
 
 **Этапы 1-7**: Backend API, Админ-панель, Судейский UI, Real-Time, LAN, Performance, Полировка
+**Этап 8**: Автоматическое продвижение победителя в турнирной сетке ✨
 
 **Достижения:**
 - Адаптивность (HD → 4K)
@@ -271,6 +306,7 @@ const publicDisplay = new WebviewWindow('public-display', { url: '/public-displa
 - `docs/USER_MANUAL.md` - руководство для судей
 - `docs/ADMIN_GUIDE.md` - руководство для администраторов
 - `docs/E2E_TESTING.md` - стратегия тестирования
+- `docs/BRACKET_EDITING_GUIDE.md` - руководство по редактированию сеток ✨
 
 ### 🎯 Статус: Production-Ready
 
@@ -278,11 +314,12 @@ const publicDisplay = new WebviewWindow('public-display', { url: '/public-displa
 
 ## Статистика
 
-**Components (31):** Auth (3), Admin (7), Judge (3), Match (8), Brackets (3), UI (7)
-**Hooks (11):** useResponsive, useMatchTimer, useToast, useMatchWebSocket, useAdminEventsWebSocket, useSound, useSyncWorker, useDebounce, useErrorHandler, useLogger, usePageVisibility
-**Tauri Commands (30):** Auth (4), Tournament (4), Brackets (4), Matches (5), Local Server (4), Sync (2), Monitoring (2), Utils (5)
-**SQLite Tables (9):** auth, brackets_cache, matches_cache, sync_queue, cached_pins, judge_sessions, bracket_reservations, match_events, table_numbers
-**Lines of Code:** ~12,000 (9,000 TypeScript, 3,000 Rust)
+**Components (35):** Auth (3), Admin (7), Judge (3), Match (8), Brackets (7), UI (7)
+**Hooks (12):** useResponsive, useMatchTimer, useToast, useMatchWebSocket, useAdminEventsWebSocket, useSound, useSyncWorker, useDebounce, useErrorHandler, useLogger, usePageVisibility, **usePanZoom**
+**Stores (6):** authStore, sessionStore, serverModeStore, matchStore, **bracketEditorStore**, publicDisplayStore
+**Tauri Commands (33):** Auth (4), Tournament (4), Brackets (7), Matches (5), Local Server (4), Sync (2), Monitoring (2), Utils (5)
+**SQLite Tables (10):** auth, brackets_cache, matches_cache, sync_queue, cached_pins, judge_sessions, bracket_reservations, match_events, table_numbers, **bracket_participant_edits**
+**Lines of Code:** ~13,500 (10,000 TypeScript, 3,500 Rust)
 
 **Тестирование:**
 - Unit Tests: 221/221 (100% ✅)
@@ -303,6 +340,21 @@ const publicDisplay = new WebviewWindow('public-display', { url: '/public-displa
 - Public Display
 - Match Features (20+)
 - Error Handling (retry logic)
+- **Pan & Zoom Navigation** (турнирная сетка) ✨
+  - Перемещение: ЛКМ + drag
+  - Масштабирование: колесико, кнопки +/-, pinch-to-zoom
+  - Мини-карта навигации
+  - Индикатор масштаба и кнопка сброса
+  - Границы области перемещения
+- **Bracket Editing** (редактирование сеток) ✨ **NEW!**
+  - Drag & Drop участников между матчами
+  - Добавление новых участников
+  - Удаление участников
+  - Замена участников
+  - История изменений (последние 50)
+  - Контроль прав доступа (админ/судья)
+  - Автосинхронизация с сервером
+  - Поддержка offline режима
 
 ## Важные заметки
 
@@ -337,6 +389,85 @@ authStore.logout()
 **Определение локального сервера**: проверка IP (192.168.x.x, 10.0.x.x, 172.16.x.x, localhost)
 
 ## Практические примеры
+
+### Использование Pan & Zoom для компонентов сетки
+
+```typescript
+import { usePanZoom } from '../hooks/usePanZoom';
+import { PanZoomControls } from './PanZoomControls';
+import { MiniMap } from './MiniMap';
+
+function MyBracketComponent() {
+  const {
+    panZoomState,
+    handleMouseDown,
+    handleWheel,
+    handleTouchStart,
+    zoomIn,
+    zoomOut,
+    resetView,
+    navigateTo,
+    containerRef,
+  } = usePanZoom({
+    minScale: 0.5,
+    maxScale: 2.0,
+    zoomSpeed: 0.1,
+    enableBoundaries: true,
+    contentWidth: 2000,
+    contentHeight: 1500,
+  });
+
+  return (
+    <div className="relative w-full h-full">
+      <div
+        ref={containerRef}
+        className="w-full h-full overflow-hidden"
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onTouchStart={handleTouchStart}
+        style={{ cursor: 'grab' }}
+      >
+        <div
+          style={{
+            transform: `translate(${panZoomState.x}px, ${panZoomState.y}px) scale(${panZoomState.scale})`,
+            transformOrigin: '0 0',
+          }}
+        >
+          {/* Ваш контент здесь */}
+        </div>
+      </div>
+
+      {/* UI элементы управления */}
+      <PanZoomControls
+        scale={panZoomState.scale}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onReset={resetView}
+        minScale={0.5}
+        maxScale={2.0}
+      />
+
+      <MiniMap
+        contentWidth={2000}
+        contentHeight={1500}
+        viewportX={panZoomState.x}
+        viewportY={panZoomState.y}
+        viewportWidth={viewportWidth}
+        viewportHeight={viewportHeight}
+        scale={panZoomState.scale}
+        onNavigate={navigateTo}
+      />
+    </div>
+  );
+}
+```
+
+**Ключевые моменты:**
+- `usePanZoom` возвращает все необходимые обработчики и состояние
+- `enableBoundaries: true` ограничивает перемещение границами контента
+- Поддерживает все методы масштабирования: колесико, кнопки, pinch-to-zoom
+- `MiniMap` автоматически показывает текущую позицию viewport
+- `PanZoomControls` предоставляет UI для управления масштабом
 
 ### Добавление нового Tauri Command
 

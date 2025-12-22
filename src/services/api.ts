@@ -30,6 +30,36 @@ export function getAuthToken(): string | null {
 // ============================================
 
 /**
+ * Проверить наличие сохраненной авторизации
+ */
+export async function hasSavedAuth(): Promise<boolean> {
+  return await invoke<boolean>('has_saved_auth');
+}
+
+/**
+ * Получить сохраненные credentials админа для автоматического входа
+ * Возвращает [login, password, user_id]
+ */
+export async function getSavedCredentials(): Promise<[string, string, number] | null> {
+  return await invoke<[string, string, number] | null>('get_saved_credentials');
+}
+
+/**
+ * Получить сохраненные credentials судьи для автоматического входа
+ * Возвращает [pin_code, judge_name, table_number, tournament_id]
+ */
+export async function getSavedJudgeCredentials(): Promise<[string, string, number, number] | null> {
+  return await invoke<[string, string, number, number] | null>('get_saved_judge_credentials');
+}
+
+/**
+ * Очистить сохраненные credentials админа
+ */
+export async function clearSavedCredentials(): Promise<void> {
+  return await invoke('clear_saved_credentials');
+}
+
+/**
  * Вход администратора (логин/пароль)
  */
 export async function loginAdmin(data: { login: string; password: string }): Promise<AuthResponse> {
@@ -58,6 +88,20 @@ export async function releaseTableNumber(tournamentId: number, tableNumber: numb
 }
 
 /**
+ * Принудительное освобождение стола (для админа)
+ */
+export async function forceReleaseTable(tournamentId: number, tableNumber: number): Promise<void> {
+  return await invoke('force_release_table', { tournamentId, tableNumber });
+}
+
+/**
+ * Очистка всех резерваций столов для турнира
+ */
+export async function clearAllTableReservations(tournamentId: number): Promise<number> {
+  return await invoke('clear_all_table_reservations', { tournamentId });
+}
+
+/**
  * Выход (очистка токена)
  */
 export function logout() {
@@ -73,6 +117,13 @@ export function logout() {
  */
 export async function downloadTournament(tournamentId: number): Promise<void> {
   return await invoke('download_tournament', { tournamentId });
+}
+
+/**
+ * Проверить, загружен ли турнир в кэш
+ */
+export async function isTournamentDownloaded(tournamentId: number): Promise<boolean> {
+  return await invoke<boolean>('is_tournament_downloaded', { tournamentId });
 }
 
 /**
@@ -126,6 +177,14 @@ export async function getTournamentTables(tournamentId: number): Promise<Tournam
  */
 export async function checkCachedPin(pinCode: string): Promise<boolean> {
   return await invoke<boolean>('check_cached_pin', { pinCode });
+}
+
+/**
+ * Проверить количество несинхронизированных записей
+ * Возвращает количество записей в sync_queue с synced=0
+ */
+export async function checkUnsyncedCount(): Promise<number> {
+  return await invoke<number>('check_unsynced_count');
 }
 
 // ============================================
@@ -275,6 +334,22 @@ export async function undoLastEvent(matchId: number): Promise<void> {
 }
 
 /**
+ * Создать временного участника (с отрицательным ID)
+ * Используется при добавлении участника вручную через редактор сетки
+ */
+export async function createTempParticipant(data: {
+  bracketId: number;
+  fullName: string;
+  clubName?: string;
+}): Promise<number> {
+  return await invoke('create_temp_participant', {
+    bracketId: data.bracketId,
+    fullName: data.fullName,
+    clubName: data.clubName,
+  });
+}
+
+/**
  * Завершить матч
  */
 export async function finishMatch(data: {
@@ -334,8 +409,11 @@ export async function updateMatchOnLocalServer(
 }
 
 /**
- * Универсальная функция обновления счета матча
+ * Универсальная функция обновления счета матча с retry логикой
  * Автоматически определяет куда отправлять данные (локальная БД или сервер админа)
+ *
+ * ВАЖНО: Эта функция вызывается ПОСЛЕ batchUpdateMatch(), который уже сохранил данные в sync_queue!
+ * Поэтому НЕ нужно дублировать запись в sync_queue.
  */
 export async function updateMatchScoreUniversal(
   data: {
@@ -352,17 +430,37 @@ export async function updateMatchScoreUniversal(
 ): Promise<void> {
   // Если режим local-client и есть serverUrl - отправляем на сервер админа
   if (serverMode.mode === 'local-client' && serverMode.serverUrl) {
-    try {
-      await updateMatchOnLocalServer(serverMode.serverUrl, data);
-    } catch (error) {
-      // Fallback на локальную БД при ошибке
-      console.warn('Failed to update on local server, falling back to local DB:', error);
-      await updateMatchScore(data);
+    // Retry логика: 3 попытки с экспоненциальной задержкой (1s, 2s, 4s)
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        await updateMatchOnLocalServer(serverMode.serverUrl, data);
+        // Успех - выходим
+        if (attempt > 0) {
+          console.log(`[updateMatchScoreUniversal] Успешно отправлено на попытке ${attempt + 1}`);
+        }
+        return;
+      } catch (error) {
+        lastError = error as Error;
+
+        // Если это последняя попытка - не ждём
+        if (attempt < maxRetries - 1) {
+          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+          console.warn(`[updateMatchScoreUniversal] Попытка ${attempt + 1} не удалась, повтор через ${delay}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
     }
-  } else {
-    // Иначе сохраняем в локальную БД (online/local-server/offline)
-    await updateMatchScore(data);
+
+    // Все попытки исчерпаны
+    console.error('[updateMatchScoreUniversal] Не удалось отправить на локальный сервер после 3 попыток:', lastError);
+    console.warn('[updateMatchScoreUniversal] Данные сохранены локально, будут отправлены при восстановлении связи');
+    // Данные уже сохранены через batchUpdateMatch() в sync_queue
   }
+  // Для online/local-server режимов: ничего не делаем
+  // Данные уже сохранены через batchUpdateMatch() в sync_queue
 }
 
 // ============================================
@@ -381,4 +479,105 @@ export async function getActiveJudgeSessions(tournamentId: number): Promise<Acti
  */
 export async function getActiveMatches(tournamentId: number): Promise<ActiveMatch[]> {
   return await invoke<ActiveMatch[]>('get_active_matches', { tournamentId });
+}
+
+/**
+ * Получить информацию о том, какие сетки заняты какими столами
+ * Возвращает массив объектов { bracket_id, table_number, judge_name }
+ */
+export interface BracketTableAssignment {
+  bracket_id: number;
+  table_number: number;
+  judge_name: string;
+}
+
+export async function getBracketTableAssignments(tournamentId: number): Promise<BracketTableAssignment[]> {
+  return await invoke<BracketTableAssignment[]>('get_bracket_table_assignments', { tournamentId });
+}
+
+// ============================================
+// BRACKET EDITING API (через Tauri Commands)
+// ============================================
+
+export interface ParticipantEditRequest {
+  bracket_id: number;
+  match_id: number;
+  participant_slot: 'participant1' | 'participant2';
+  fighter_id?: number;
+  fighter_name?: string;
+  club_name?: string;
+  weight?: number;
+  operation_type: 'add' | 'update' | 'remove';
+}
+
+/**
+ * Обновить участника в матче сетки
+ */
+export async function updateBracketParticipant(
+  request: ParticipantEditRequest,
+  judgeName?: string,
+  adminId?: number
+): Promise<void> {
+  await invoke('update_bracket_participant', {
+    request,
+    judgeName,
+    adminId,
+  });
+}
+
+export interface SwapParticipantsRequest {
+  bracket_id: number;
+  match1_id: number;
+  match1_slot: 'participant1' | 'participant2';
+  match2_id: number;
+  match2_slot: 'participant1' | 'participant2';
+}
+
+/**
+ * Поменять местами двух участников в разных матчах
+ */
+export async function swapBracketParticipants(
+  request: SwapParticipantsRequest,
+  judgeName?: string,
+  adminId?: number
+): Promise<void> {
+  await invoke('swap_bracket_participants', {
+    request,
+    judgeName,
+    adminId,
+  });
+}
+
+export interface BracketEditHistoryItem {
+  id: number;
+  match_id: number;
+  participant_slot: string;
+  fighter_name?: string;
+  operation_type: string;
+  edited_by_judge?: string;
+  edited_by_admin?: number;
+  created_at: string;
+}
+
+/**
+ * Получить историю редактирований сетки
+ */
+export async function getBracketEditHistory(bracketId: number): Promise<BracketEditHistoryItem[]> {
+  return await invoke<BracketEditHistoryItem[]>('get_bracket_edit_history', { bracketId });
+}
+
+/**
+ * Очистить кеш турнира (сетки, матчи, очередь синхронизации)
+ */
+export async function clearTournamentCache(tournamentId: number): Promise<void> {
+  return await invoke('clear_tournament_cache', { tournamentId });
+}
+
+/**
+ * Очистить синхронизированные записи из sync_queue
+ * Удаляет записи старше 7 дней, которые уже успешно синхронизированы с сервером
+ * @returns Количество удалённых записей
+ */
+export async function cleanupSyncQueue(): Promise<number> {
+  return await invoke('cleanup_sync_queue');
 }

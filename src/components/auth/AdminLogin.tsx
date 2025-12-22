@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '../ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { useAuthStore } from '../../stores/authStore';
+import { hasSavedAuth, getSavedCredentials } from '../../services/api';
 
 interface AdminLoginProps {
   onBack: () => void;
@@ -15,8 +16,25 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 }) => {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [hasOfflineAccess, setHasOfflineAccess] = useState(false);
 
   const { loginAsAdmin, isLoading, error } = useAuthStore();
+
+  // Проверка offline-доступности при монтировании
+  useEffect(() => {
+    const checkOfflineAccess = async () => {
+      try {
+        const hasSaved = await hasSavedAuth();
+        const credentials = await getSavedCredentials();
+        setHasOfflineAccess(hasSaved && credentials !== null);
+      } catch (err) {
+        console.error('[AdminLogin] Failed to check offline access:', err);
+        setHasOfflineAccess(false);
+      }
+    };
+
+    checkOfflineAccess();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,6 +104,18 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                 disabled={isLoading}
                 error={error ?? undefined}
               />
+
+              {/* Индикатор offline-доступности */}
+              {hasOfflineAccess && (
+                <div className="flex items-center gap-2 text-green-600 bg-green-50 px-4 py-3 rounded-lg border border-green-200">
+                  <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-sm font-medium">
+                    Доступен offline режим
+                  </span>
+                </div>
+              )}
 
               <Button
                 type="submit"

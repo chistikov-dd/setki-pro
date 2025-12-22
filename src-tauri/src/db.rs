@@ -186,5 +186,108 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Таблица для хранения credentials админа (для автоматического входа)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS admin_credentials (
+            id INTEGER PRIMARY KEY,
+            login TEXT NOT NULL,
+            password TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    // Таблица для хранения токенов судей (отдельная запись для каждого судьи)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS judge_auth (
+            pin_code TEXT PRIMARY KEY,
+            token TEXT NOT NULL,
+            judge_name TEXT NOT NULL,
+            table_number INTEGER NOT NULL,
+            tournament_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_judge_auth_tournament ON judge_auth(tournament_id)")
+        .execute(pool)
+        .await?;
+
+    // Таблица для кэширования списка турниров (для offline доступа)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tournaments_cache (
+            tournament_id INTEGER PRIMARY KEY,
+            data TEXT NOT NULL,
+            cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    // Таблица для временных участников (добавленных вручную, без ID с сервера)
+    // Используются отрицательные ID для отличия от реальных участников
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS temp_participants (
+            temp_id INTEGER PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            club_name TEXT,
+            fighter_id INTEGER,
+            final_weight REAL,
+            bracket_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            synced INTEGER DEFAULT 0,
+            server_id INTEGER,
+            synced_at TEXT
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_temp_participants_bracket ON temp_participants(bracket_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_temp_participants_synced ON temp_participants(synced)")
+        .execute(pool)
+        .await?;
+
+    // Таблица для хранения локальных изменений участников в сетках
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bracket_participant_edits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bracket_id INTEGER NOT NULL,
+            match_id INTEGER NOT NULL,
+            participant_slot TEXT NOT NULL,
+            fighter_id INTEGER,
+            fighter_name TEXT,
+            club_name TEXT,
+            weight REAL,
+            operation_type TEXT NOT NULL,
+            edited_by_judge TEXT,
+            edited_by_admin INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            synced INTEGER DEFAULT 0,
+            synced_at TEXT
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_edits_bracket ON bracket_participant_edits(bracket_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_edits_match ON bracket_participant_edits(match_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_edits_synced ON bracket_participant_edits(synced)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }

@@ -53,7 +53,7 @@ export function TimerEditDialog({ currentSeconds, onConfirm, onCancel }: TimerEd
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
       <div className="bg-white border border-gray-400 rounded-lg p-6 max-w-md w-full mx-4">
-        <h2 className="text-2xl font-bold text-white mb-6">Изменить время</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-6">Изменить время</h2>
 
         <div className="grid grid-cols-2 gap-4 mb-6">
           {/* Minutes */}
@@ -69,7 +69,7 @@ export function TimerEditDialog({ currentSeconds, onConfirm, onCancel }: TimerEd
               value={minutes}
               onChange={(e) => setMinutes(e.target.value)}
               onKeyDown={handleKeyDown}
-              className="w-full px-4 py-3 bg-white border border-gray-400 rounded text-white text-2xl text-center focus:outline-none focus:border-blue-500"
+              className="w-full px-4 py-3 bg-white border border-gray-400 rounded text-gray-900 text-2xl text-center focus:outline-none focus:border-blue-500"
             />
           </div>
 
@@ -86,7 +86,7 @@ export function TimerEditDialog({ currentSeconds, onConfirm, onCancel }: TimerEd
               value={seconds}
               onChange={(e) => setSeconds(e.target.value)}
               onKeyDown={handleKeyDown}
-              className="w-full px-4 py-3 bg-white border border-gray-400 rounded text-white text-2xl text-center focus:outline-none focus:border-blue-500"
+              className="w-full px-4 py-3 bg-white border border-gray-400 rounded text-gray-900 text-2xl text-center focus:outline-none focus:border-blue-500"
             />
           </div>
         </div>

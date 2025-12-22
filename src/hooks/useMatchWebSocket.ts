@@ -36,6 +36,18 @@ export function useMatchWebSocket({
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Используем refs для колбэков, чтобы они не вызывали пересоздание WebSocket
+  const onScoreUpdateRef = useRef(onScoreUpdate);
+  const onMatchStartRef = useRef(onMatchStart);
+  const onMatchEndRef = useRef(onMatchEnd);
+
+  // Обновляем refs при изменении колбэков
+  useEffect(() => {
+    onScoreUpdateRef.current = onScoreUpdate;
+    onMatchStartRef.current = onMatchStart;
+    onMatchEndRef.current = onMatchEnd;
+  }, [onScoreUpdate, onMatchStart, onMatchEnd]);
+
   useEffect(() => {
     if (!autoConnect) return;
 
@@ -46,31 +58,29 @@ export function useMatchWebSocket({
     // Subscribe to events
     const unsubscribers: Array<() => void> = [];
 
-    if (onScoreUpdate) {
-      unsubscribers.push(
-        ws.on('score_update', (message) => {
-          if (message.data) {
-            onScoreUpdate(message.data as WSScoreUpdateData);
-          }
-        })
-      );
-    }
+    unsubscribers.push(
+      ws.on('score_update', (message) => {
+        if (message.data && onScoreUpdateRef.current) {
+          onScoreUpdateRef.current(message.data as WSScoreUpdateData);
+        }
+      })
+    );
 
-    if (onMatchStart) {
-      unsubscribers.push(
-        ws.on('match_start', () => {
-          onMatchStart();
-        })
-      );
-    }
+    unsubscribers.push(
+      ws.on('match_start', () => {
+        if (onMatchStartRef.current) {
+          onMatchStartRef.current();
+        }
+      })
+    );
 
-    if (onMatchEnd) {
-      unsubscribers.push(
-        ws.on('match_end', () => {
-          onMatchEnd();
-        })
-      );
-    }
+    unsubscribers.push(
+      ws.on('match_end', () => {
+        if (onMatchEndRef.current) {
+          onMatchEndRef.current();
+        }
+      })
+    );
 
     // Connect
     ws.connect()
@@ -92,7 +102,7 @@ export function useMatchWebSocket({
       ws.disconnect();
       setIsConnected(false);
     };
-  }, [matchId, pinCode, autoConnect, onScoreUpdate, onMatchStart, onMatchEnd]);
+  }, [matchId, pinCode, autoConnect]); // Убрали колбэки из зависимостей!
 
   return {
     isConnected,

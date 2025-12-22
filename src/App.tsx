@@ -1,8 +1,11 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { invoke } from '@tauri-apps/api/core';
 import { LoginChoice } from "./components/auth/LoginChoice";
 import { useAuthStore } from "./stores/authStore";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
+import { ConnectionStatusBanner } from "./components/ui/ConnectionStatusBanner";
+import { getSavedCredentials, getSavedJudgeCredentials, checkUnsyncedCount } from "./services/api";
 
 // Lazy load тяжелых компонентов для уменьшения initial bundle size
 // Оптимизация: основные компоненты загружаются только при необходимости
@@ -30,15 +33,128 @@ function LoadingSpinner() {
 function App() {
   const [authScreen, setAuthScreen] = useState<AuthScreen>('choice');
   const [isPublicDisplay, setIsPublicDisplay] = useState(false);
-  const { isAuthenticated, user } = useAuthStore();
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [isAutoLoginInProgress, setIsAutoLoginInProgress] = useState(false);
+  const [autoLoginRole, setAutoLoginRole] = useState<'admin' | 'judge' | null>(null);
+  const { isAuthenticated, user, loginAsAdmin, loginAsAdminOffline, loginAsJudge, logout } = useAuthStore();
 
   // Check if this is the public display window
   useEffect(() => {
     const currentWindow = getCurrentWebviewWindow();
+    console.log('[App] Проверка окна, label:', currentWindow.label);
     if (currentWindow.label === 'public-display') {
+      console.log('[App] Это окно публичного табло!');
       setIsPublicDisplay(true);
+    } else {
+      console.log('[App] Это НЕ окно публичного табло');
     }
   }, []);
+
+  // Автоосвобождение стола при закрытии приложения (если судья)
+  useEffect(() => {
+    // Не устанавливать обработчик для публичного табло
+    if (isPublicDisplay) return;
+    if (!user || user.role !== 'referee') return;
+
+    const currentWindow = getCurrentWebviewWindow();
+    let unlistenClose: (() => void) | null = null;
+    let isClosing = false;
+
+    // Также добавляем обработчик beforeunload для гарантии
+    const handleBeforeUnload = () => {
+      console.log('[Window Close] beforeunload - releasing table synchronously...');
+      // Синхронный вызов для немедленного освобождения
+      if (user && user.table_number && user.tournament_id) {
+        try {
+          // Вызываем Tauri команду через invoke API
+          invoke('release_table_number', {
+            tournamentId: user.tournament_id,
+            tableNumber: user.table_number,
+          }).catch(console.error);
+        } catch (error) {
+          console.error('[Window Close] Error in beforeunload:', error);
+        }
+      }
+    };
+
+    const setupCloseHandler = async () => {
+      // 1. Обработчик Tauri onCloseRequested (основной)
+      unlistenClose = await currentWindow.onCloseRequested(async (event) => {
+        if (isClosing) return;
+
+        event.preventDefault();
+
+        // Проверяем наличие несинхронизированных данных
+        try {
+          const unsyncedCount = await checkUnsyncedCount();
+
+          if (unsyncedCount > 0) {
+            const shouldClose = window.confirm(
+              `У вас есть ${unsyncedCount} несинхронизированных записей.\n\n` +
+              `Если вы закроете приложение сейчас, эти данные останутся на этом компьютере ` +
+              `и НЕ будут отправлены на сервер.\n\n` +
+              `Рекомендуется дождаться синхронизации или выгрузить данные вручную.\n\n` +
+              `Всё равно закрыть приложение?`
+            );
+
+            if (!shouldClose) {
+              console.log('[Window Close] Закрытие отменено пользователем - есть несинхронизированные данные');
+              return; // НЕ закрываем окно
+            }
+          }
+        } catch (error) {
+          console.error('[Window Close] Ошибка проверки несинхронизированных данных:', error);
+          // Продолжаем закрытие даже при ошибке проверки
+        }
+
+        isClosing = true;
+
+        console.log('[Window Close] Releasing table before close...');
+
+        try {
+          await logout();
+          console.log('[Window Close] Table released successfully');
+        } catch (error) {
+          console.error('[Window Close] Error during logout:', error);
+        }
+
+        if (unlistenClose) {
+          unlistenClose();
+          unlistenClose = null;
+        }
+
+        // Даем время на завершение logout (100ms)
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Закрываем окно
+        await currentWindow.destroy();
+      });
+
+      // 2. Добавляем browser beforeunload как запасной вариант
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    };
+
+    setupCloseHandler();
+
+    return () => {
+      if (unlistenClose) {
+        unlistenClose();
+      }
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [user, logout, isPublicDisplay]);
+
+  // Инициализация завершена
+  useEffect(() => {
+    setIsCheckingAuth(false);
+  }, []);
+
+  // Сброс экрана авторизации при выходе
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setAuthScreen('choice');
+    }
+  }, [isAuthenticated]);
 
   // Render public display if this window is for that
   if (isPublicDisplay) {
@@ -51,8 +167,86 @@ function App() {
     );
   }
 
-  const handleSelectRole = (role: 'admin' | 'judge') => {
-    setAuthScreen(role);
+  const handleSelectRole = async (role: 'admin' | 'judge') => {
+    // Устанавливаем индикатор загрузки
+    setIsAutoLoginInProgress(true);
+    setAutoLoginRole(role);
+
+    try {
+      if (role === 'admin') {
+        // Попытка автовхода для админа
+        try {
+          const credentials = await getSavedCredentials();
+
+          if (credentials) {
+            const [login, password, userId] = credentials;
+            console.log('[Auto-login Admin] Attempting automatic login with saved credentials');
+
+            try {
+              // Сначала пробуем online вход
+              await loginAsAdmin(login, password);
+              console.log('[Auto-login Admin] Online success');
+              return; // Успешный вход, не показываем форму
+            } catch (error) {
+              console.error('[Auto-login Admin] Online failed, trying offline:', error);
+
+              // Если online не удался - используем offline вход
+              try {
+                loginAsAdminOffline(login, userId);
+                console.log('[Auto-login Admin] Offline success');
+                return; // Успешный offline вход
+              } catch (offlineError) {
+                console.error('[Auto-login Admin] Offline failed:', offlineError);
+                // Если и offline не удался - покажем форму входа
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[Auto-login Admin] Error checking credentials:', error);
+        }
+      }
+
+      if (role === 'judge') {
+        // Попытка автовхода для судьи
+        try {
+          const judgeCredentials = await getSavedJudgeCredentials();
+
+          if (judgeCredentials) {
+            const [pinCode, judgeName, tableNumber] = judgeCredentials;
+            console.log('[Auto-login Judge] Attempting automatic login with saved credentials');
+            console.log('[Auto-login Judge] PIN:', pinCode, 'Judge:', judgeName, 'Table:', tableNumber);
+
+            try {
+              // Пытаемся войти с сохраненными данными
+              await loginAsJudge(pinCode, judgeName, tableNumber);
+              console.log('[Auto-login Judge] Login success');
+              return; // Успешный вход, не показываем форму
+            } catch (error) {
+              const errorStr = String(error);
+              console.error('[Auto-login Judge] Login failed:', errorStr);
+
+              // Если стол занят - показываем форму для выбора другого стола
+              if (errorStr.includes('уже занят') || errorStr.includes('already occupied')) {
+                console.log('[Auto-login Judge] Table occupied, showing login form');
+                // Показываем форму входа
+              } else {
+                // Для других ошибок тоже показываем форму
+                console.log('[Auto-login Judge] Other error, showing login form');
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[Auto-login Judge] Error checking credentials:', error);
+        }
+      }
+
+      // Показываем форму входа (либо для судьи, либо если автовход не удался)
+      setAuthScreen(role);
+    } finally {
+      // Сбрасываем индикатор загрузки
+      setIsAutoLoginInProgress(false);
+      setAutoLoginRole(null);
+    }
   };
 
   const handleOpenServerMode = () => {
@@ -67,12 +261,18 @@ function App() {
     setAuthScreen('choice');
   };
 
+  // Показываем загрузку пока проверяем авторизацию
+  if (isCheckingAuth) {
+    return <LoadingSpinner />;
+  }
+
   // Если пользователь авторизован
   if (isAuthenticated && user) {
     // Админ панель
     if (user.role === 'organizer' || user.role === 'admin') {
       return (
         <ErrorBoundary>
+          <ConnectionStatusBanner alwaysShow />
           <Suspense fallback={<LoadingSpinner />}>
             <AdminDashboard />
           </Suspense>
@@ -83,6 +283,7 @@ function App() {
     // Судейская панель
     return (
       <ErrorBoundary>
+        <ConnectionStatusBanner alwaysShow />
         <Suspense fallback={<LoadingSpinner />}>
           <JudgeDashboard />
         </Suspense>
@@ -97,6 +298,8 @@ function App() {
         <LoginChoice
           onSelectRole={handleSelectRole}
           onOpenServerMode={handleOpenServerMode}
+          isAutoLoginInProgress={isAutoLoginInProgress}
+          autoLoginRole={autoLoginRole}
         />
       )}
       {authScreen === 'admin' && (

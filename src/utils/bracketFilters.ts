@@ -25,6 +25,17 @@ function extractMinAgeFromName(categoryName: string): number {
 }
 
 /**
+ * Извлечь максимальный возраст из названия категории
+ */
+function extractMaxAgeFromName(categoryName: string): number {
+  // Ищем паттерны: "4 - 5 лет", "16-17 лет", "8 - 9 лет"
+  const ageMatch = categoryName.match(/\d+\s*[-–]\s*(\d+)\s*лет/);
+  if (ageMatch) return parseInt(ageMatch[1]);
+
+  return 999; // Неизвестный возраст - в конец
+}
+
+/**
  * Извлечь максимальный вес из названия категории
  */
 function extractMaxWeightFromName(categoryName: string): number {
@@ -44,6 +55,9 @@ function enrichBracketData(bracket: BracketResponse): BracketResponse {
   }
   if (!bracket.min_age) {
     bracket.min_age = extractMinAgeFromName(bracket.category_name);
+  }
+  if (!bracket.max_age) {
+    bracket.max_age = extractMaxAgeFromName(bracket.category_name);
   }
   if (!bracket.max_weight) {
     bracket.max_weight = extractMaxWeightFromName(bracket.category_name);
