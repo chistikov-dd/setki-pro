@@ -156,7 +156,7 @@ describe('authStore', () => {
 
       const { loginAsJudge } = useAuthStore.getState();
 
-      await loginAsJudge('123456', 'Иван Судейкин');
+      await loginAsJudge('123456', 'Иван Судейкин', 1);
 
       const state = useAuthStore.getState();
 
@@ -172,7 +172,7 @@ describe('authStore', () => {
 
       const { loginAsJudge } = useAuthStore.getState();
 
-      await loginAsJudge('123456', 'Иван Судейкин');
+      await loginAsJudge('123456', 'Иван Судейкин', 2);
 
       expect(api.clearAllReservations).toHaveBeenCalled();
     });
@@ -186,7 +186,7 @@ describe('authStore', () => {
       const { loginAsJudge } = useAuthStore.getState();
 
       // Should not throw even if clearAllReservations fails
-      await expect(loginAsJudge('123456', 'Иван Судейкин')).resolves.not.toThrow();
+      await expect(loginAsJudge('123456', 'Иван Судейкин', 3)).resolves.not.toThrow();
 
       // Login should still succeed
       expect(useAuthStore.getState().isAuthenticated).toBe(true);
@@ -198,7 +198,7 @@ describe('authStore', () => {
 
       const { loginAsJudge } = useAuthStore.getState();
 
-      await expect(loginAsJudge('000000', 'Test Judge')).rejects.toThrow();
+      await expect(loginAsJudge('000000', 'Test Judge', 4)).rejects.toThrow();
 
       const state = useAuthStore.getState();
 
@@ -214,12 +214,16 @@ describe('authStore', () => {
 
       const { loginAsJudge } = useAuthStore.getState();
 
-      await loginAsJudge('654321', 'Петр Судейкин');
+      await loginAsJudge('654321', 'Петр Судейкин', 5);
 
-      expect(api.loginByPin).toHaveBeenCalledWith({
-        pin_code: '654321',
-        judge_name: 'Петр Судейкин',
-      });
+      expect(api.loginByPin).toHaveBeenCalledWith(
+        {
+          pin_code: '654321',
+          judge_name: 'Петр Судейкин',
+          table_number: 5,
+        },
+        null // serverUrl должен быть null в режиме online
+      );
     });
   });
 

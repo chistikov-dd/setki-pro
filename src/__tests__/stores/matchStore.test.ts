@@ -327,7 +327,7 @@ describe('matchStore', () => {
       expect(state.blueWarnings).toBe(1);
     });
 
-    it('should auto-disqualify on 4th warning (max=3)', async () => {
+    it('should allow 4th warning (max=3) without auto-disqualifying', async () => {
       useMatchStore.setState({
         match: mockMatch,
         redFighter: mockRedFighter,
@@ -336,20 +336,20 @@ describe('matchStore', () => {
         blueWarnings: 0,
       });
 
-      vi.mocked(api.finishMatch).mockResolvedValue(undefined);
+      vi.mocked(api.batchUpdateMatch).mockResolvedValue([]);
 
       const { addWarning } = useMatchStore.getState();
 
       await addWarning('red');
 
-      // Should call finishMatch with disqualification
-      expect(api.finishMatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          matchId: mockMatch.id,
-          resultType: 'disqualification',
-          winnerId: mockBlueFighter.id, // Blue wins
-        })
-      );
+      const state = useMatchStore.getState();
+
+      // Should increment warnings (MatchScreen handles disqualification dialog)
+      expect(state.redWarnings).toBe(4);
+      expect(state.blueWarnings).toBe(0);
+
+      // Should NOT auto-finish match - MatchScreen handles disqualification
+      expect(api.finishMatch).not.toHaveBeenCalled();
     });
   });
 
