@@ -138,12 +138,21 @@ impl ApiClient {
     ) -> Result<AuthResponse> {
         let url = format!("{}/desktop/auth/pin-auth", self.base_url);
 
+        println!("[login_by_pin] Starting login attempt");
+        println!("[login_by_pin] base_url: {}", self.base_url);
+        println!("[login_by_pin] full URL: {}", url);
+        println!("[login_by_pin] pin_code: {}", pin_code);
+        println!("[login_by_pin] judge_name: {:?}", judge_name);
+        println!("[login_by_pin] table_number: {:?}", table_number);
+
         // Если base_url - локальный сервер (содержит 192.168 или 10.0), отправляем judge_name и table_number
         let is_local_server = self.base_url.contains("192.168")
             || self.base_url.contains("10.0")
             || self.base_url.contains("172.16")
             || self.base_url.contains("127.0.0.1")
             || self.base_url.contains("localhost");
+
+        println!("[login_by_pin] is_local_server: {}", is_local_server);
 
         #[derive(serde::Serialize)]
         struct LocalLoginRequest {

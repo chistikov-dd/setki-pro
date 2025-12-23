@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
+import { useServerModeStore } from '../../stores/serverModeStore';
 
 export type ServerMode = 'online' | 'local-server' | 'local-client';
 
@@ -19,6 +20,8 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { setMode, setServerUrl } = useServerModeStore();
+
   const handleStartLocalServer = async () => {
     setIsStarting(true);
     setError(null);
@@ -26,6 +29,8 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
     try {
       const url = await invoke<string>('start_local_server', { port: 8081 });
       setLocalServerUrl(url);
+      setMode('local-server');
+      setServerUrl(null); // Локальный сервер не нуждается в serverUrl
       onModeChange('local-server');
     } catch (err) {
       setError(err as string);
@@ -38,7 +43,13 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
     setError(null);
 
     try {
-      await invoke('set_api_base_url', { url: `http://${localClientIp}:8081/api/v1` });
+      const fullUrl = `http://${localClientIp}:8081/api/v1`;
+      await invoke('set_api_base_url', { url: fullUrl });
+
+      // ВАЖНО: Сохраняем serverUrl в store для использования в loginByPin
+      setMode('local-client');
+      setServerUrl(fullUrl);
+
       onModeChange('local-client');
     } catch (err) {
       setError(err as string);
@@ -46,6 +57,8 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
   };
 
   const handleSwitchToOnline = () => {
+    setMode('online');
+    setServerUrl(null); // Сбрасываем serverUrl при переключении на online
     onModeChange('online');
   };
 
