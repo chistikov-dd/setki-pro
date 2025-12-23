@@ -87,34 +87,58 @@ async fn login_by_pin(
     server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<AuthResponse, String> {
+    state.logger.info("========== LOGIN_BY_PIN START ==========");
+    state.logger.info(&format!("[login_by_pin] pin_code: {}", pin_code));
+    state.logger.info(&format!("[login_by_pin] judge_name: {}", judge_name));
+    state.logger.info(&format!("[login_by_pin] table_number: {}", table_number));
+    state.logger.info(&format!("[login_by_pin] server_url: {:?}", server_url));
+
     // Если передан server_url (режим local-client), создаём временный ApiClient с этим URL
-    let api_client: Arc<ApiClient> = if let Some(url) = server_url {
-        state.logger.info(&format!("[login_by_pin] Using custom server URL: {}", url));
+    let api_client: Arc<ApiClient> = if let Some(url) = server_url.clone() {
+        state.logger.info(&format!("[login_by_pin] Creating custom ApiClient with URL: {}", url));
         Arc::new(ApiClient::new(url, Arc::clone(&state.db_pool)))
     } else {
-        state.logger.info("[login_by_pin] Using default API client");
+        state.logger.info("[login_by_pin] Using default API client (setki.pro)");
         Arc::clone(&state.api_client)
     };
 
-    let mut response = api_client
+    state.logger.info("[login_by_pin] Calling api_client.login_by_pin...");
+    let mut response = match api_client
         .login_by_pin(
             pin_code.clone(),
             Some(judge_name.clone()),
             Some(table_number)
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await {
+            Ok(resp) => {
+                state.logger.info("[login_by_pin] API call SUCCESS");
+                state.logger.info(&format!("[login_by_pin] Response: tournament_id={:?}, user_id={}, role={}",
+                    resp.tournament_id, resp.user_id, resp.role));
+                resp
+            },
+            Err(e) => {
+                state.logger.error(&format!("[login_by_pin] API call FAILED: {}", e));
+                return Err(e.to_string());
+            }
+        };
 
-    // Сохранить сессию судьи с именем и номером стола + токен
-    api_client
+    state.logger.info("[login_by_pin] Saving judge session...");
+    match api_client
         .save_judge_session(&pin_code, &judge_name, table_number, response.tournament_id, &response.access_token)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await {
+            Ok(_) => state.logger.info("[login_by_pin] Judge session saved successfully"),
+            Err(e) => {
+                state.logger.error(&format!("[login_by_pin] Failed to save judge session: {}", e));
+                return Err(e.to_string());
+            }
+        }
 
     // Добавить имя и номер стола в ответ
     response.judge_name = Some(judge_name);
     response.table_number = Some(table_number);
 
+    state.logger.info("[login_by_pin] SUCCESS - returning response");
+    state.logger.info("========== LOGIN_BY_PIN END ==========");
     Ok(response)
 }
 

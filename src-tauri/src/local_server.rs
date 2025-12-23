@@ -169,7 +169,14 @@ async fn login_by_pin_handler(
     State(state): State<LocalServerState>,
     Json(payload): Json<LoginByPinRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
+    println!("[LOCAL SERVER] ========== login_by_pin_handler START ==========");
+    println!("[LOCAL SERVER] Received request:");
+    println!("[LOCAL SERVER]   pin_code: {}", payload.pin_code);
+    println!("[LOCAL SERVER]   judge_name: {:?}", payload.judge_name);
+    println!("[LOCAL SERVER]   table_number: {:?}", payload.table_number);
+
     // Check if PIN exists in cached_pins table
+    println!("[LOCAL SERVER] Querying cached_pins table...");
     let record = sqlx::query_as::<_, (i32, String)>(
         "SELECT tournament_id, tournament_name FROM cached_pins WHERE pin_code = ?"
     )
@@ -177,10 +184,17 @@ async fn login_by_pin_handler(
     .fetch_optional(&*state.db)
     .await?;
 
+    println!("[LOCAL SERVER] Database query completed");
+
     match record {
-        Some((tournament_id, _tournament_name)) => {
+        Some((tournament_id, tournament_name)) => {
+            println!("[LOCAL SERVER] PIN FOUND in database!");
+            println!("[LOCAL SERVER]   tournament_id: {}", tournament_id);
+            println!("[LOCAL SERVER]   tournament_name: {}", tournament_name);
+
             // Generate a simple token (in local mode, security is less critical)
             let token = format!("local_token_{}", uuid::Uuid::new_v4());
+            println!("[LOCAL SERVER] Generated token: {}", token);
 
             // Если переданы имя и номер стола - отправляем событие админу
             if payload.judge_name.is_some() && payload.table_number.is_some() {
@@ -195,11 +209,13 @@ async fn login_by_pin_handler(
 
                 // Broadcast событие всем подключенным админам (игнорируем ошибки если нет слушателей)
                 let _ = state.admin_events_channel.send(event.to_string());
-                println!("[Admin Event] Judge connected: {} at table {}",
+                println!("[LOCAL SERVER] Admin event sent: Judge {} connected at table {}",
                     payload.judge_name.as_ref().unwrap(),
                     payload.table_number.unwrap());
             }
 
+            println!("[LOCAL SERVER] Returning SUCCESS response");
+            println!("[LOCAL SERVER] ========== login_by_pin_handler SUCCESS ==========");
             Ok(Json(AuthResponse {
                 access_token: token,
                 user_id: 0, // Временный ID для offline судьи
@@ -207,7 +223,11 @@ async fn login_by_pin_handler(
                 tournament_id: Some(tournament_id),
             }))
         }
-        None => Err(AppError::Unauthorized("Invalid PIN code".to_string())),
+        None => {
+            println!("[LOCAL SERVER] PIN NOT FOUND in database!");
+            println!("[LOCAL SERVER] ========== login_by_pin_handler FAILED ==========");
+            Err(AppError::Unauthorized("Invalid PIN code".to_string()))
+        }
     }
 }
 

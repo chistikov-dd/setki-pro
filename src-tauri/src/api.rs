@@ -138,12 +138,12 @@ impl ApiClient {
     ) -> Result<AuthResponse> {
         let url = format!("{}/desktop/auth/pin-auth", self.base_url);
 
-        println!("[login_by_pin] Starting login attempt");
-        println!("[login_by_pin] base_url: {}", self.base_url);
-        println!("[login_by_pin] full URL: {}", url);
-        println!("[login_by_pin] pin_code: {}", pin_code);
-        println!("[login_by_pin] judge_name: {:?}", judge_name);
-        println!("[login_by_pin] table_number: {:?}", table_number);
+        println!("[ApiClient::login_by_pin] ========== START ==========");
+        println!("[ApiClient::login_by_pin] base_url: {}", self.base_url);
+        println!("[ApiClient::login_by_pin] full URL: {}", url);
+        println!("[ApiClient::login_by_pin] pin_code: {}", pin_code);
+        println!("[ApiClient::login_by_pin] judge_name: {:?}", judge_name);
+        println!("[ApiClient::login_by_pin] table_number: {:?}", table_number);
 
         // Если base_url - локальный сервер (содержит 192.168 или 10.0), отправляем judge_name и table_number
         let is_local_server = self.base_url.contains("192.168")
@@ -152,7 +152,7 @@ impl ApiClient {
             || self.base_url.contains("127.0.0.1")
             || self.base_url.contains("localhost");
 
-        println!("[login_by_pin] is_local_server: {}", is_local_server);
+        println!("[ApiClient::login_by_pin] is_local_server: {}", is_local_server);
 
         #[derive(serde::Serialize)]
         struct LocalLoginRequest {
@@ -162,7 +162,9 @@ impl ApiClient {
         }
 
         // Попытка online авторизации
+        println!("[ApiClient::login_by_pin] Sending HTTP request...");
         let online_result = if is_local_server {
+            println!("[ApiClient::login_by_pin] Sending LOCAL SERVER request with judge_name and table_number");
             // Для локального сервера отправляем расширенный запрос
             self.client
                 .post(&url)
@@ -174,6 +176,7 @@ impl ApiClient {
                 .send()
                 .await
         } else {
+            println!("[ApiClient::login_by_pin] Sending ONLINE request (setki.pro) with PIN only");
             // Для setki.pro отправляем только PIN
             self.client
                 .post(&url)
@@ -182,16 +185,30 @@ impl ApiClient {
                 .await
         };
 
+        println!("[ApiClient::login_by_pin] HTTP request completed");
+
         match online_result {
             Ok(response) if response.status().is_success() => {
+                println!("[ApiClient::login_by_pin] HTTP SUCCESS - status: {}", response.status());
                 // Online успешно
                 let mut auth: AuthResponse = response.json().await?;
                 auth.judge_name = None; // Имя будет добавлено в Tauri command
                 // Токен будет сохранен в save_judge_session с полными данными
+                println!("[ApiClient::login_by_pin] ========== SUCCESS ==========");
                 Ok(auth)
             },
-            _ => {
-                // Fallback на offline проверку
+            Ok(response) => {
+                // HTTP запрос прошёл, но статус не успешный
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_else(|_| "No response body".to_string());
+                println!("[ApiClient::login_by_pin] HTTP FAILED - status: {}, body: {}", status, error_text);
+                println!("[ApiClient::login_by_pin] Falling back to offline mode...");
+                self.login_by_pin_offline(pin_code).await
+            },
+            Err(e) => {
+                // Ошибка сети (нет соединения)
+                println!("[ApiClient::login_by_pin] HTTP ERROR - network error: {}", e);
+                println!("[ApiClient::login_by_pin] Falling back to offline mode...");
                 self.login_by_pin_offline(pin_code).await
             }
         }
