@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Настройка роутера TP-Link для SETKI.PRO KEEPER</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, #00c6ff 0%, #0072ff 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        nav {
+            background: #f8f9fa;
+            padding: 15px 30px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        nav button {
+            padding: 10px 20px;
+            border: none;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.95em;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        nav button:hover {
+            background: #0072ff;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        nav button.active {
+            background: #0072ff;
+            color: white;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        h2 {
+            color: #0072ff;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #0072ff;
+        }
+
+        h3 {
+            color: #333;
+            margin-top: 25px;
+            margin-bottom: 10px;
+        }
+
+        .step {
+            background: #f8f9fa;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 8px;
+            border-left: 4px solid #0072ff;
+        }
+
+        .step h4 {
+            color: #0072ff;
+            margin-bottom: 10px;
+        }
+
+        .config-box {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 6px;
+        }
+
+        .info {
+            background: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 6px;
+        }
+
+        .success {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 6px;
+        }
+
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+
+        .checklist li {
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .checklist li:hover {
+            background: #e9ecef;
+        }
+
+        .checklist li input[type="checkbox"] {
+            margin-right: 10px;
+            transform: scale(1.3);
+            cursor: pointer;
+        }
+
+        .checklist li.checked {
+            background: #d4edda;
+            text-decoration: line-through;
+            opacity: 0.7;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        table th {
+            background: #0072ff;
+            color: white;
+            padding: 12px;
+            text-align: left;
+        }
+
+        table td {
+            padding: 12px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .quick-ref {
+            background: #0072ff;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .quick-ref h3 {
+            color: white;
+            margin-top: 0;
+        }
+
+        .quick-ref .item {
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 6px;
+        }
+
+        .quick-ref .label {
+            font-weight: bold;
+            opacity: 0.9;
+        }
+
+        .quick-ref .value {
+            font-size: 1.2em;
+            margin-top: 5px;
+        }
+
+        footer {
+            background: #2d3748;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .print-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 1em;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transition: all 0.3s;
+        }
+
+        .print-btn:hover {
+            background: #218838;
+            transform: scale(1.05);
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+
+            .container {
+                box-shadow: none;
+            }
+
+            nav, .print-btn {
+                display: none;
+            }
+
+            .section {
+                display: block !important;
+                page-break-after: always;
+            }
+        }
+
+        @media (max-width: 768px) {
+            nav {
+                flex-direction: column;
+            }
+
+            nav button {
+                width: 100%;
+            }
+
+            .print-btn {
+                bottom: 10px;
+                right: 10px;
+                padding: 12px 20px;
+                font-size: 0.9em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Настройка роутера TP-Link</h1>
+            <p>для SETKI.PRO KEEPER | Локальный сервер на турнирах</p>
+        </header>
+
+        <nav>
+            <button onclick="showSection('quick')" class="active">Быстрый старт</button>
+            <button onclick="showSection('full')">Полная настройка</button>
+            <button onclick="showSection('judges')">Для судей</button>
+            <button onclick="showSection('troubleshooting')">Проблемы</button>
+            <button onclick="showSection('checklist')">Чек-лист</button>
+        </nav>
+
+        <div class="content">
+            <!-- Быстрый старт -->
+            <div id="quick" class="section active">
+                <h2>Быстрый старт (5 минут)</h2>
+
+                <div class="quick-ref">
+                    <h3>Ваши настройки роутера</h3>
+                    <div class="item">
+                        <div class="label">Название сети (SSID):</div>
+                        <div class="value">SETKI-KEEPER</div>
+                    </div>
+                    <div class="item">
+                        <div class="label">Пароль Wi-Fi:</div>
+                        <div class="value">setki2025</div>
+                    </div>
+                    <div class="item">
+                        <div class="label">IP роутера:</div>
+                        <div class="value">192.168.1.1</div>
+                    </div>
+                    <div class="item">
+                        <div class="label">Логин/Пароль роутера:</div>
+                        <div class="value">admin / admin</div>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 1: Подключиться к роутеру</h4>
+                    <p>Подключите компьютер к роутеру:</p>
+                    <ul>
+                        <li>По Ethernet-кабелю (рекомендуется)</li>
+                        <li>Или по Wi-Fi (найдите сеть на наклейке роутера)</li>
+                    </ul>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 2: Войти в настройки</h4>
+                    <p>Откройте браузер и введите:</p>
+                    <div class="config-box">http://192.168.1.1</div>
+                    <p>Логин: <strong>admin</strong>, Пароль: <strong>admin</strong></p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 3: Настроить Wi-Fi</h4>
+                    <p>Перейдите: <strong>Беспроводной режим → Настройки беспроводного режима</strong></p>
+                    <div class="config-box">
+SSID: SETKI-KEEPER
+Канал: 1
+Ширина канала: 40 MHz
+Режим: 11bgn mixed
+                    </div>
+                    <p>Нажмите <strong>Сохранить</strong></p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 4: Установить пароль</h4>
+                    <p>Перейдите: <strong>Беспроводной режим → Защита беспроводного режима</strong></p>
+                    <div class="config-box">
+Тип: WPA2-PSK
+Шифрование: AES
+Пароль: setki2025
+                    </div>
+                    <p>Нажмите <strong>Сохранить</strong></p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 5: Максимальная мощность</h4>
+                    <p>Перейдите: <strong>Беспроводной режим → Дополнительные настройки</strong></p>
+                    <div class="config-box">
+Мощность передатчика: Высокая (100%)
+                    </div>
+                    <p>Нажмите <strong>Сохранить</strong></p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 6: Перезагрузка</h4>
+                    <p>Перейдите: <strong>Служебные → Перезагрузка</strong></p>
+                    <p>Нажмите <strong>Перезагрузить</strong> и подождите 1-2 минуты</p>
+                </div>
+
+                <div class="success">
+                    <strong>Готово!</strong> Роутер настроен для работы с SETKI.PRO KEEPER.
+                    <br>Теперь судьи могут подключаться к сети <strong>SETKI-KEEPER</strong> с паролем <strong>setki2025</strong>
+                </div>
+            </div>
+
+            <!-- Полная настройка -->
+            <div id="full" class="section">
+                <h2>Полная настройка роутера</h2>
+
+                <h3>1. Базовые настройки LAN</h3>
+                <div class="step">
+                    <h4>Сеть → LAN</h4>
+                    <div class="config-box">
+IP-адрес: 192.168.1.1
+Маска подсети: 255.255.255.0
+                    </div>
+                </div>
+
+                <div class="step">
+                    <h4>DHCP → Настройки DHCP</h4>
+                    <div class="config-box">
+DHCP-сервер: Включить
+Начальный IP: 192.168.1.100
+Конечный IP: 192.168.1.150
+Время аренды: 120 минут
+Основной шлюз: 192.168.1.1
+                    </div>
+                    <div class="info">
+                        <strong>Зачем:</strong> DHCP автоматически раздает IP-адреса судейским устройствам.
+                        Диапазон 100-150 = 50 устройств.
+                    </div>
+                </div>
+
+                <h3>2. Настройка Wi-Fi (максимальный радиус)</h3>
+                <div class="step">
+                    <h4>Беспроводной режим → Настройки</h4>
+                    <div class="config-box">
+SSID: SETKI-KEEPER
+Регион: Россия (RU)
+Канал: 1 (или 6, или 11)
+Режим: 11bgn mixed
+Ширина канала: 40 MHz
+                    </div>
+                    <div class="info">
+                        <strong>Канал:</strong> Используйте 1, 6 или 11 - они не пересекаются.
+                        <br><strong>Ширина 40 MHz:</strong> Больше радиус, но возможны помехи.
+                    </div>
+                </div>
+
+                <div class="step">
+                    <h4>Беспроводной режим → Дополнительные настройки</h4>
+                    <div class="config-box">
+Мощность передатчика (TX Power): Высокая (100%)
+Beacon Interval: 100
+RTS Threshold: 2347
+Fragmentation: 2346
+                    </div>
+                    <div class="warning">
+                        <strong>Важно!</strong> Мощность 100% - это ключевая настройка для радиуса покрытия.
+                        Даст +30-50% к зоне покрытия.
+                    </div>
+                </div>
+
+                <h3>3. Безопасность WPA2</h3>
+                <div class="step">
+                    <h4>Беспроводной режим → Защита</h4>
+                    <div class="config-box">
+Тип: WPA/WPA2-Personal
+Версия: WPA2-PSK
+Шифрование: AES
+Пароль PSK: setki2025
+                    </div>
+                    <div class="info">
+                        <strong>Рекомендации для пароля:</strong>
+                        <br>• Минимум 8 символов
+                        <br>• Легко запомнить для судей
+                        <br>• Примеры: setki2025, турнир123, keeper2025
+                    </div>
+                </div>
+
+                <div class="step">
+                    <h4>Беспроводной режим → WPS</h4>
+                    <div class="config-box">
+WPS: Отключить
+                    </div>
+                    <div class="warning">
+                        WPS - уязвимая функция. Отключите для безопасности.
+                    </div>
+                </div>
+
+                <h3>4. Отключение ненужных функций</h3>
+                <table>
+                    <tr>
+                        <th>Раздел</th>
+                        <th>Настройка</th>
+                        <th>Значение</th>
+                    </tr>
+                    <tr>
+                        <td>Сеть → WAN</td>
+                        <td>Тип подключения</td>
+                        <td>Отключить</td>
+                    </tr>
+                    <tr>
+                        <td>Дополнительно → IPv6</td>
+                        <td>IPv6</td>
+                        <td>Отключить</td>
+                    </tr>
+                    <tr>
+                        <td>Переадресация → UPnP</td>
+                        <td>UPnP</td>
+                        <td>Отключить</td>
+                    </tr>
+                    <tr>
+                        <td>Защита → Родительский контроль</td>
+                        <td>Родительский контроль</td>
+                        <td>Отключить</td>
+                    </tr>
+                </table>
+
+                <h3>5. Сохранение настроек</h3>
+                <div class="step">
+                    <h4>Служебные → Резервная копия</h4>
+                    <p>1. Нажмите <strong>Резервная копия</strong></p>
+                    <p>2. Сохраните файл: <code>TP-Link_SETKI_config.bin</code></p>
+                    <p>3. Храните файл в безопасном месте</p>
+                    <div class="info">
+                        <strong>Зачем:</strong> Если роутер сломается - восстановите настройки за 1 минуту
+                    </div>
+                </div>
+            </div>
+
+            <!-- Для судей -->
+            <div id="judges" class="section">
+                <h2>Инструкция для судей</h2>
+
+                <div class="quick-ref">
+                    <h3>Подключение к SETKI.PRO KEEPER</h3>
+                    <div class="item">
+                        <div class="label">1. Название сети Wi-Fi:</div>
+                        <div class="value">SETKI-KEEPER</div>
+                    </div>
+                    <div class="item">
+                        <div class="label">2. Пароль Wi-Fi:</div>
+                        <div class="value">setki2025</div>
+                    </div>
+                    <div class="item">
+                        <div class="label">3. Адрес сервера:</div>
+                        <div class="value">http://192.168.1.X:8081</div>
+                        <small style="opacity: 0.8;">(X - уточните у администратора)</small>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 1: Включить Wi-Fi</h4>
+                    <p>На вашем планшете/ноутбуке включите Wi-Fi</p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 2: Найти сеть</h4>
+                    <p>В списке Wi-Fi найдите сеть: <strong>SETKI-KEEPER</strong></p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 3: Ввести пароль</h4>
+                    <p>Введите пароль: <strong>setki2025</strong></p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 4: Открыть браузер</h4>
+                    <p>Откройте Chrome, Firefox или Safari</p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 5: Перейти на сервер</h4>
+                    <p>Введите адрес (уточните у администратора):</p>
+                    <div class="config-box">http://192.168.1.100:8081</div>
+                    <p>или другой IP, который скажет администратор</p>
+                </div>
+
+                <div class="step">
+                    <h4>Шаг 6: Войти в систему</h4>
+                    <p>1. Введите PIN-код турнира</p>
+                    <p>2. Введите ваше имя</p>
+                    <p>3. Выберите номер стола</p>
+                </div>
+
+                <div class="success">
+                    <strong>Готово!</strong> Теперь вы можете судить матчи через SETKI.PRO KEEPER
+                </div>
+
+                <div class="warning">
+                    <strong>Если не можете подключиться:</strong>
+                    <br>• Проверьте, что подключены к сети SETKI-KEEPER
+                    <br>• Проверьте, что пароль введен правильно
+                    <br>• Уточните адрес сервера у администратора
+                    <br>• Перезагрузите устройство
+                </div>
+            </div>
+
+            <!-- Решение проблем -->
+            <div id="troubleshooting" class="section">
+                <h2>Решение типичных проблем</h2>
+
+                <div class="step">
+                    <h4>Проблема 1: Не могу зайти в настройки роутера</h4>
+                    <p><strong>Решение:</strong></p>
+                    <ol>
+                        <li>Проверьте подключение кабеля</li>
+                        <li>Попробуйте другой IP: <code>192.168.0.1</code> или <code>192.168.1.1</code></li>
+                        <li>Попробуйте адрес: <code>http://tplinkwifi.net</code></li>
+                        <li>Сбросьте роутер: кнопка Reset на 10 секунд</li>
+                    </ol>
+                </div>
+
+                <div class="step">
+                    <h4>Проблема 2: Забыл пароль от роутера</h4>
+                    <p><strong>Решение:</strong></p>
+                    <ol>
+                        <li>Найдите кнопку Reset на роутере (маленькая дырочка)</li>
+                        <li>Нажмите и держите 10 секунд (роутер включен)</li>
+                        <li>Роутер перезагрузится</li>
+                        <li>Логин: <code>admin</code>, Пароль: <code>admin</code></li>
+                        <li>Настройте роутер заново</li>
+                    </ol>
+                </div>
+
+                <div class="step">
+                    <h4>Проблема 3: Слабый сигнал Wi-Fi</h4>
+                    <p><strong>Решение:</strong></p>
+                    <ol>
+                        <li>Проверьте, что TX Power = 100% (Беспроводной режим → Дополнительные настройки)</li>
+                        <li>Переместите роутер в центр помещения</li>
+                        <li>Поднимите роутер выше (на 1.5-2 метра)</li>
+                        <li>Уберите препятствия (металл, бетон)</li>
+                        <li>Измените канал на 1, 6 или 11</li>
+                        <li>Уменьшите ширину канала до 20 MHz</li>
+                    </ol>
+                </div>
+
+                <div class="step">
+                    <h4>Проблема 4: Судьи не могут подключиться</h4>
+                    <p><strong>Решение:</strong></p>
+                    <ol>
+                        <li>Проверьте, что DHCP включен (DHCP → Настройки DHCP)</li>
+                        <li>Проверьте диапазон IP (должен быть 192.168.1.100-150)</li>
+                        <li>Перезагрузите роутер (Служебные → Перезагрузка)</li>
+                        <li>Проверьте, что локальный сервер SETKI.PRO запущен</li>
+                    </ol>
+                </div>
+
+                <div class="step">
+                    <h4>Проблема 5: Медленная работа / обрывы</h4>
+                    <p><strong>Решение:</strong></p>
+                    <ol>
+                        <li>Уменьшите количество устройств (максимум 15-20)</li>
+                        <li>Отключите ненужные устройства от Wi-Fi</li>
+                        <li>Проверьте помехи от других Wi-Fi (смените канал)</li>
+                        <li>Перезагрузите роутер</li>
+                    </ol>
+                </div>
+
+                <div class="info">
+                    <strong>Проверка радиуса покрытия:</strong>
+                    <br>Установите приложение <strong>WiFi Analyzer</strong> (Android) и проверьте уровень сигнала:
+                    <br>• <strong>-30 до -50 dBm</strong> - отлично
+                    <br>• <strong>-50 до -70 dBm</strong> - хорошо
+                    <br>• <strong>-70 до -80 dBm</strong> - слабо
+                    <br>• <strong>-80 и ниже</strong> - вне зоны
+                </div>
+            </div>
+
+            <!-- Чек-лист -->
+            <div id="checklist" class="section">
+                <h2>Чек-лист перед турниром</h2>
+
+                <h3>За день до турнира</h3>
+                <ul class="checklist">
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Роутер работает (горят индикаторы)</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Wi-Fi сеть видна на телефоне</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Можно подключиться по паролю</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Админский ноутбук подключается к роутеру</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Локальный сервер SETKI.PRO запускается</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> 2-3 тестовых устройства подключаются и видят сервер</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Сделана резервная копия настроек роутера</li>
+                </ul>
+
+                <h3>На турнире (подготовка)</h3>
+                <ul class="checklist">
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Роутер установлен в центре зала</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Роутер на высоте 1.5-2 метра</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Роутер подключен к розетке</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Админский ноутбук подключен (кабель или Wi-Fi)</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Локальный сервер SETKI.PRO запущен</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Первый судья подключился успешно</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Проверили радиус покрытия (WiFi Analyzer)</li>
+                </ul>
+
+                <h3>На турнире (размещение роутера)</h3>
+                <div class="success">
+                    <strong>Правильное размещение:</strong>
+                    <br>✅ В центре спортзала
+                    <br>✅ На высоте 1.5-2 м (на столе/подставке)
+                    <br>✅ Без препятствий вокруг
+                    <br>✅ Вдали от металла и бетона
+                </div>
+
+                <div class="warning">
+                    <strong>Неправильное размещение:</strong>
+                    <br>❌ В углу зала
+                    <br>❌ На полу
+                    <br>❌ В металлическом шкафу
+                    <br>❌ За бетонной стеной
+                    <br>❌ Рядом с микроволновкой
+                </div>
+
+                <h3>После турнира</h3>
+                <ul class="checklist">
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Выгрузили результаты на setki.pro (через интернет)</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Остановили локальный сервер</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Выключили роутер</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Упаковали оборудование</li>
+                </ul>
+
+                <h3>Памятка: что взять на турнир</h3>
+                <ul class="checklist">
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Роутер TP-Link</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Блок питания для роутера</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Ethernet-кабель</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Удлинитель/сетевой фильтр</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Админский ноутбук</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Распечатанная инструкция для судей</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Бумажка с SSID и паролем Wi-Fi</li>
+                    <li><input type="checkbox" onclick="toggleCheck(this)"> Этот HTML-файл на флешке (для офлайн)</li>
+                </ul>
+            </div>
+        </div>
+
+        <footer>
+            <p>SETKI.PRO KEEPER | Настройка роутера для турниров</p>
+            <p>Версия 1.0 | Дата: 2025-12-23</p>
+        </footer>
+    </div>
+
+    <button class="print-btn" onclick="window.print()">Распечатать</button>
+
+    <script>
+        function showSection(sectionId) {
+            // Скрыть все секции
+            const sections = document.querySelectorAll('.section');
+            sections.forEach(section => {
+                section.classList.remove('active');
+            });
+
+            // Убрать активный класс у всех кнопок
+            const buttons = document.querySelectorAll('nav button');
+            buttons.forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Показать выбранную секцию
+            document.getElementById(sectionId).classList.add('active');
+
+            // Активировать кнопку
+            event.target.classList.add('active');
+
+            // Прокрутить вверх
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function toggleCheck(checkbox) {
+            const li = checkbox.parentElement;
+            if (checkbox.checked) {
+                li.classList.add('checked');
+            } else {
+                li.classList.remove('checked');
+            }
+        }
+
+        // Сохранение состояния чек-листа в localStorage
+        document.addEventListener('DOMContentLoaded', function() {
+            const checkboxes = document.querySelectorAll('.checklist input[type="checkbox"]');
+
+            // Загрузить сохраненное состояние
+            checkboxes.forEach((checkbox, index) => {
+                const saved = localStorage.getItem('checkbox-' + index);
+                if (saved === 'true') {
+                    checkbox.checked = true;
+                    checkbox.parentElement.classList.add('checked');
+                }
+            });
+
+            // Сохранять при изменении
+            checkboxes.forEach((checkbox, index) => {
+                checkbox.addEventListener('change', function() {
+                    localStorage.setItem('checkbox-' + index, checkbox.checked);
+                });
+            });
+        });
+    </script>
+</body>
+</html>

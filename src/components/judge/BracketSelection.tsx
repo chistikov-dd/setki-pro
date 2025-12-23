@@ -6,6 +6,7 @@ import { BracketCardSkeleton, SkeletonList } from '../ui/Skeleton';
 import type { BracketResponse, BracketFilters } from '../../types';
 import { useDebounce } from '../../hooks/useDebounce';
 import { applySortAndFilter, getGenderLabel, getAgeRangeLabel, getWeightRangeLabel } from '../../utils/bracketFilters';
+import { useServerModeStore } from '../../stores/serverModeStore';
 
 interface BracketSelectionProps {
   tournamentId: number;
@@ -77,7 +78,12 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     setError(null);
 
     try {
-      const data = await getCachedBrackets(tournamentId);
+      // Получаем serverUrl из store для локального сервера
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      console.log('[BracketSelection] Загрузка сеток, mode:', mode, 'serverUrl:', url);
+      const data = await getCachedBrackets(tournamentId, url);
       setBrackets(data);
 
       // Загрузить информацию о занятых столах

@@ -236,6 +236,9 @@ async fn get_tournament_brackets_handler(
     State(state): State<LocalServerState>,
     Path(tournament_id): Path<i32>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    println!("[LOCAL SERVER] ========== get_tournament_brackets_handler START ==========");
+    println!("[LOCAL SERVER] Tournament ID: {}", tournament_id);
+
     let records = sqlx::query_as::<_, (String,)>(
         "SELECT data FROM brackets_cache WHERE tournament_id = ?"
     )
@@ -243,11 +246,26 @@ async fn get_tournament_brackets_handler(
     .fetch_all(&*state.db)
     .await?;
 
+    println!("[LOCAL SERVER] Found {} bracket records in cache", records.len());
+
     let brackets: Vec<serde_json::Value> = records
         .into_iter()
-        .filter_map(|(data,)| serde_json::from_str(&data).ok())
+        .filter_map(|(data,)| {
+            match serde_json::from_str(&data) {
+                Ok(json) => {
+                    println!("[LOCAL SERVER] Successfully parsed bracket JSON");
+                    Some(json)
+                }
+                Err(e) => {
+                    println!("[LOCAL SERVER] Failed to parse bracket JSON: {}", e);
+                    None
+                }
+            }
+        })
         .collect();
 
+    println!("[LOCAL SERVER] Returning {} brackets to client", brackets.len());
+    println!("[LOCAL SERVER] ========== get_tournament_brackets_handler END ==========");
     Ok(Json(brackets))
 }
 

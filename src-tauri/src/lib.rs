@@ -16,6 +16,8 @@ struct AppState {
     api_client: Arc<ApiClient>,
     db_pool: Arc<sqlx::SqlitePool>,
     local_server_running: Arc<RwLock<bool>>,
+    // URL текущего работающего локального сервера
+    local_server_url: Arc<Mutex<Option<String>>>,
     // Shutdown channel для graceful остановки локального сервера
     local_server_shutdown_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     // mDNS daemon для Service Discovery (используем std::sync::Mutex так как mdns-sd синхронный)
@@ -209,12 +211,26 @@ async fn download_tournament(
 #[tauri::command]
 async fn get_cached_brackets(
     tournament_id: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    state.api_client
-        .get_cached_brackets(tournament_id)
-        .await
-        .map_err(|e| e.to_string())
+    println!("[get_cached_brackets] tournament_id: {}, server_url: {:?}", tournament_id, server_url);
+
+    // Если передан server_url, используем его для создания временного клиента
+    if let Some(url) = server_url {
+        println!("[get_cached_brackets] Using custom server URL: {}", url);
+        let api_client = ApiClient::new(&url);
+        api_client
+            .get_cached_brackets(tournament_id)
+            .await
+            .map_err(|e| e.to_string())
+    } else {
+        println!("[get_cached_brackets] Using default API client");
+        state.api_client
+            .get_cached_brackets(tournament_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -289,8 +305,13 @@ async fn start_local_server(
 ) -> Result<String, String> {
     let mut is_running = state.local_server_running.write().await;
 
+    // Если сервер уже запущен, вернуть текущий URL
     if *is_running {
-        return Err("Local server is already running".to_string());
+        let current_url_guard = state.local_server_url.lock().await;
+        if let Some(url) = current_url_guard.as_ref() {
+            state.logger.info(&format!("[start_local_server] Server already running at: {}", url));
+            return Ok(url.clone());
+        }
     }
 
     // Если порт не указан, ищем свободный в диапазоне 8081-8091
@@ -346,7 +367,16 @@ async fn start_local_server(
 
     *is_running = true;
 
-    Ok(format!("http://{}:{}", local_ip, port))
+    let server_url = format!("http://{}:{}", local_ip, port);
+
+    // Сохраняем URL сервера
+    {
+        let mut url_guard = state.local_server_url.lock().await;
+        *url_guard = Some(server_url.clone());
+    }
+
+    state.logger.info(&format!("[start_local_server] Server started successfully at: {}", server_url));
+    Ok(server_url)
 }
 
 #[tauri::command]
@@ -373,9 +403,16 @@ async fn stop_local_server(
 
     *is_running = false;
 
+    // Очищаем URL сервера
+    {
+        let mut url_guard = state.local_server_url.lock().await;
+        *url_guard = None;
+    }
+
     // 3. Даём серверу время на корректное завершение (1 секунда)
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
+    state.logger.info("[stop_local_server] Server stopped successfully");
     Ok(())
 }
 
@@ -1936,6 +1973,7 @@ pub fn run() {
                 api_client,
                 db_pool: Arc::clone(&db_pool),
                 local_server_running: Arc::new(RwLock::new(false)),
+                local_server_url: Arc::new(Mutex::new(None)),
                 local_server_shutdown_tx: Arc::new(Mutex::new(None)),
                 mdns_daemon: Arc::new(StdMutex::new(None)),
                 mdns_service_fullname: Arc::new(StdMutex::new(None)),

@@ -135,8 +135,11 @@ export async function isTournamentDownloaded(tournamentId: number): Promise<bool
 /**
  * Получить сетки из кэша (offline)
  */
-export async function getCachedBrackets(tournamentId: number): Promise<BracketResponse[]> {
-  return await invoke<BracketResponse[]>('get_cached_brackets', { tournamentId });
+export async function getCachedBrackets(tournamentId: number, serverUrl?: string | null): Promise<BracketResponse[]> {
+  return await invoke<BracketResponse[]>('get_cached_brackets', {
+    tournamentId,
+    serverUrl: serverUrl || null
+  });
 }
 
 /**
