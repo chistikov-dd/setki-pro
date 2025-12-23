@@ -105,6 +105,7 @@ pub async fn start_server(
     let app = Router::new()
         // Auth endpoints
         .route("/api/v1/auth/pin", post(login_by_pin_handler))
+        .route("/api/v1/desktop/auth/pin-auth", post(login_by_pin_handler)) // Для совместимости с desktop клиентом
 
         // Desktop endpoints (compatible with existing API)
         .route("/api/v1/desktop/brackets/tournament/:id", get(get_tournament_brackets_handler))
@@ -169,26 +170,26 @@ async fn login_by_pin_handler(
     Json(payload): Json<LoginByPinRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
     // Check if PIN exists in cached_pins table
-    let record = sqlx::query_as::<_, (i32, i32, String)>(
-        "SELECT id, tournament_id, role FROM cached_pins WHERE pin = ?"
+    let record = sqlx::query_as::<_, (i32, String)>(
+        "SELECT tournament_id, tournament_name FROM cached_pins WHERE pin_code = ?"
     )
     .bind(&payload.pin_code)
     .fetch_optional(&*state.db)
     .await?;
 
     match record {
-        Some((id, tournament_id, role)) => {
+        Some((tournament_id, _tournament_name)) => {
             // Generate a simple token (in local mode, security is less critical)
             let token = format!("local_token_{}", uuid::Uuid::new_v4());
 
-            // Если это судья и переданы имя и номер стола - отправляем событие админу
-            if role == "referee" && payload.judge_name.is_some() && payload.table_number.is_some() {
+            // Если переданы имя и номер стола - отправляем событие админу
+            if payload.judge_name.is_some() && payload.table_number.is_some() {
                 let event = serde_json::json!({
                     "type": "judge_connected",
                     "tournament_id": tournament_id,
                     "judge_name": payload.judge_name,
                     "table_number": payload.table_number,
-                    "user_id": id,
+                    "user_id": 0, // Временный ID для offline судьи
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 });
 
@@ -201,8 +202,8 @@ async fn login_by_pin_handler(
 
             Ok(Json(AuthResponse {
                 access_token: token,
-                user_id: id,
-                role,
+                user_id: 0, // Временный ID для offline судьи
+                role: "referee".to_string(),
                 tournament_id: Some(tournament_id),
             }))
         }
