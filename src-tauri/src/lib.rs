@@ -307,7 +307,13 @@ async fn start_local_server(
             .ok_or_else(|| "No available ports in range 8081-8091".to_string())?
     };
     let db_pool = Arc::clone(&state.db_pool);
-    let local_ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    let local_ip = get_local_ip().unwrap_or_else(|| {
+        state.logger.error("[start_local_server] Failed to detect local IP, using 127.0.0.1");
+        "127.0.0.1".to_string()
+    });
+
+    state.logger.info(&format!("[start_local_server] Detected local IP: {}", local_ip));
+    state.logger.info(&format!("[start_local_server] Starting server on port: {}", port));
 
     // mDNS Service Discovery: регистрируем сервис
     let mdns_result = register_mdns_service(
@@ -1252,11 +1258,39 @@ async fn discover_local_servers() -> Result<Vec<serde_json::Value>, String> {
 fn get_local_ip() -> Option<String> {
     use std::net::UdpSocket;
 
-    // Трюк: подключаемся к публичному DNS, чтобы узнать свой локальный IP
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    let addr = socket.local_addr().ok()?;
-    Some(addr.ip().to_string())
+    // Попытка 1: Подключаемся к публичному DNS (работает только с интернетом)
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if !ip.starts_with("127.") {
+                    println!("[get_local_ip] Found IP via public DNS: {}", ip);
+                    return Some(ip);
+                }
+            }
+        }
+    }
+
+    println!("[get_local_ip] Public DNS method failed, trying local network gateway...");
+
+    // Попытка 2: Подключаемся к локальному шлюзу (192.168.1.1 - типичный роутер)
+    // Работает БЕЗ интернета, только с роутером!
+    for gateway in &["192.168.1.1:80", "192.168.0.1:80", "10.0.0.1:80", "172.16.0.1:80"] {
+        if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+            if socket.connect(gateway).is_ok() {
+                if let Ok(addr) = socket.local_addr() {
+                    let ip = addr.ip().to_string();
+                    if !ip.starts_with("127.") {
+                        println!("[get_local_ip] Found IP via gateway {}: {}", gateway, ip);
+                        return Some(ip);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("[get_local_ip] All methods failed, returning None");
+    None
 }
 
 // Найти свободный порт в диапазоне
