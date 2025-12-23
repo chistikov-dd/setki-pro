@@ -84,9 +84,19 @@ async fn login_by_pin(
     pin_code: String,
     judge_name: String,
     table_number: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<AuthResponse, String> {
-    let mut response = state.api_client
+    // Если передан server_url (режим local-client), создаём временный ApiClient с этим URL
+    let api_client: Arc<ApiClient> = if let Some(url) = server_url {
+        state.logger.info(&format!("[login_by_pin] Using custom server URL: {}", url));
+        Arc::new(ApiClient::new(url, Arc::clone(&state.db_pool)))
+    } else {
+        state.logger.info("[login_by_pin] Using default API client");
+        Arc::clone(&state.api_client)
+    };
+
+    let mut response = api_client
         .login_by_pin(
             pin_code.clone(),
             Some(judge_name.clone()),
@@ -96,7 +106,7 @@ async fn login_by_pin(
         .map_err(|e| e.to_string())?;
 
     // Сохранить сессию судьи с именем и номером стола + токен
-    state.api_client
+    api_client
         .save_judge_session(&pin_code, &judge_name, table_number, response.tournament_id, &response.access_token)
         .await
         .map_err(|e| e.to_string())?;

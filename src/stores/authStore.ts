@@ -92,13 +92,19 @@ export const useAuthStore = create<AuthState>()(
 
         console.log('[authStore] Начало входа судьи:', { pinCode, judgeName, tableNumber });
 
+        // Получить serverUrl из serverModeStore если режим local-client
+        const serverModeStore = (await import('./serverModeStore')).useServerModeStore.getState();
+        const serverUrl = serverModeStore.mode === 'local-client' ? serverModeStore.serverUrl : null;
+
+        console.log('[authStore] Server mode:', serverModeStore.mode, 'Server URL:', serverUrl);
+
         try {
           console.log('[authStore] Вызов loginByPin...');
           const response = await loginByPin({
             pin_code: pinCode,
             judge_name: judgeName,
             table_number: tableNumber
-          });
+          }, serverUrl);
           console.log('[authStore] loginByPin успешно, ответ:', response);
 
           logger.info(LOG_CATEGORIES.AUTH, 'Judge login successful', {

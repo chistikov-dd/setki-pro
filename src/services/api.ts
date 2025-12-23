@@ -71,12 +71,18 @@ export async function loginAdmin(data: { login: string; password: string }): Pro
 
 /**
  * Вход судьи (PIN-код + имя + номер стола)
+ * @param data - данные для входа
+ * @param serverUrl - опциональный URL локального сервера (для режима local-client)
  */
-export async function loginByPin(data: { pin_code: string; judge_name: string; table_number: number }): Promise<AuthResponse> {
+export async function loginByPin(
+  data: { pin_code: string; judge_name: string; table_number: number },
+  serverUrl?: string | null
+): Promise<AuthResponse> {
   return await invoke<AuthResponse>('login_by_pin', {
     pinCode: data.pin_code,
     judgeName: data.judge_name,
     tableNumber: data.table_number,
+    serverUrl: serverUrl || undefined,
   });
 }
 
