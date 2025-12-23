@@ -219,7 +219,7 @@ async fn get_cached_brackets(
     // Если передан server_url, используем его для создания временного клиента
     if let Some(url) = server_url {
         println!("[get_cached_brackets] Using custom server URL: {}", url);
-        let api_client = ApiClient::new(&url);
+        let api_client = ApiClient::new(url, Arc::clone(&state.db_pool));
         api_client
             .get_cached_brackets(tournament_id)
             .await
