@@ -571,19 +571,50 @@ impl ApiClient {
 
     // Получить сетки из кэша (offline)
     pub async fn get_cached_brackets(&self, tournament_id: i32) -> Result<Vec<serde_json::Value>> {
-        let records = sqlx::query_as::<_, (String,)>(
-            "SELECT data FROM brackets_cache WHERE tournament_id = ?"
-        )
-        .bind(tournament_id)
-        .fetch_all(self.db.as_ref())
-        .await?;
+        // Проверяем, это локальный сервер или setki.pro
+        let is_local_server = self.base_url.contains("192.168.")
+            || self.base_url.contains("10.0.")
+            || self.base_url.contains("172.16.")
+            || self.base_url.contains("localhost")
+            || self.base_url.contains("127.0.0.1");
 
-        let brackets: Vec<serde_json::Value> = records
-            .into_iter()
-            .filter_map(|r| serde_json::from_str(&r.0).ok())
-            .collect();
+        if is_local_server {
+            // Делаем HTTP запрос к локальному серверу
+            println!("[ApiClient::get_cached_brackets] Requesting from local server: {}", self.base_url);
 
-        Ok(brackets)
+            let url = format!("{}/desktop/brackets/tournament/{}", self.base_url, tournament_id);
+            let response = self.client
+                .get(&url)
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let brackets: Vec<serde_json::Value> = response.json().await?;
+                println!("[ApiClient::get_cached_brackets] Received {} brackets from local server", brackets.len());
+                Ok(brackets)
+            } else {
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                Err(anyhow::anyhow!("Local server error {}: {}", status, error_text))
+            }
+        } else {
+            // Читаем из локального кэша (offline режим для setki.pro)
+            println!("[ApiClient::get_cached_brackets] Reading from local cache");
+            let records = sqlx::query_as::<_, (String,)>(
+                "SELECT data FROM brackets_cache WHERE tournament_id = ?"
+            )
+            .bind(tournament_id)
+            .fetch_all(self.db.as_ref())
+            .await?;
+
+            let brackets: Vec<serde_json::Value> = records
+                .into_iter()
+                .filter_map(|r| serde_json::from_str(&r.0).ok())
+                .collect();
+
+            println!("[ApiClient::get_cached_brackets] Found {} brackets in local cache", brackets.len());
+            Ok(brackets)
+        }
     }
 
     // Проверить, загружен ли турнир в кэш

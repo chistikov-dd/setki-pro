@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
@@ -21,6 +21,17 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
   const [error, setError] = useState<string | null>(null);
 
   const { setMode, setServerUrl } = useServerModeStore();
+
+  // Загрузить URL локального сервера при монтировании (если сервер уже запущен)
+  useEffect(() => {
+    if (currentMode === 'local-server') {
+      invoke<string | null>('get_local_server_url').then((url) => {
+        if (url) {
+          setLocalServerUrl(url);
+        }
+      }).catch(console.error);
+    }
+  }, [currentMode]);
 
   const handleStartLocalServer = async () => {
     setIsStarting(true);

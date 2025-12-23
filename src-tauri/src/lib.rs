@@ -425,6 +425,14 @@ async fn is_local_server_running(
 }
 
 #[tauri::command]
+async fn get_local_server_url(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let url_guard = state.local_server_url.lock().await;
+    Ok(url_guard.clone())
+}
+
+#[tauri::command]
 async fn set_api_base_url(
     url: String,
 ) -> Result<(), String> {
@@ -2009,6 +2017,7 @@ pub fn run() {
             start_local_server,
             stop_local_server,
             is_local_server_running,
+            get_local_server_url,
             get_local_server_health,
             discover_local_servers,
             set_api_base_url,
