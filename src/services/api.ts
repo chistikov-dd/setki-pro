@@ -332,7 +332,7 @@ export async function batchUpdateMatch(data: {
   redWarnings: number;
   blueWarnings: number;
   status: string;
-}): Promise<MatchEvent[]> {
+}, serverUrl?: string | null): Promise<MatchEvent[]> {
   return await invoke<MatchEvent[]>('batch_update_match', {
     matchId: data.matchId,
     eventType: data.eventType,
@@ -345,6 +345,7 @@ export async function batchUpdateMatch(data: {
     redWarnings: data.redWarnings,
     blueWarnings: data.blueWarnings,
     status: data.status,
+    serverUrl: serverUrl || null, // Передаем server_url для local-client режима
   });
 }
 
@@ -461,7 +462,7 @@ export async function updateMatchScoreUniversal(
   // Если режим local-client и есть serverUrl - отправляем на сервер админа
   if (serverMode.mode === 'local-client' && serverMode.serverUrl) {
     console.log('[updateMatchScoreUniversal] Отправка на локальный сервер админа...');
-    // Retry логика: 5 попыток с экспоненциальной задержкой (1s, 2s, 4s, 8s, 16s)
+    // Retry логика: 5 попыток с экспоненциальной задержкой
     const maxRetries = 5;
     let lastError: Error | null = null;
 
@@ -475,12 +476,36 @@ export async function updateMatchScoreUniversal(
         return;
       } catch (error) {
         lastError = error as Error;
-        console.error(`[updateMatchScoreUniversal] ❌ Попытка ${attempt + 1}/${maxRetries} не удалась:`, error);
+        const errorText = error instanceof Error ? error.message : String(error);
+
+        // Проверяем тип ошибки
+        const isConflict = errorText.includes('409') || errorText.includes('Conflict');
+        const isNetworkError = errorText.includes('fetch') || errorText.includes('network') || errorText.includes('ECONNREFUSED');
+
+        console.error(`[updateMatchScoreUniversal] ❌ Попытка ${attempt + 1}/${maxRetries} не удалась:`, {
+          error: errorText,
+          isConflict,
+          isNetworkError
+        });
 
         // Если это последняя попытка - не ждём
         if (attempt < maxRetries - 1) {
-          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s, 8s, 16s
-          console.warn(`[updateMatchScoreUniversal] ⏳ Повторная попытка через ${delay}ms...`);
+          let delay: number;
+
+          if (isConflict) {
+            // Для conflicts: короткие задержки с jitter (50ms, 100ms, 200ms, 400ms)
+            delay = 50 * Math.pow(2, attempt) + Math.random() * 50;
+            console.warn(`[updateMatchScoreUniversal] ⚠️ Optimistic lock conflict - retry через ${Math.round(delay)}ms...`);
+          } else if (isNetworkError) {
+            // Для сетевых ошибок: длинные задержки (1s, 2s, 4s, 8s)
+            delay = Math.pow(2, attempt) * 1000;
+            console.warn(`[updateMatchScoreUniversal] ⏳ Сетевая ошибка - повтор через ${delay}ms...`);
+          } else {
+            // Для остальных: средние задержки (500ms, 1s, 2s, 4s)
+            delay = Math.pow(2, attempt) * 500;
+            console.warn(`[updateMatchScoreUniversal] ⏳ Повторная попытка через ${delay}ms...`);
+          }
+
           await new Promise(resolve => setTimeout(resolve, delay));
         }
       }
@@ -523,8 +548,14 @@ export interface BracketTableAssignment {
   judge_name: string;
 }
 
-export async function getBracketTableAssignments(tournamentId: number): Promise<BracketTableAssignment[]> {
-  return await invoke<BracketTableAssignment[]>('get_bracket_table_assignments', { tournamentId });
+export async function getBracketTableAssignments(
+  tournamentId: number,
+  serverUrl?: string | null
+): Promise<BracketTableAssignment[]> {
+  return await invoke<BracketTableAssignment[]>('get_bracket_table_assignments', {
+    tournamentId,
+    serverUrl: serverUrl || null,
+  });
 }
 
 // ============================================

@@ -73,6 +73,44 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     loadBrackets();
   }, [tournamentId, reloadTrigger]); // Добавлен reloadTrigger для перезагрузки
 
+  // Polling для обновления информации о занятых столах (каждые 5 секунд в local-client режиме)
+  useEffect(() => {
+    const { mode } = useServerModeStore.getState();
+
+    // Polling только в local-client режиме (когда есть другие судьи)
+    if (mode !== 'local-client') {
+      console.log('[BracketSelection] Polling отключен (режим:', mode, ')');
+      return;
+    }
+
+    console.log('[BracketSelection] Запуск polling занятых столов (каждые 5 сек)');
+
+    // Обновлять информацию о столах каждые 5 секунд
+    const intervalId = setInterval(async () => {
+      try {
+        // Получаем актуальный serverUrl для каждого запроса
+        const { mode: currentMode, serverUrl: currentServerUrl } = useServerModeStore.getState();
+        const url = currentMode === 'local-client' ? currentServerUrl : null;
+
+        const assignments = await getBracketTableAssignments(tournamentId, url);
+        const assignmentsMap = new Map<number, BracketTableAssignment>();
+        assignments.forEach((assignment) => {
+          assignmentsMap.set(assignment.bracket_id, assignment);
+        });
+        setTableAssignments(assignmentsMap);
+        console.log('[BracketSelection] Polling: обновлено занятых столов:', assignments.length);
+      } catch (err) {
+        console.error('[BracketSelection] Polling ошибка:', err);
+        // Не прерываем polling при ошибке
+      }
+    }, 5000); // 5 секунд
+
+    return () => {
+      console.log('[BracketSelection] Остановка polling занятых столов');
+      clearInterval(intervalId);
+    };
+  }, [tournamentId]);
+
   const loadBrackets = async () => {
     setIsLoading(true);
     setError(null);
@@ -88,7 +126,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       // Загрузить информацию о занятых столах
       try {
-        const assignments = await getBracketTableAssignments(tournamentId);
+        const assignments = await getBracketTableAssignments(tournamentId, url);
         const assignmentsMap = new Map<number, BracketTableAssignment>();
         assignments.forEach((assignment) => {
           assignmentsMap.set(assignment.bracket_id, assignment);

@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State, WebSocketUpgrade, Request},
-    http::StatusCode,
+    http::{StatusCode, HeaderMap},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -119,6 +119,19 @@ pub struct CreateTempParticipantRequest {
     pub club_name: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReserveBracketRequest {
+    pub bracket_id: i32,
+    pub judge_name: String,
+    pub user_id: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReleaseBracketRequest {
+    pub bracket_id: i32,
+    pub judge_name: String,
+}
+
 // Middleware для логирования всех входящих запросов
 async fn logging_middleware(req: Request, next: Next) -> Response {
     let method = req.method().clone();
@@ -136,6 +149,65 @@ async fn logging_middleware(req: Request, next: Next) -> Response {
     println!("[LOCAL SERVER] ========== REQUEST COMPLETED ==========");
 
     response
+}
+
+// Auth middleware - проверяет наличие валидного PIN-кода или токена в заголовках
+async fn auth_middleware(
+    State(state): State<LocalServerState>,
+    headers: HeaderMap,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let uri = req.uri().path();
+
+    // Пропускаем публичные endpoints (auth, health)
+    if uri.starts_with("/api/v1/auth/")
+        || uri.starts_with("/api/v1/desktop/auth/")
+        || uri == "/health" {
+        return Ok(next.run(req).await);
+    }
+
+    // Проверяем заголовок Authorization
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    // Извлекаем токен (формат: "Bearer <token>" или просто "<token>")
+    let token = if auth_header.starts_with("Bearer ") {
+        &auth_header[7..]
+    } else {
+        auth_header
+    };
+
+    if token.is_empty() {
+        println!("[AUTH] Отсутствует Authorization заголовок для {}", uri);
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // Проверяем токен в БД (таблица auth или cached_pins)
+    let is_valid = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM auth WHERE token = ?
+         UNION ALL
+         SELECT COUNT(*) FROM cached_pins WHERE pin_code = ?"
+    )
+    .bind(token)
+    .bind(token)
+    .fetch_one(&*state.db)
+    .await
+    .unwrap_or(0);
+
+    if is_valid == 0 {
+        println!("[AUTH] Неверный токен для {}", uri);
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    println!("[AUTH] ✅ Авторизация успешна для {}", uri);
+
+    // Добавляем токен в extensions для использования в handlers
+    req.extensions_mut().insert(token.to_string());
+
+    Ok(next.run(req).await)
 }
 
 // Start the local HTTP/WebSocket server
@@ -168,6 +240,9 @@ pub async fn start_server(
         // Bracket editing endpoints
         .route("/api/v1/desktop/matches/swap", post(swap_bracket_participants_handler))
         .route("/api/v1/desktop/temp-participants", post(create_temp_participant_handler))
+        .route("/api/v1/desktop/bracket-assignments/:tournament_id", get(get_bracket_assignments_handler))
+        .route("/api/v1/desktop/brackets/reserve", post(reserve_bracket_handler))
+        .route("/api/v1/desktop/brackets/release", post(release_bracket_handler))
 
         // WebSocket endpoints
         .route("/api/v1/ws/matches/:match_id", get(websocket_handler))
@@ -178,7 +253,8 @@ pub async fn start_server(
 
         .layer(middleware::from_fn(logging_middleware))
         .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -610,11 +686,15 @@ async fn swap_bracket_participants_handler(
     println!("[LOCAL SERVER] bracket_id={}, match1_id={}, match1_slot={}, match2_id={}, match2_slot={}",
         payload.bracket_id, payload.match1_id, payload.match1_slot, payload.match2_id, payload.match2_slot);
 
+    // НАЧАТЬ ТРАНЗАКЦИЮ для атомарности операций
+    let mut tx = state.db.begin().await
+        .map_err(|e| AppError::Internal(format!("Failed to start transaction: {}", e)))?;
+
     // Swap внутри одного матча
     if payload.match1_id == payload.match2_id {
         let match_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
             .bind(payload.match1_id)
-            .fetch_one(&*state.db)
+            .fetch_one(&mut *tx)
             .await?;
 
         let data_str: String = sqlx::Row::get(&match_data, "data");
@@ -651,8 +731,12 @@ async fn swap_bracket_participants_handler(
         sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
             .bind(serde_json::to_string(&match_obj).unwrap())
             .bind(payload.match1_id)
-            .execute(&*state.db)
+            .execute(&mut *tx)
             .await?;
+
+        // COMMIT транзакции
+        tx.commit().await
+            .map_err(|e| AppError::Internal(format!("Failed to commit transaction: {}", e)))?;
 
         println!("[LOCAL SERVER] ========== swap_bracket_participants_handler SUCCESS (same match) ==========");
         return Ok(Json(serde_json::json!({ "status": "ok" })));
@@ -661,12 +745,12 @@ async fn swap_bracket_participants_handler(
     // Swap между разными матчами
     let match1_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
         .bind(payload.match1_id)
-        .fetch_one(&*state.db)
+        .fetch_one(&mut *tx)
         .await?;
 
     let match2_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
         .bind(payload.match2_id)
-        .fetch_one(&*state.db)
+        .fetch_one(&mut *tx)
         .await?;
 
     let data1_str: String = sqlx::Row::get(&match1_data, "data");
@@ -684,18 +768,22 @@ async fn swap_bracket_participants_handler(
     match1_obj[&payload.match1_slot] = slot2_value;
     match2_obj[&payload.match2_slot] = slot1_value;
 
-    // Сохранить оба матча
+    // Сохранить оба матча атомарно
     sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
         .bind(serde_json::to_string(&match1_obj).unwrap())
         .bind(payload.match1_id)
-        .execute(&*state.db)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
         .bind(serde_json::to_string(&match2_obj).unwrap())
         .bind(payload.match2_id)
-        .execute(&*state.db)
+        .execute(&mut *tx)
         .await?;
+
+    // COMMIT транзакции (либо оба матча обновлены, либо ни один)
+    tx.commit().await
+        .map_err(|e| AppError::Internal(format!("Failed to commit transaction: {}", e)))?;
 
     println!("[LOCAL SERVER] ========== swap_bracket_participants_handler SUCCESS (different matches) ==========");
     Ok(Json(serde_json::json!({ "status": "ok" })))
@@ -723,6 +811,173 @@ async fn create_temp_participant_handler(
 
     println!("[LOCAL SERVER] ========== create_temp_participant_handler SUCCESS ==========");
     Ok(Json(serde_json::json!({ "status": "ok", "temp_id": payload.temp_id })))
+}
+
+// Reserve bracket handler - резервирование сетки судьей
+async fn reserve_bracket_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<ReserveBracketRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== reserve_bracket_handler START ==========");
+    println!("[LOCAL SERVER] bracket_id: {}, judge_name: {}, user_id: {}",
+        payload.bracket_id, payload.judge_name, payload.user_id);
+
+    // Проверить, что сетка свободна
+    let existing = sqlx::query_as::<_, (String,)>(
+        "SELECT judge_name FROM bracket_reservations WHERE bracket_id = ?"
+    )
+    .bind(payload.bracket_id)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    if let Some((existing_judge,)) = existing {
+        if existing_judge != payload.judge_name {
+            println!("[LOCAL SERVER] Сетка уже занята судьей: {}", existing_judge);
+            return Err(AppError::Conflict(format!(
+                "Сетка уже занята судьей: {}",
+                existing_judge
+            )));
+        } else {
+            println!("[LOCAL SERVER] Сетка уже зарезервирована текущим судьей");
+            return Ok(Json(serde_json::json!({ "status": "ok", "message": "Already reserved" })));
+        }
+    }
+
+    // Зарезервировать сетку
+    sqlx::query(
+        "INSERT INTO bracket_reservations (bracket_id, judge_name, user_id, reserved_at)
+         VALUES (?, ?, ?, datetime('now'))"
+    )
+    .bind(payload.bracket_id)
+    .bind(&payload.judge_name)
+    .bind(payload.user_id)
+    .execute(&*state.db)
+    .await?;
+
+    // Получить номер стола судьи
+    let table_number = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT tn.table_number FROM judge_sessions js
+         INNER JOIN table_numbers tn ON js.judge_session_id = tn.judge_session_id
+         WHERE js.judge_name = ?
+         ORDER BY js.logged_in_at DESC
+         LIMIT 1"
+    )
+    .bind(&payload.judge_name)
+    .fetch_optional(&*state.db)
+    .await?
+    .flatten();
+
+    // Broadcast событие "bracket_reserved" через admin_events_channel
+    let event = serde_json::json!({
+        "type": "bracket_reserved",
+        "bracket_id": payload.bracket_id,
+        "judge_name": payload.judge_name,
+        "table_number": table_number,
+        "user_id": payload.user_id,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+
+    let _ = state.admin_events_channel.send(event.to_string());
+    println!("[LOCAL SERVER] Broadcast event: bracket_reserved for bracket {} by {}",
+        payload.bracket_id, payload.judge_name);
+
+    println!("[LOCAL SERVER] ========== reserve_bracket_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+// Release bracket handler - освобождение сетки
+async fn release_bracket_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<ReleaseBracketRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== release_bracket_handler START ==========");
+    println!("[LOCAL SERVER] bracket_id: {}, judge_name: {}",
+        payload.bracket_id, payload.judge_name);
+
+    // Получить номер стола перед удалением
+    let table_number = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT tn.table_number FROM bracket_reservations br
+         INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
+         INNER JOIN table_numbers tn ON js.judge_session_id = tn.judge_session_id
+         WHERE br.bracket_id = ? AND br.judge_name = ?
+         ORDER BY js.logged_in_at DESC
+         LIMIT 1"
+    )
+    .bind(payload.bracket_id)
+    .bind(&payload.judge_name)
+    .fetch_optional(&*state.db)
+    .await?
+    .flatten();
+
+    // Удалить резервирование
+    let result = sqlx::query(
+        "DELETE FROM bracket_reservations WHERE bracket_id = ? AND judge_name = ?"
+    )
+    .bind(payload.bracket_id)
+    .bind(&payload.judge_name)
+    .execute(&*state.db)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        // Broadcast событие "bracket_released" через admin_events_channel
+        let event = serde_json::json!({
+            "type": "bracket_released",
+            "bracket_id": payload.bracket_id,
+            "judge_name": payload.judge_name,
+            "table_number": table_number,
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        });
+
+        let _ = state.admin_events_channel.send(event.to_string());
+        println!("[LOCAL SERVER] Broadcast event: bracket_released for bracket {} by {}",
+            payload.bracket_id, payload.judge_name);
+
+        println!("[LOCAL SERVER] ========== release_bracket_handler SUCCESS ==========");
+        Ok(Json(serde_json::json!({ "status": "ok" })))
+    } else {
+        println!("[LOCAL SERVER] Резервирование не найдено");
+        Ok(Json(serde_json::json!({ "status": "ok", "message": "Not reserved" })))
+    }
+}
+
+// Bracket assignments handler - получить информацию о занятых столах
+async fn get_bracket_assignments_handler(
+    State(state): State<LocalServerState>,
+    Path(tournament_id): Path<i32>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    println!("[LOCAL SERVER] ========== get_bracket_assignments_handler START ==========");
+    println!("[LOCAL SERVER] Tournament ID: {}", tournament_id);
+
+    // Получаем все резервирования с информацией о столах
+    let assignments = sqlx::query_as::<_, (i32, i32, String)>(
+        "SELECT
+            br.bracket_id,
+            tn.table_number,
+            br.judge_name
+         FROM bracket_reservations br
+         INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
+         INNER JOIN table_numbers tn ON js.judge_session_id = tn.judge_session_id
+         WHERE js.tournament_id = ?
+         ORDER BY br.reserved_at DESC"
+    )
+    .bind(tournament_id)
+    .fetch_all(&*state.db)
+    .await?;
+
+    let result: Vec<serde_json::Value> = assignments
+        .into_iter()
+        .map(|(bracket_id, table_number, judge_name)| {
+            serde_json::json!({
+                "bracket_id": bracket_id,
+                "table_number": table_number,
+                "judge_name": judge_name,
+            })
+        })
+        .collect();
+
+    println!("[LOCAL SERVER] Returning {} bracket assignments", result.len());
+    println!("[LOCAL SERVER] ========== get_bracket_assignments_handler END ==========");
+    Ok(Json(result))
 }
 
 // WebSocket handler
@@ -808,26 +1063,65 @@ async fn handle_socket(socket: WebSocket, state: LocalServerState, match_id: Str
 
     // Задача 2: Читаем из broadcast и отправляем в WebSocket
     let match_id_clone2 = match_id.clone();
+    let (ping_tx, mut ping_rx) = tokio::sync::mpsc::channel::<Message>(10);
+
     let mut send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            // Отправляем сообщение клиенту
-            if let Err(e) = ws_sender.send(Message::Text(msg)).await {
-                println!("[WebSocket] Failed to send message to client: {}", e);
-                break;
+        loop {
+            tokio::select! {
+                // Получаем сообщения из broadcast канала
+                Ok(msg) = rx.recv() => {
+                    if let Err(e) = ws_sender.send(Message::Text(msg)).await {
+                        println!("[WebSocket] Failed to send message to client: {}", e);
+                        break;
+                    }
+                }
+                // Получаем ping фреймы из ping_task
+                Some(ping_msg) = ping_rx.recv() => {
+                    if let Err(e) = ws_sender.send(ping_msg).await {
+                        println!("[WebSocket] Failed to send ping to client: {}", e);
+                        break;
+                    }
+                }
             }
         }
         println!("[WebSocket] Send task ended for match {}", match_id_clone2);
     });
 
+    // Задача 3: Heartbeat пинги каждые 30 секунд
+    let match_id_clone3 = match_id.clone();
+    let mut ping_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        interval.tick().await; // Пропускаем первый тик (он происходит сразу)
+
+        loop {
+            interval.tick().await;
+            println!("[WebSocket] Sending heartbeat ping for match {}", match_id_clone3);
+
+            // Отправляем ping через канал в send_task
+            if let Err(e) = ping_tx.send(Message::Ping(vec![])).await {
+                println!("[WebSocket] Failed to queue ping (client disconnected): {}", e);
+                break;
+            }
+        }
+        println!("[WebSocket] Ping task ended for match {}", match_id_clone3);
+    });
+
     // Ждём завершения любой из задач (обычно это означает отключение)
     tokio::select! {
         _ = &mut recv_task => {
-            // Прерываем send задачу
+            // Прерываем остальные задачи
             send_task.abort();
+            ping_task.abort();
         }
         _ = &mut send_task => {
-            // Прерываем recv задачу
+            // Прерываем остальные задачи
             recv_task.abort();
+            ping_task.abort();
+        }
+        _ = &mut ping_task => {
+            // Прерываем остальные задачи
+            recv_task.abort();
+            send_task.abort();
         }
     }
 

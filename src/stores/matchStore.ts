@@ -152,7 +152,12 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     try {
       console.log('[matchStore.addScore] Step 1: Calling batchUpdateMatch...');
 
-      // 1️⃣ Локальное сохранение (резервная копия в БД судьи)
+      // Получаем serverUrl для передачи в batch_update_match
+      const serverMode = useServerModeStore.getState();
+      const url = serverMode.mode === 'local-client' ? serverMode.serverUrl : null;
+      console.log('[matchStore.addScore] Server mode:', serverMode.mode, 'URL:', url);
+
+      // 1️⃣ Локальное сохранение (резервная копия в БД судьи) + отправка на админа
       // Batch update: record event + update score + get events (3 вызова → 1)
       const events = await batchUpdateMatch({
         matchId: match.id,
@@ -166,15 +171,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         redWarnings,
         blueWarnings,
         status: 'in_progress',
-      });
+      }, url);
 
       console.log('[matchStore.addScore] Step 1 complete, events count:', events.length);
 
       // 2️⃣ КРИТИЧНО: Отправка на сервер админа (в LAN режиме)
       // Это гарантирует что данные сохранятся в БД админа
       console.log('[matchStore.addScore] Step 2: Calling updateMatchScoreUniversal...');
-      const serverMode = useServerModeStore.getState();
-      console.log('[matchStore.addScore] Server mode:', serverMode);
 
       await updateMatchScoreUniversal({
         matchId: match.id,
@@ -244,7 +247,12 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     try {
       console.log('[matchStore.addWarning] Step 1: Calling batchUpdateMatch...');
 
-      // 1️⃣ Локальное сохранение (резервная копия в БД судьи)
+      // Получаем serverUrl для передачи в batch_update_match
+      const serverMode = useServerModeStore.getState();
+      const url = serverMode.mode === 'local-client' ? serverMode.serverUrl : null;
+      console.log('[matchStore.addWarning] Server mode:', serverMode.mode, 'URL:', url);
+
+      // 1️⃣ Локальное сохранение (резервная копия в БД судьи) + отправка на админа
       // Batch update: record event + update score + get events (3 вызова → 1)
       const events = await batchUpdateMatch({
         matchId: match.id,
@@ -256,15 +264,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         redWarnings: newRedWarnings,
         blueWarnings: newBlueWarnings,
         status: 'in_progress',
-      });
+      }, url);
 
       console.log('[matchStore.addWarning] Step 1 complete, events count:', events.length);
 
       // 2️⃣ КРИТИЧНО: Отправка на сервер админа (в LAN режиме)
       // Это гарантирует что данные сохранятся в БД админа
       console.log('[matchStore.addWarning] Step 2: Calling updateMatchScoreUniversal...');
-      const serverMode = useServerModeStore.getState();
-      console.log('[matchStore.addWarning] Server mode:', serverMode);
 
       await updateMatchScoreUniversal({
         matchId: match.id,

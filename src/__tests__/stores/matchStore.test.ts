@@ -279,7 +279,8 @@ describe('matchStore', () => {
           redScore: 4, // 2 + 2
           blueScore: 3,
           status: 'in_progress',
-        })
+        }),
+        null // serverUrl
       );
     });
   });

@@ -134,6 +134,11 @@ impl ApiClient {
         }
     }
 
+    // Проверить, является ли текущий сервер локальным
+    fn is_local_server(&self) -> bool {
+        is_local_url(&self.base_url)
+    }
+
     // Вход администратора
     pub async fn login_admin(&self, login: String, password: String) -> Result<AuthResponse> {
         let url = format!("{}/desktop/auth/login", self.base_url);
@@ -1071,6 +1076,34 @@ impl ApiClient {
 
     // Зарезервировать сетку для судьи
     pub async fn reserve_bracket(&self, bracket_id: i32, judge_name: &str, user_id: i32) -> Result<()> {
+        // Если base_url это локальный сервер - отправить HTTP запрос
+        if self.is_local_server() {
+            let token = self.get_token().await?
+                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+
+            let url = format!("{}/desktop/brackets/reserve", self.base_url);
+            let payload = serde_json::json!({
+                "bracket_id": bracket_id,
+                "judge_name": judge_name,
+                "user_id": user_id,
+            });
+
+            let response = self.client
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&payload)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow::anyhow!("Ошибка резервирования сетки: {}", error_text));
+            }
+
+            return Ok(());
+        }
+
+        // Онлайн режим или локальная БД
         // Проверить, не занята ли уже сетка
         let existing = sqlx::query_as::<_, (String, i32)>(
             "SELECT judge_name, user_id FROM bracket_reservations WHERE bracket_id = ?"
@@ -1114,6 +1147,50 @@ impl ApiClient {
 
     // Освободить сетку (отменить резервирование)
     pub async fn release_bracket(&self, bracket_id: i32) -> Result<()> {
+        // Если base_url это локальный сервер - отправить HTTP запрос
+        if self.is_local_server() {
+            let token = self.get_token().await?
+                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+
+            // Получить judge_name из резервирования
+            let judge_name = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT judge_name FROM bracket_reservations WHERE bracket_id = ?"
+            )
+            .bind(bracket_id)
+            .fetch_optional(self.db.as_ref())
+            .await?
+            .flatten();
+
+            if let Some(name) = judge_name {
+                let url = format!("{}/desktop/brackets/release", self.base_url);
+                let payload = serde_json::json!({
+                    "bracket_id": bracket_id,
+                    "judge_name": name,
+                });
+
+                let response = self.client
+                    .post(&url)
+                    .bearer_auth(&token)
+                    .json(&payload)
+                    .send()
+                    .await?;
+
+                if !response.status().is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(anyhow::anyhow!("Ошибка освобождения сетки: {}", error_text));
+                }
+            }
+
+            // Также удалить из локальной БД
+            sqlx::query("DELETE FROM bracket_reservations WHERE bracket_id = ?")
+                .bind(bracket_id)
+                .execute(self.db.as_ref())
+                .await?;
+
+            return Ok(());
+        }
+
+        // Онлайн режим или локальная БД
         sqlx::query("DELETE FROM bracket_reservations WHERE bracket_id = ?")
             .bind(bracket_id)
             .execute(self.db.as_ref())

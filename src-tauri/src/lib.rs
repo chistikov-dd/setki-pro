@@ -788,7 +788,7 @@ async fn get_active_matches(
 }
 
 // Получить информацию о том, какие сетки заняты какими столами (bracket_id → table_number)
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct BracketTableAssignment {
     bracket_id: i32,
     table_number: i32,
@@ -798,9 +798,35 @@ struct BracketTableAssignment {
 #[tauri::command]
 async fn get_bracket_table_assignments(
     tournament_id: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<BracketTableAssignment>, String> {
-    // Получить все резервирования сеток с JOIN к judge_sessions для получения table_number
+    // Если есть server_url (local-client режим) - запросить с локального сервера
+    if let Some(url) = server_url {
+        println!("[get_bracket_table_assignments] Запрос к локальному серверу: {}", url);
+
+        let client = reqwest::Client::new();
+        let endpoint = format!("{}/api/v1/desktop/bracket-assignments/{}", url, tournament_id);
+
+        let response = client.get(&endpoint)
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка запроса к локальному серверу: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Локальный сервер вернул ошибку: {}", response.status()));
+        }
+
+        let assignments: Vec<BracketTableAssignment> = response.json()
+            .await
+            .map_err(|e| format!("Ошибка парсинга ответа: {}", e))?;
+
+        println!("[get_bracket_table_assignments] Получено {} резерваций с локального сервера", assignments.len());
+        return Ok(assignments);
+    }
+
+    // Иначе читаем из локальной БД (online или local-server режимы)
+    println!("[get_bracket_table_assignments] Чтение из локальной БД");
     let assignments = sqlx::query_as::<_, (i32, i32, String)>(
         "SELECT
             br.bracket_id,
@@ -972,9 +998,11 @@ async fn batch_update_match(
     red_warnings: i32,
     blue_warnings: i32,
     status: String,
+    server_url: Option<String>, // НОВЫЙ ПАРАМЕТР для local-client режима
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    state.api_client
+    // 1. Локальное сохранение в sync_queue (как обычно)
+    let events = state.api_client
         .batch_update_match(
             match_id,
             event_type,
@@ -986,10 +1014,59 @@ async fn batch_update_match(
             blue_score,
             red_warnings,
             blue_warnings,
-            status,
+            status.clone(),
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // 2. Если local-client режим - отправить на сервер админа
+    if let Some(url) = server_url {
+        println!("[batch_update_match] Отправка на локальный сервер: {}", url);
+
+        let client = reqwest::Client::new();
+        let payload = serde_json::json!({
+            "match_id": match_id,
+            "red_score": red_score,
+            "blue_score": blue_score,
+            "red_warnings": red_warnings,
+            "blue_warnings": blue_warnings,
+            "status": status,
+        });
+
+        let endpoint = format!("{}/api/v1/desktop/matches/update", url);
+
+        // Retry 3 раза с задержкой 500ms
+        for attempt in 0..3 {
+            match client.post(&endpoint).json(&payload).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    println!("[batch_update_match] Успешно отправлено на локальный сервер");
+                    break;
+                }
+                Ok(resp) => {
+                    eprintln!("[batch_update_match] Ошибка локального сервера: {}", resp.status());
+                    if attempt == 2 {
+                        // НЕ возвращаем ошибку - данные уже в sync_queue
+                        eprintln!("[batch_update_match] Данные сохранены локально, синхронизация через sync_worker");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[batch_update_match] Ошибка сети (попытка {}): {}", attempt + 1, e);
+                    if attempt == 2 {
+                        // НЕ возвращаем ошибку на последней попытке
+                        // Данные уже сохранены локально в sync_queue
+                        eprintln!("[batch_update_match] Данные сохранены локально, синхронизация через sync_worker");
+                        break;
+                    }
+                }
+            }
+
+            // Задержка перед retry
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    Ok(events)
 }
 
 #[tauri::command]

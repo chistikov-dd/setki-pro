@@ -65,7 +65,8 @@ export function useMatchWebSocket({
     if (mode === 'local-client' && serverUrl) {
       // Конвертируем HTTP URL в WebSocket URL
       const httpUrl = serverUrl.replace(/^https?:\/\//, ''); // убираем http(s)://
-      wsUrl = `ws://${httpUrl}/api/v1/ws/matches`;
+      const cleanUrl = httpUrl.replace(/\/api\/v1\/?$/, ''); // убираем /api/v1 если есть
+      wsUrl = `ws://${cleanUrl}/api/v1/ws/matches`;
       console.log('[useMatchWebSocket] Using local server WebSocket:', wsUrl);
     } else {
       console.log('[useMatchWebSocket] Using default WebSocket (setki.pro)');

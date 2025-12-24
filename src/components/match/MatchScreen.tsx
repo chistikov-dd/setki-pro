@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useShallow } from 'zustand/react/shallow';
 import { useMatchStore, matchStoreSelectors } from '../../stores/matchStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
 import { useMatchTimer } from '../../hooks/useMatchTimer';
 import { useToast } from '../../hooks/useToast';
 import { useMatchWebSocket } from '../../hooks/useMatchWebSocket';
@@ -178,10 +179,17 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     },
   });
 
+  // Получаем режим сервера для правильной синхронизации
+  const serverMode = useServerModeStore((state) => ({
+    mode: state.mode,
+    serverUrl: state.serverUrl,
+  }));
+
   // Background синхронизация с backend (каждые 30 секунд)
   useSyncWorker({
     enabled: true,
     interval: 30000, // 30 секунд
+    serverMode, // Передаем режим для правильной синхронизации
     onSyncSuccess: (count) => {
       if (count > 0) {
         console.log(`[SyncWorker] Synced ${count} changes to backend`);
