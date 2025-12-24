@@ -20,18 +20,21 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { setMode, setServerUrl } = useServerModeStore();
+  const { mode: storeMode, setMode, setServerUrl } = useServerModeStore();
+
+  // Используем mode из store, если он установлен, иначе из props
+  const actualMode = storeMode || currentMode;
 
   // Загрузить URL локального сервера при монтировании (если сервер уже запущен)
   useEffect(() => {
-    if (currentMode === 'local-server') {
+    if (actualMode === 'local-server') {
       invoke<string | null>('get_local_server_url').then((url) => {
         if (url) {
           setLocalServerUrl(url);
         }
       }).catch(console.error);
     }
-  }, [currentMode]);
+  }, [actualMode]);
 
   const handleStartLocalServer = async () => {
     setIsStarting(true);
@@ -102,14 +105,14 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
           )}
 
           {/* Current mode indicator */}
-          {currentMode !== 'online' && (
+          {actualMode !== 'online' && (
             <div className="bg-blue-500/10 border border-blue-500/50 rounded-lg p-4">
               <p className="text-blue-400 text-sm font-medium">
                 Текущий режим:{' '}
-                {currentMode === 'local-server' && 'Локальный сервер'}
-                {currentMode === 'local-client' && 'Подключение к локальному серверу'}
+                {actualMode === 'local-server' && 'Локальный сервер'}
+                {actualMode === 'local-client' && 'Подключение к локальному серверу'}
               </p>
-              {currentMode === 'local-server' && localServerUrl && (
+              {actualMode === 'local-server' && localServerUrl && (
                 <p className="text-blue-300 text-xs mt-2">
                   Адрес сервера: <span className="font-mono">{localServerUrl}</span>
                 </p>
@@ -128,10 +131,10 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
                 </p>
                 <Button
                   onClick={handleSwitchToOnline}
-                  variant={currentMode === 'online' ? 'primary' : 'secondary'}
-                  disabled={currentMode === 'online'}
+                  variant={actualMode === 'online' ? 'primary' : 'secondary'}
+                  disabled={actualMode === 'online'}
                 >
-                  {currentMode === 'online' ? 'Активен' : 'Переключиться'}
+                  {actualMode === 'online' ? 'Активен' : 'Переключиться'}
                 </Button>
               </div>
             )}
@@ -144,7 +147,7 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
                 Этот компьютер станет сервером для других судейских столов. Выберите этот режим на
                 главном (админском) компьютере.
               </p>
-              {currentMode === 'local-server' && localServerUrl ? (
+              {actualMode === 'local-server' && localServerUrl ? (
                 <div className="space-y-2">
                   <div className="bg-green-500/10 border border-green-500/50 rounded p-3">
                     <p className="text-green-400 text-sm font-medium mb-1">Сервер запущен!</p>
@@ -185,14 +188,14 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
                   value={localClientIp}
                   onChange={(e) => setLocalClientIp(e.target.value)}
                   placeholder="192.168.1.10"
-                  disabled={currentMode === 'local-client'}
+                  disabled={actualMode === 'local-client'}
                 />
                 <Button
                   onClick={handleConnectToLocal}
-                  variant={currentMode === 'local-client' ? 'primary' : 'secondary'}
-                  disabled={currentMode === 'local-client' || !localClientIp}
+                  variant={actualMode === 'local-client' ? 'primary' : 'secondary'}
+                  disabled={actualMode === 'local-client' || !localClientIp}
                 >
-                  {currentMode === 'local-client' ? 'Подключено' : 'Подключиться'}
+                  {actualMode === 'local-client' ? 'Подключено' : 'Подключиться'}
                 </Button>
               </div>
             </div>

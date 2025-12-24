@@ -117,9 +117,19 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(base_url: String, db: Arc<SqlitePool>) -> Self {
+        // Если base_url - локальный сервер и не содержит /api/v1, добавляем его
+        let normalized_url = if is_local_url(&base_url) && !base_url.contains("/api/v1") {
+            format!("{}/api/v1", base_url.trim_end_matches('/'))
+        } else {
+            base_url.clone()
+        };
+
+        println!("[ApiClient::new] Original base_url: {}", base_url);
+        println!("[ApiClient::new] Normalized base_url: {}", normalized_url);
+
         Self {
             client: Client::new(),
-            base_url,
+            base_url: normalized_url,
             db,
         }
     }

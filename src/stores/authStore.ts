@@ -94,9 +94,18 @@ export const useAuthStore = create<AuthState>()(
 
         // Получить serverUrl из serverModeStore если режим local-client
         const serverModeStore = (await import('./serverModeStore')).useServerModeStore.getState();
+        logger.info(LOG_CATEGORIES.AUTH, 'Server mode state', {
+          mode: serverModeStore.mode,
+          serverUrl: serverModeStore.serverUrl
+        });
+
         const serverUrl = serverModeStore.mode === 'local-client' ? serverModeStore.serverUrl : null;
 
         console.log('[authStore] Server mode:', serverModeStore.mode, 'Server URL:', serverUrl);
+        logger.info(LOG_CATEGORIES.AUTH, 'Computed serverUrl for login', {
+          mode: serverModeStore.mode,
+          serverUrl: serverUrl
+        });
 
         try {
           console.log('[authStore] Вызов loginByPin...');
