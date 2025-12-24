@@ -451,8 +451,16 @@ export async function updateMatchScoreUniversal(
   },
   serverMode: { mode: 'online' | 'local-server' | 'local-client'; serverUrl: string | null }
 ): Promise<void> {
+  console.log('[updateMatchScoreUniversal] START:', {
+    matchId: data.matchId,
+    mode: serverMode.mode,
+    serverUrl: serverMode.serverUrl,
+    willSendToServer: serverMode.mode === 'local-client' && !!serverMode.serverUrl
+  });
+
   // Если режим local-client и есть serverUrl - отправляем на сервер админа
   if (serverMode.mode === 'local-client' && serverMode.serverUrl) {
+    console.log('[updateMatchScoreUniversal] Отправка на локальный сервер админа...');
     // Retry логика: 5 попыток с экспоненциальной задержкой (1s, 2s, 4s, 8s, 16s)
     const maxRetries = 5;
     let lastError: Error | null = null;

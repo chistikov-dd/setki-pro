@@ -293,6 +293,7 @@ export interface WSScoreUpdateData {
   blue_score?: number;
   red_warnings?: number;
   blue_warnings?: number;
+  source_pin?: string; // PIN-код судьи-отправителя (для фильтрации собственных обновлений)
 }
 
 export interface WSTimerUpdateData {

@@ -130,13 +130,28 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   // Add score
   addScore: async (participant: 'red' | 'blue', points: number, actionName: string) => {
     const { match, redScore, blueScore, redWarnings, blueWarnings } = get();
-    if (!match) return;
+
+    console.log('[matchStore.addScore] START:', {
+      participant,
+      points,
+      actionName,
+      matchId: match?.id,
+      currentScores: { redScore, blueScore },
+      hasMatch: !!match,
+    });
+
+    if (!match) {
+      console.error('[matchStore.addScore] ABORT - no match loaded');
+      return;
+    }
 
     const newRedScore = participant === 'red' ? redScore + points : redScore;
     const newBlueScore = participant === 'blue' ? blueScore + points : blueScore;
     const timestamp = new Date().toISOString(); // ISO 8601 для timestamp comparison
 
     try {
+      console.log('[matchStore.addScore] Step 1: Calling batchUpdateMatch...');
+
       // 1️⃣ Локальное сохранение (резервная копия в БД судьи)
       // Batch update: record event + update score + get events (3 вызова → 1)
       const events = await batchUpdateMatch({
@@ -153,9 +168,14 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         status: 'in_progress',
       });
 
+      console.log('[matchStore.addScore] Step 1 complete, events count:', events.length);
+
       // 2️⃣ КРИТИЧНО: Отправка на сервер админа (в LAN режиме)
       // Это гарантирует что данные сохранятся в БД админа
+      console.log('[matchStore.addScore] Step 2: Calling updateMatchScoreUniversal...');
       const serverMode = useServerModeStore.getState();
+      console.log('[matchStore.addScore] Server mode:', serverMode);
+
       await updateMatchScoreUniversal({
         matchId: match.id,
         redScore: newRedScore,
@@ -165,6 +185,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         status: 'in_progress',
       }, serverMode);
 
+      console.log('[matchStore.addScore] Step 2 complete');
+
       // Update local state with timestamp
       set({
         redScore: newRedScore,
@@ -172,15 +194,32 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         events,
         lastUpdateTimestamp: timestamp,
       });
+
+      console.log('[matchStore.addScore] SUCCESS - state updated');
     } catch (error) {
-      console.error('Failed to add score:', error);
+      console.error('[matchStore.addScore] ERROR:', error);
+      console.error('[matchStore.addScore] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
   },
 
   // Add warning
   addWarning: async (participant: 'red' | 'blue') => {
     const { match, redScore, blueScore, redWarnings, blueWarnings } = get();
-    if (!match) return;
+
+    console.log('[matchStore.addWarning] START:', {
+      participant,
+      matchId: match?.id,
+      currentWarnings: { redWarnings, blueWarnings },
+      hasMatch: !!match,
+    });
+
+    if (!match) {
+      console.error('[matchStore.addWarning] ABORT - no match loaded');
+      return;
+    }
 
     const newRedWarnings = participant === 'red' ? redWarnings + 1 : redWarnings;
     const newBlueWarnings = participant === 'blue' ? blueWarnings + 1 : blueWarnings;
@@ -190,7 +229,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     const { currentSession } = useSessionStore.getState();
     const maxWarnings = currentSession?.scoring_config.warnings.max_count || 3;
 
-    console.log('[addWarning] Debug:', {
+    console.log('[matchStore.addWarning] Debug:', {
       participant,
       currentWarnings: participant === 'red' ? redWarnings : blueWarnings,
       newWarnings: participant === 'red' ? newRedWarnings : newBlueWarnings,
@@ -203,6 +242,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     // MatchScreen автоматически откроет диалог завершения матча
 
     try {
+      console.log('[matchStore.addWarning] Step 1: Calling batchUpdateMatch...');
+
       // 1️⃣ Локальное сохранение (резервная копия в БД судьи)
       // Batch update: record event + update score + get events (3 вызова → 1)
       const events = await batchUpdateMatch({
@@ -217,9 +258,14 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         status: 'in_progress',
       });
 
+      console.log('[matchStore.addWarning] Step 1 complete, events count:', events.length);
+
       // 2️⃣ КРИТИЧНО: Отправка на сервер админа (в LAN режиме)
       // Это гарантирует что данные сохранятся в БД админа
+      console.log('[matchStore.addWarning] Step 2: Calling updateMatchScoreUniversal...');
       const serverMode = useServerModeStore.getState();
+      console.log('[matchStore.addWarning] Server mode:', serverMode);
+
       await updateMatchScoreUniversal({
         matchId: match.id,
         redScore,
@@ -229,6 +275,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         status: 'in_progress',
       }, serverMode);
 
+      console.log('[matchStore.addWarning] Step 2 complete');
+
       // Update local state with timestamp
       set({
         redWarnings: newRedWarnings,
@@ -236,8 +284,14 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         lastUpdateTimestamp: timestamp,
         events,
       });
+
+      console.log('[matchStore.addWarning] SUCCESS - state updated');
     } catch (error) {
-      console.error('Failed to add warning:', error);
+      console.error('[matchStore.addWarning] ERROR:', error);
+      console.error('[matchStore.addWarning] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
   },
 
@@ -355,7 +409,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         }
       }
 
-      console.log('[finishMatch] Calling apiFinishMatch with winnerId:', finalWinnerId);
+      console.log('[matchStore.finishMatch] Step 1: Saving to local DB...', { finalWinnerId, resultType });
 
       // 1️⃣ Локальное сохранение (резервная копия в БД судьи)
       // Finish match
@@ -367,9 +421,14 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         finalBlueScore: blueScore,
       });
 
+      console.log('[matchStore.finishMatch] Step 1 complete');
+
       // 2️⃣ КРИТИЧНО: Отправка финального счета на сервер админа (в LAN режиме)
       // Это гарантирует что финальные данные сохранятся в БД админа
+      console.log('[matchStore.finishMatch] Step 2: Sending to admin server...');
       const serverMode = useServerModeStore.getState();
+      console.log('[matchStore.finishMatch] Server mode:', serverMode);
+
       await updateMatchScoreUniversal({
         matchId: match.id,
         redScore,
@@ -380,12 +439,20 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         winnerId: finalWinnerId,
       }, serverMode);
 
+      console.log('[matchStore.finishMatch] Step 2 complete');
+
       // Update local state
       set((state) => ({
         match: state.match ? { ...state.match, status: 'completed', winner_id: finalWinnerId } : null,
       }));
+
+      console.log('[matchStore.finishMatch] SUCCESS - match completed');
     } catch (error) {
-      console.error('Failed to finish match:', error);
+      console.error('[matchStore.finishMatch] ERROR:', error);
+      console.error('[matchStore.finishMatch] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       throw error;
     }
   },

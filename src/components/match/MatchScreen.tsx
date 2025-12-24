@@ -152,7 +152,15 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     pinCode: currentSession?.pin_code,
     autoConnect: true,
     onScoreUpdate: (data) => {
-      console.log('[WebSocket] Score update from another table:', data);
+      console.log('[WebSocket] Score update received:', data);
+
+      // Фильтруем собственные обновления (эхо от сервера)
+      if (data.source_pin && data.source_pin === currentSession?.pin_code) {
+        console.log('[WebSocket] Ignoring own update (echo from server)');
+        return;
+      }
+
+      console.log('[WebSocket] Applying update from another table');
 
       // Применяем удалённое обновление с timestamp-based conflict resolution
       const applied = actions.applyRemoteUpdate(data, data.timestamp || new Date().toISOString());
@@ -262,6 +270,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
           points,
           round_number: 1, // TODO: поддержка раундов
           timestamp: currentState.lastUpdateTimestamp || new Date().toISOString(),
+          source_pin: currentSession?.pin_code, // Добавляем PIN для фильтрации эха
           red_score: currentState.redScore,
           blue_score: currentState.blueScore,
           red_warnings: currentState.redWarnings,
@@ -304,6 +313,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
           points: 0,
           round_number: 1,
           timestamp: currentState.lastUpdateTimestamp || new Date().toISOString(),
+          source_pin: currentSession?.pin_code, // Добавляем PIN для фильтрации эха
           red_score: currentState.redScore,
           blue_score: currentState.blueScore,
           red_warnings: currentState.redWarnings,
