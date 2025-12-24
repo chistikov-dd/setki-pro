@@ -36,17 +36,21 @@ function ParticipantPanelBase({
 
   // Обработка кликов по счёту: ЛКМ +1, ПКМ -1
   const handleScoreClick = (e: React.MouseEvent) => {
+    console.log('[ParticipantPanel] Score clicked (+1):', { color, hasCallback: !!onAddScore });
     e.preventDefault();
     e.stopPropagation();
     if (onAddScore) {
+      console.log('[ParticipantPanel] Calling onAddScore(+1)...');
       onAddScore(1, '+1');
     }
   };
 
   const handleScoreContextMenu = (e: React.MouseEvent) => {
+    console.log('[ParticipantPanel] Score right-clicked (-1):', { color, hasCallback: !!onAddScore });
     e.preventDefault();
     e.stopPropagation();
     if (onAddScore) {
+      console.log('[ParticipantPanel] Calling onAddScore(-1)...');
       onAddScore(-1, '-1');
     }
   };
@@ -88,8 +92,12 @@ function ParticipantPanelBase({
                 variant="ghost"
                 size="sm"
                 onClick={(e) => {
+                  console.log('[ParticipantPanel] Warning (+) clicked:', { color, hasCallback: !!onAddWarning });
                   e.stopPropagation();
-                  onAddWarning && onAddWarning();
+                  if (onAddWarning) {
+                    console.log('[ParticipantPanel] Calling onAddWarning...');
+                    onAddWarning();
+                  }
                 }}
                 className="w-6 h-6 p-0 text-xs"
               >
@@ -129,8 +137,15 @@ function ParticipantPanelBase({
             variant={color}
             size="lg"
             onClick={(e) => {
+              console.log('[ParticipantPanel] Button clicked:', { color, points, hasCallback: !!onAddScore });
               e.stopPropagation(); // Предотвращаем срабатывание клика по панели
-              onAddScore && onAddScore(points, `+${points}`);
+              if (onAddScore) {
+                console.log('[ParticipantPanel] Calling onAddScore...');
+                onAddScore(points, `+${points}`);
+                console.log('[ParticipantPanel] onAddScore called');
+              } else {
+                console.error('[ParticipantPanel] onAddScore is undefined!');
+              }
             }}
             className="flex flex-col items-center justify-center py-1 sm:py-2 px-1 h-10 sm:h-12 md:h-14 lg:h-16 min-w-0"
           >

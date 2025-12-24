@@ -245,11 +245,21 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
   // Wrapper для addScore с WebSocket синхронизацией и звуком
   const handleAddScore = async (participant: 'red' | 'blue', points: number, actionName: string) => {
+    console.log('[MatchScreen.handleAddScore] Called for:', participant, {
+      points,
+      actionName,
+      matchId: match.id,
+    });
+
     // Проиграть звук
     playSound('score', points);
 
+    console.log('[MatchScreen.handleAddScore] Calling matchStore.addScore...');
+
     // Обновить локальный state через matchStore
     await actions.addScore(participant, points, actionName);
+
+    console.log('[MatchScreen.handleAddScore] matchStore.addScore completed');
 
     // Получаем актуальные значения после обновления
     const currentState = useMatchStore.getState();
