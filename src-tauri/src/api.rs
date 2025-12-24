@@ -4,6 +4,28 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
+// Helper функция для определения локального сервера
+fn is_local_url(url: &str) -> bool {
+    if url.contains("192.168.") || url.contains("10.0.") || url.contains("localhost") || url.contains("127.0.0.1") {
+        return true;
+    }
+
+    // Проверка диапазона 172.16-31.x.x
+    if url.contains("172.") {
+        // Извлекаем второй октет IP-адреса
+        if let Some(start) = url.find("172.") {
+            let rest = &url[start + 4..];
+            if let Some(dot_pos) = rest.find('.') {
+                if let Ok(second_octet) = rest[..dot_pos].parse::<u8>() {
+                    return (16..=31).contains(&second_octet);
+                }
+            }
+        }
+    }
+
+    false
+}
+
 // Типы данных для API
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthResponse {
@@ -146,11 +168,7 @@ impl ApiClient {
         println!("[ApiClient::login_by_pin] table_number: {:?}", table_number);
 
         // Если base_url - локальный сервер (содержит 192.168 или 10.0), отправляем judge_name и table_number
-        let is_local_server = self.base_url.contains("192.168")
-            || self.base_url.contains("10.0")
-            || self.base_url.contains("172.16")
-            || self.base_url.contains("127.0.0.1")
-            || self.base_url.contains("localhost");
+        let is_local_server = is_local_url(&self.base_url);
 
         println!("[ApiClient::login_by_pin] is_local_server: {}", is_local_server);
 
@@ -572,11 +590,7 @@ impl ApiClient {
     // Получить сетки из кэша (offline)
     pub async fn get_cached_brackets(&self, tournament_id: i32) -> Result<Vec<serde_json::Value>> {
         // Проверяем, это локальный сервер или setki.pro
-        let is_local_server = self.base_url.contains("192.168.")
-            || self.base_url.contains("10.0.")
-            || self.base_url.contains("172.16.")
-            || self.base_url.contains("localhost")
-            || self.base_url.contains("127.0.0.1");
+        let is_local_server = is_local_url(&self.base_url);
 
         if is_local_server {
             // Делаем HTTP запрос к локальному серверу
@@ -642,6 +656,41 @@ impl ApiClient {
         .await?;
 
         for (id, _match_id, data) in records {
+            // Проверить тип действия
+            let data_json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::json!({}));
+            let action = data_json.get("action").and_then(|v| v.as_str());
+
+            // TODO: Backend API не поддерживает синхронизацию продвижения участников и редактирований сеток
+            // Нужно добавить отдельные endpoints на backend:
+            // - /desktop/sync/participants для продвижения победителей
+            // - /desktop/sync/bracket_edits для редактирования участников
+            // Пока это критично только для online режима; в offline режиме всё работает через локальный сервер
+            if action == Some("update_participant") {
+                println!("[sync_changes] WARNING: Participant advancement sync not supported in online mode (requires backend API update)");
+                println!("[sync_changes] Skipping sync for participant update, data: {}", data);
+                // Пометить как synced чтобы не пытаться бесконечно
+                sqlx::query(
+                    "UPDATE sync_queue SET synced = 1, synced_at = datetime('now') WHERE id = ?"
+                )
+                .bind(id)
+                .execute(self.db.as_ref())
+                .await?;
+                continue;
+            }
+
+            if data_json.get("type").and_then(|v| v.as_str()) == Some("bracket_edit") {
+                println!("[sync_changes] WARNING: Bracket edit sync not supported in online mode (requires backend API update)");
+                println!("[sync_changes] Skipping sync for bracket edit, data: {}", data);
+                // Пометить как synced чтобы не пытаться бесконечно
+                sqlx::query(
+                    "UPDATE sync_queue SET synced = 1, synced_at = datetime('now') WHERE id = ?"
+                )
+                .bind(id)
+                .execute(self.db.as_ref())
+                .await?;
+                continue;
+            }
+
             let url = format!("{}/desktop/sync/matches", self.base_url);
             let response = self.client
                 .post(&url)
@@ -719,6 +768,64 @@ impl ApiClient {
         }
 
         Ok(())
+    }
+
+    /// Отправить обновление участника на локальный сервер (для продвижения победителя)
+    pub async fn update_match_participant_on_local_server(
+        &self,
+        server_url: &str,
+        match_id: i32,
+        participant_slot: u8, // 1 или 2
+        participant_id: Option<i32>,
+        participant_name: Option<String>,
+        club: Option<String>,
+    ) -> Result<()> {
+        println!("[ApiClient] Sending participant update to local server: match_id={}, slot={}, name={:?}",
+            match_id, participant_slot, participant_name);
+
+        let url = format!("{}/api/v1/desktop/matches/participant", server_url);
+
+        // Retry логика: 5 попыток с экспоненциальной задержкой (1s, 2s, 4s, 8s, 16s)
+        let max_retries = 5;
+        for attempt in 0..max_retries {
+            let response = reqwest::Client::new()
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({
+                    "match_id": match_id,
+                    "participant_slot": participant_slot,
+                    "participant_id": participant_id,
+                    "participant_name": participant_name,
+                    "club": club,
+                }))
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {
+                    println!("[ApiClient] Participant update sent successfully on attempt {}", attempt + 1);
+                    return Ok(());
+                },
+                Ok(resp) => {
+                    println!("[ApiClient] Participant update failed with status {} on attempt {}", resp.status(), attempt + 1);
+                    if attempt < max_retries - 1 {
+                        let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        tokio::time::sleep(delay).await;
+                    }
+                },
+                Err(e) => {
+                    println!("[ApiClient] Participant update network error on attempt {}: {}", attempt + 1, e);
+                    if attempt < max_retries - 1 {
+                        let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        // Все попытки исчерпаны
+        Err(anyhow::anyhow!("Failed to send participant update to local server after {} retries", max_retries))
     }
 
     // Получить список турниров администратора (с fallback на offline)
@@ -1055,9 +1162,20 @@ impl ApiClient {
         // Если приложение упадет между UPDATE и INSERT - транзакция откатится
         let mut tx = self.db.begin().await?;
 
-        // Обновить локальный кэш matches_cache
+        // Обновить локальный кэш matches_cache с optimistic locking
         // participant1 = blue, participant2 = red (согласно существующей схеме)
-        sqlx::query(
+        // Сначала читаем текущую версию
+        let current_version: Option<(i64,)> = sqlx::query_as(
+            "SELECT version FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(match_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let version = current_version.map(|(v,)| v).unwrap_or(1);
+
+        // Обновляем только если version совпадает (optimistic locking)
+        let rows_affected = sqlx::query(
             "UPDATE matches_cache
              SET data = json_set(
                  json_set(
@@ -1066,16 +1184,25 @@ impl ApiClient {
                          '$.score_participant2', ?),
                      '$.warnings_participant1', ?),
                  '$.warnings_participant2', ?),
+                 version = version + 1,
                  updated_at = datetime('now')
-             WHERE match_id = ?"
+             WHERE match_id = ? AND version = ?"
         )
         .bind(blue_score)
         .bind(red_score)
         .bind(blue_warnings)
         .bind(red_warnings)
         .bind(match_id)
+        .bind(version)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+
+        // Если rows_affected = 0, значит версия изменилась (конкурентное обновление)
+        if rows_affected == 0 {
+            println!("[update_match_score] WARNING: Optimistic lock failed for match_id={}, version={}", match_id, version);
+            return Err(anyhow::anyhow!("Match was updated by another judge, please retry"));
+        }
 
         // Добавить в очередь синхронизации
         // ВАЖНО: Формат для production API (setki.pro)
@@ -1193,9 +1320,20 @@ impl ApiClient {
         .execute(&mut *tx)
         .await?;
 
-        // 2. Обновить счет матча в кэше
+        // 2. Обновить счет матча в кэше с optimistic locking
         // participant1 = blue, participant2 = red
-        sqlx::query(
+        // Сначала читаем текущую версию
+        let current_version: Option<(i64,)> = sqlx::query_as(
+            "SELECT version FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(match_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let version = current_version.map(|(v,)| v).unwrap_or(1);
+
+        // Обновляем только если version совпадает (optimistic locking)
+        let rows_affected = sqlx::query(
             "UPDATE matches_cache
              SET data = json_set(
                  json_set(
@@ -1204,16 +1342,25 @@ impl ApiClient {
                          '$.score_participant2', ?),
                      '$.warnings_participant1', ?),
                  '$.warnings_participant2', ?),
+                 version = version + 1,
                  updated_at = datetime('now')
-             WHERE match_id = ?"
+             WHERE match_id = ? AND version = ?"
         )
         .bind(blue_score)
         .bind(red_score)
         .bind(blue_warnings)
         .bind(red_warnings)
         .bind(match_id)
+        .bind(version)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+
+        // Если rows_affected = 0, значит версия изменилась (конкурентное обновление)
+        if rows_affected == 0 {
+            println!("[batch_update_match] WARNING: Optimistic lock failed for match_id={}, version={}", match_id, version);
+            return Err(anyhow::anyhow!("Match was updated by another judge, please retry"));
+        }
 
         // 3. Добавить в очередь синхронизации
         // ВАЖНО: Формат для production API (setki.pro)
@@ -1348,6 +1495,9 @@ impl ApiClient {
         // Начинаем транзакцию для атомарности всех операций
         println!("[finish_match] Starting transaction for atomic match completion");
         let mut tx = self.db.begin().await?;
+
+        // Переменная для хранения данных о продвижении победителя (для отправки на локальный сервер после коммита)
+        let mut advancement_data: Option<(i32, u8, Option<i32>, Option<String>, Option<String>)> = None;
 
         // Если произойдёт ошибка ниже, транзакция автоматически откатится при drop
         let transaction_result: Result<(), anyhow::Error> = async {
@@ -1643,6 +1793,16 @@ impl ApiClient {
                     .await?;
 
                 println!("[finish_match] Successfully advanced winner to next match_id: {}", next_match_id);
+
+                // Сохранить данные для отправки на локальный сервер после коммита транзакции
+                let participant_slot = if current_match_number % 2 == 0 { 1 } else { 2 };
+                let participant_id = winner_participant_json["id"].as_i64().map(|id| id as i32);
+                let participant_name = winner_participant_json["full_name"].as_str().map(String::from);
+                let club = winner_participant_json["club_name"].as_str().map(String::from);
+
+                advancement_data = Some((next_match_id, participant_slot, participant_id, participant_name, club));
+                println!("[finish_match] Saved advancement data for local server sync: match_id={}, slot={}, participant_id={:?}",
+                         next_match_id, participant_slot, participant_id);
             } else {
                 println!("[finish_match] WARNING: No next match found for bracket_id: {}, round: {}, match_number: {} - this might be the final match or data issue",
                          bracket_id, next_round, next_match_number);
@@ -1680,6 +1840,41 @@ impl ApiClient {
                 // Всё успешно - коммитим транзакцию
                 tx.commit().await?;
                 println!("[finish_match] Transaction committed successfully");
+
+                // После успешного коммита - отправить данные о продвижении на локальный сервер (если есть)
+                if let Some((next_match_id, participant_slot, participant_id, participant_name, club)) = advancement_data {
+                    println!("[finish_match] Checking if should send advancement to local server...");
+
+                    // Проверяем, находимся ли мы в режиме local-client
+                    // Локальный сервер - это IP вида 192.168.x.x, 10.0.x.x, 172.16-31.x.x, localhost
+                    let is_local_server = is_local_url(&self.base_url);
+
+                    if is_local_server {
+                        println!("[finish_match] Local server detected ({}), sending participant advancement...", self.base_url);
+
+                        // Отправляем обновление участника на локальный сервер
+                        // ВАЖНО: Не фейлим finish_match если отправка не удалась - данные уже сохранены в локальной БД
+                        match self.update_match_participant_on_local_server(
+                            &self.base_url,
+                            next_match_id,
+                            participant_slot,
+                            participant_id,
+                            participant_name,
+                            club,
+                        ).await {
+                            Ok(_) => {
+                                println!("[finish_match] ✅ Successfully sent participant advancement to local server");
+                            }
+                            Err(e) => {
+                                println!("[finish_match] ⚠️ WARNING: Failed to send participant advancement to local server: {}",  e);
+                                println!("[finish_match] Data is safe in local DB and sync_queue, will retry later");
+                            }
+                        }
+                    } else {
+                        println!("[finish_match] Online mode detected ({}), skipping local server sync (will use sync_queue)", self.base_url);
+                    }
+                }
+
                 Ok(())
             }
             Err(e) => {

@@ -30,6 +30,12 @@ export class MatchWebSocket {
     this.matchId = matchId;
     this.pinCode = pinCode;
     this.customUrl = customUrl;
+
+    // Для LAN режима (customUrl) увеличиваем количество попыток переподключения
+    // Online: 5 попыток (~31 секунда), LAN: 20 попыток (~17 минут)
+    if (customUrl) {
+      this.maxReconnectAttempts = 20;
+    }
   }
 
   /**

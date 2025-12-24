@@ -65,11 +65,29 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
             match_id INTEGER PRIMARY KEY,
             bracket_id INTEGER NOT NULL,
             data TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
         )"
     )
     .execute(pool)
     .await?;
+
+    // Добавить колонку version если её нет (для существующих БД)
+    // PRAGMA table_info возвращает пустой результат если колонки нет
+    let column_exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'version'"
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((count,)) = column_exists {
+        if count == 0 {
+            println!("[DB] Adding version column to matches_cache for optimistic locking");
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+                .execute(pool)
+                .await?;
+        }
+    }
 
     // Очередь синхронизации
     sqlx::query(

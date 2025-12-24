@@ -87,6 +87,15 @@ pub struct UpdateMatchScoreRequest {
     pub winner_id: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateMatchParticipantRequest {
+    pub match_id: i32,
+    pub participant_slot: u8, // 1 = participant1, 2 = participant2
+    pub participant_id: Option<i32>,
+    pub participant_name: Option<String>,
+    pub club: Option<String>,
+}
+
 // Start the local HTTP/WebSocket server
 pub async fn start_server(
     db: Arc<SqlitePool>,
@@ -111,6 +120,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/brackets/tournament/:id", get(get_tournament_brackets_handler))
         .route("/api/v1/desktop/sync/matches", post(sync_matches_handler))
         .route("/api/v1/desktop/matches/update", post(update_match_score_handler))
+        .route("/api/v1/desktop/matches/participant", post(update_match_participant_handler))
 
         // WebSocket endpoints
         .route("/api/v1/ws/matches/:match_id", get(websocket_handler))
@@ -335,22 +345,23 @@ async fn update_match_score_handler(
     State(state): State<LocalServerState>,
     Json(payload): Json<UpdateMatchScoreRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // 1. Получить текущие данные матча из БД
-    let current_data: Option<(String,)> = sqlx::query_as(
-        "SELECT data FROM matches_cache WHERE match_id = ?"
+    // 1. Получить текущие данные матча и версию из БД (optimistic locking)
+    let current_data: Option<(String, i64)> = sqlx::query_as(
+        "SELECT data, version FROM matches_cache WHERE match_id = ?"
     )
     .bind(payload.match_id)
     .fetch_optional(&*state.db)
     .await?;
 
-    // 2. Обновить данные матча
-    let mut match_data: serde_json::Value = if let Some((data_str,)) = current_data {
-        serde_json::from_str(&data_str).unwrap_or(serde_json::json!({}))
+    let (mut match_data, version) = if let Some((data_str, ver)) = current_data {
+        (serde_json::from_str(&data_str).unwrap_or(serde_json::json!({})), ver)
     } else {
-        serde_json::json!({})
+        // Матч не найден - это ошибка, так как админ должен был скачать турнир
+        println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
+        return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
     };
 
-    // Обновить поля
+    // 2. Обновить поля
     match_data["red_score"] = serde_json::json!(payload.red_score);
     match_data["blue_score"] = serde_json::json!(payload.blue_score);
     match_data["red_warnings"] = serde_json::json!(payload.red_warnings);
@@ -365,17 +376,25 @@ async fn update_match_score_handler(
         match_data["winner_id"] = serde_json::json!(winner_id);
     }
 
-    // 3. Сохранить в БД
-    let bracket_id = match_data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0);
-    sqlx::query(
-        "INSERT OR REPLACE INTO matches_cache (match_id, bracket_id, data, updated_at)
-         VALUES (?, ?, ?, datetime('now'))"
+    // 3. Сохранить в БД с optimistic locking (обновить только если version совпадает)
+    let _bracket_id = match_data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0);
+    let rows_affected = sqlx::query(
+        "UPDATE matches_cache
+         SET data = ?, version = version + 1, updated_at = datetime('now')
+         WHERE match_id = ? AND version = ?"
     )
-    .bind(payload.match_id)
-    .bind(bracket_id)
     .bind(match_data.to_string())
+    .bind(payload.match_id)
+    .bind(version)
     .execute(&*state.db)
-    .await?;
+    .await?
+    .rows_affected();
+
+    // Если rows_affected = 0, значит версия изменилась (конкурентное обновление)
+    if rows_affected == 0 {
+        println!("[LOCAL SERVER] WARNING: Optimistic lock failed for match_id={}, version={}", payload.match_id, version);
+        return Err(AppError::Conflict("Match was updated by another judge, please retry".to_string()));
+    }
 
     // 4. Broadcast через WebSocket всем подключенным судьям
     let channels = state.match_channels.read().await;
@@ -401,6 +420,107 @@ async fn update_match_score_handler(
         "match_id": payload.match_id,
         "red_score": payload.red_score,
         "blue_score": payload.blue_score
+    })))
+}
+
+// Update match participant handler (for winner advancement)
+async fn update_match_participant_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<UpdateMatchParticipantRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== update_match_participant_handler START ==========");
+    println!("[LOCAL SERVER] match_id: {}, slot: {}, participant_id: {:?}, name: {:?}",
+        payload.match_id, payload.participant_slot, payload.participant_id, payload.participant_name);
+
+    // 1. Получить текущие данные матча и версию (optimistic locking)
+    let current_data: Option<(String, i64)> = sqlx::query_as(
+        "SELECT data, version FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(payload.match_id)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    // 2. Обновить данные участника
+    let (mut match_data, version) = if let Some((data_str, ver)) = current_data {
+        (serde_json::from_str(&data_str).unwrap_or(serde_json::json!({})), ver)
+    } else {
+        println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
+        return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
+    };
+
+    // Обновить поля участника в зависимости от slot
+    if payload.participant_slot == 1 {
+        if let Some(id) = payload.participant_id {
+            match_data["participant1_id"] = serde_json::json!(id);
+        }
+        if let Some(name) = &payload.participant_name {
+            match_data["fighter1_name"] = serde_json::json!(name);
+        }
+        if let Some(club) = &payload.club {
+            match_data["participant1_club"] = serde_json::json!(club);
+        }
+        println!("[LOCAL SERVER] Updated participant1: id={:?}, name={:?}",
+            payload.participant_id, payload.participant_name);
+    } else if payload.participant_slot == 2 {
+        if let Some(id) = payload.participant_id {
+            match_data["participant2_id"] = serde_json::json!(id);
+        }
+        if let Some(name) = &payload.participant_name {
+            match_data["fighter2_name"] = serde_json::json!(name);
+        }
+        if let Some(club) = &payload.club {
+            match_data["participant2_club"] = serde_json::json!(club);
+        }
+        println!("[LOCAL SERVER] Updated participant2: id={:?}, name={:?}",
+            payload.participant_id, payload.participant_name);
+    } else {
+        println!("[LOCAL SERVER] ERROR: Invalid participant_slot: {}", payload.participant_slot);
+        return Err(AppError::BadRequest("Invalid participant_slot (must be 1 or 2)".to_string()));
+    }
+
+    // 3. Сохранить в БД с optimistic locking
+    let _bracket_id = match_data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0);
+    let rows_affected = sqlx::query(
+        "UPDATE matches_cache
+         SET data = ?, version = version + 1, updated_at = datetime('now')
+         WHERE match_id = ? AND version = ?"
+    )
+    .bind(match_data.to_string())
+    .bind(payload.match_id)
+    .bind(version)
+    .execute(&*state.db)
+    .await?
+    .rows_affected();
+
+    // Если rows_affected = 0, значит версия изменилась (конкурентное обновление)
+    if rows_affected == 0 {
+        println!("[LOCAL SERVER] WARNING: Optimistic lock failed for match_id={}, version={}", payload.match_id, version);
+        return Err(AppError::Conflict("Match was updated by another judge, please retry".to_string()));
+    }
+
+    println!("[LOCAL SERVER] Participant data saved to matches_cache (version incremented)");
+
+    // 4. Broadcast через WebSocket
+    let channels = state.match_channels.read().await;
+    if let Some(tx) = channels.get(&payload.match_id.to_string()) {
+        let ws_message = serde_json::json!({
+            "type": "participant_update",
+            "match_id": payload.match_id,
+            "participant_slot": payload.participant_slot,
+            "participant_id": payload.participant_id,
+            "participant_name": payload.participant_name,
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        });
+
+        let _ = tx.send(ws_message.to_string());
+        println!("[LOCAL SERVER] Broadcast participant update to WebSocket subscribers");
+    }
+
+    println!("[LOCAL SERVER] ========== update_match_participant_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({
+        "status": "updated",
+        "match_id": payload.match_id,
+        "participant_slot": payload.participant_slot
     })))
 }
 
@@ -589,6 +709,8 @@ async fn handle_admin_socket(socket: WebSocket, state: LocalServerState) {
 pub enum AppError {
     Database(sqlx::Error),
     Unauthorized(String),
+    BadRequest(String),
+    Conflict(String),
     Internal(String),
 }
 
@@ -606,6 +728,12 @@ impl IntoResponse for AppError {
             }
             AppError::Unauthorized(msg) => {
                 (StatusCode::UNAUTHORIZED, msg)
+            }
+            AppError::BadRequest(msg) => {
+                (StatusCode::BAD_REQUEST, msg)
+            }
+            AppError::Conflict(msg) => {
+                (StatusCode::CONFLICT, msg)
             }
             AppError::Internal(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)

@@ -96,7 +96,8 @@ async fn login_by_pin(
     state.logger.info(&format!("[login_by_pin] server_url: {:?}", server_url));
 
     // Если передан server_url (режим local-client), создаём временный ApiClient с этим URL
-    let api_client: Arc<ApiClient> = if let Some(url) = server_url.clone() {
+    // Валидация: игнорируем пустые строки
+    let api_client: Arc<ApiClient> = if let Some(url) = server_url.clone().filter(|s| !s.is_empty()) {
         state.logger.info(&format!("[login_by_pin] Creating custom ApiClient with URL: {}", url));
         Arc::new(ApiClient::new(url, Arc::clone(&state.db_pool)))
     } else {
@@ -217,7 +218,8 @@ async fn get_cached_brackets(
     println!("[get_cached_brackets] tournament_id: {}, server_url: {:?}", tournament_id, server_url);
 
     // Если передан server_url, используем его для создания временного клиента
-    if let Some(url) = server_url {
+    // Валидация: игнорируем пустые строки
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
         println!("[get_cached_brackets] Using custom server URL: {}", url);
         let api_client = ApiClient::new(url, Arc::clone(&state.db_pool));
         api_client
@@ -998,47 +1000,24 @@ async fn finish_match(
 ) -> Result<(), String> {
     let pool = &state.db_pool;
 
-    // Отправить на сервер
+    // Отправить на сервер (api_client.finish_match уже обновляет matches_cache)
     state.api_client
         .finish_match(match_id, winner_id, result_type.clone(), final_red_score, final_blue_score)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Обновить локальный кэш матча
-    println!("[finish_match] Обновление локального кэша для match_id={}", match_id);
-    let match_data = sqlx::query("SELECT bracket_id, data FROM matches_cache WHERE match_id = ?")
+    // Пересчитать статус сетки (после того как api_client обновил матч)
+    println!("[finish_match] Получение bracket_id для пересчета статуса сетки");
+    let bracket_id: Option<i32> = sqlx::query_scalar(
+        "SELECT bracket_id FROM matches_cache WHERE match_id = ?"
+    )
         .bind(match_id)
         .fetch_optional(pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Some(row) = match_data {
-        let bracket_id: i32 = sqlx::Row::get(&row, "bracket_id");
-        let data_str: String = sqlx::Row::get(&row, "data");
-        let mut match_obj: serde_json::Value = serde_json::from_str(&data_str)
-            .map_err(|e| e.to_string())?;
-
-        println!("[finish_match] Найден матч в кэше, bracket_id={}", bracket_id);
-
-        // Обновить статус матча
-        match_obj["status"] = serde_json::json!("completed");
-        match_obj["winner_id"] = serde_json::json!(winner_id);
-        match_obj["result_type"] = serde_json::json!(result_type);
-        // ВАЖНО: participant1 = BLUE, participant2 = RED
-        match_obj["score_participant1"] = serde_json::json!(final_blue_score);
-        match_obj["score_participant2"] = serde_json::json!(final_red_score);
-
-        // Сохранить обновленный матч
-        sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
-            .bind(serde_json::to_string(&match_obj).unwrap())
-            .bind(match_id)
-            .execute(pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
-
-        println!("[finish_match] Матч обновлен в кэше, вызываем update_bracket_status");
-
-        // Пересчитать статус сетки
+    if let Some(bracket_id) = bracket_id {
+        println!("[finish_match] Пересчет статуса сетки bracket_id={}", bracket_id);
         update_bracket_status(bracket_id, pool).await?;
     } else {
         println!("[finish_match] ВНИМАНИЕ: Матч {} не найден в локальном кэше", match_id);

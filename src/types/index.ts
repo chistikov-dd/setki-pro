@@ -272,6 +272,7 @@ export type WSMessageType =
   | 'timer_update'
   | 'round_change'
   | 'action_recorded'
+  | 'participant_update'
   | 'error'
   | 'connected';
 
@@ -303,6 +304,14 @@ export interface WSTimerUpdateData {
 export interface WSMatchEndData {
   winner_id?: number;
   result_type?: 'points' | 'submission' | 'disqualification';
+}
+
+export interface WSParticipantUpdateData {
+  match_id: number;
+  participant_slot: number; // 1 или 2
+  participant_id?: number | null;
+  participant_name?: string | null;
+  timestamp?: string;
 }
 
 // ============================================

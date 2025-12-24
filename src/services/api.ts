@@ -439,8 +439,8 @@ export async function updateMatchScoreUniversal(
 ): Promise<void> {
   // Если режим local-client и есть serverUrl - отправляем на сервер админа
   if (serverMode.mode === 'local-client' && serverMode.serverUrl) {
-    // Retry логика: 3 попытки с экспоненциальной задержкой (1s, 2s, 4s)
-    const maxRetries = 3;
+    // Retry логика: 5 попыток с экспоненциальной задержкой (1s, 2s, 4s, 8s, 16s)
+    const maxRetries = 5;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -448,24 +448,25 @@ export async function updateMatchScoreUniversal(
         await updateMatchOnLocalServer(serverMode.serverUrl, data);
         // Успех - выходим
         if (attempt > 0) {
-          console.log(`[updateMatchScoreUniversal] Успешно отправлено на попытке ${attempt + 1}`);
+          console.log(`[updateMatchScoreUniversal] ✅ Успешно отправлено на попытке ${attempt + 1}/${maxRetries}`);
         }
         return;
       } catch (error) {
         lastError = error as Error;
+        console.error(`[updateMatchScoreUniversal] ❌ Попытка ${attempt + 1}/${maxRetries} не удалась:`, error);
 
         // Если это последняя попытка - не ждём
         if (attempt < maxRetries - 1) {
-          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-          console.warn(`[updateMatchScoreUniversal] Попытка ${attempt + 1} не удалась, повтор через ${delay}ms`);
+          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s, 8s, 16s
+          console.warn(`[updateMatchScoreUniversal] ⏳ Повторная попытка через ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
       }
     }
 
     // Все попытки исчерпаны
-    console.error('[updateMatchScoreUniversal] Не удалось отправить на локальный сервер после 3 попыток:', lastError);
-    console.warn('[updateMatchScoreUniversal] Данные сохранены локально, будут отправлены при восстановлении связи');
+    console.error(`[updateMatchScoreUniversal] ❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось отправить на локальный сервер после ${maxRetries} попыток:`, lastError);
+    console.warn('[updateMatchScoreUniversal] ⚠️ Данные сохранены локально в sync_queue и будут отправлены при восстановлении связи');
     // Данные уже сохранены через batchUpdateMatch() в sync_queue
   }
   // Для online/local-server режимов: ничего не делаем

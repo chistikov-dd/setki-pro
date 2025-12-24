@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createMatchWebSocket, type MatchWebSocket } from '../services/websocket';
-import type { WSScoreUpdateData } from '../types';
+import type { WSScoreUpdateData, WSParticipantUpdateData } from '../types';
 import { useServerModeStore } from '../stores/serverModeStore';
 
 interface UseMatchWebSocketOptions {
@@ -8,6 +8,7 @@ interface UseMatchWebSocketOptions {
   pinCode?: string;
   autoConnect?: boolean;
   onScoreUpdate?: (data: WSScoreUpdateData) => void;
+  onParticipantUpdate?: (data: WSParticipantUpdateData) => void;
   onMatchStart?: () => void;
   onMatchEnd?: () => void;
 }
@@ -30,6 +31,7 @@ export function useMatchWebSocket({
   pinCode,
   autoConnect = true,
   onScoreUpdate,
+  onParticipantUpdate,
   onMatchStart,
   onMatchEnd,
 }: UseMatchWebSocketOptions) {
@@ -37,23 +39,26 @@ export function useMatchWebSocket({
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Получаем режим и serverUrl реактивно из store (для автоматического переподключения при изменении)
+  const mode = useServerModeStore((state) => state.mode);
+  const serverUrl = useServerModeStore((state) => state.serverUrl);
+
   // Используем refs для колбэков, чтобы они не вызывали пересоздание WebSocket
   const onScoreUpdateRef = useRef(onScoreUpdate);
+  const onParticipantUpdateRef = useRef(onParticipantUpdate);
   const onMatchStartRef = useRef(onMatchStart);
   const onMatchEndRef = useRef(onMatchEnd);
 
   // Обновляем refs при изменении колбэков
   useEffect(() => {
     onScoreUpdateRef.current = onScoreUpdate;
+    onParticipantUpdateRef.current = onParticipantUpdate;
     onMatchStartRef.current = onMatchStart;
     onMatchEndRef.current = onMatchEnd;
-  }, [onScoreUpdate, onMatchStart, onMatchEnd]);
+  }, [onScoreUpdate, onParticipantUpdate, onMatchStart, onMatchEnd]);
 
   useEffect(() => {
     if (!autoConnect) return;
-
-    // Получаем текущий режим и serverUrl из store
-    const { mode, serverUrl } = useServerModeStore.getState();
 
     // Формируем WebSocket URL для локального сервера
     let wsUrl: string | undefined;
@@ -77,6 +82,14 @@ export function useMatchWebSocket({
       ws.on('score_update', (message) => {
         if (message.data && onScoreUpdateRef.current) {
           onScoreUpdateRef.current(message.data as WSScoreUpdateData);
+        }
+      })
+    );
+
+    unsubscribers.push(
+      ws.on('participant_update', (message) => {
+        if (message.data && onParticipantUpdateRef.current) {
+          onParticipantUpdateRef.current(message.data as WSParticipantUpdateData);
         }
       })
     );
@@ -110,14 +123,14 @@ export function useMatchWebSocket({
         console.error('[useMatchWebSocket] Connection failed:', err);
       });
 
-    // Cleanup on unmount
+    // Cleanup on unmount or when mode/serverUrl changes
     return () => {
-      console.log('[useMatchWebSocket] Disconnecting from match:', matchId);
+      console.log('[useMatchWebSocket] Disconnecting from match:', matchId, 'mode:', mode);
       unsubscribers.forEach((unsub) => unsub());
       ws.disconnect();
       setIsConnected(false);
     };
-  }, [matchId, pinCode, autoConnect]); // Убрали колбэки из зависимостей!
+  }, [matchId, pinCode, autoConnect, mode, serverUrl]); // mode и serverUrl для автопереподключения!
 
   return {
     isConnected,
