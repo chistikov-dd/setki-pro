@@ -619,12 +619,18 @@ impl ApiClient {
         if is_local_server {
             // Делаем HTTP запрос к локальному серверу
             println!("[ApiClient::get_cached_brackets] Requesting from local server: {}", self.base_url);
+            println!("[ApiClient::get_cached_brackets] is_local_server: true");
 
             let url = format!("{}/desktop/brackets/tournament/{}", self.base_url, tournament_id);
+            println!("[ApiClient::get_cached_brackets] Full URL: {}", url);
+            println!("[ApiClient::get_cached_brackets] Sending HTTP GET request...");
+
             let response = self.client
                 .get(&url)
                 .send()
                 .await?;
+
+            println!("[ApiClient::get_cached_brackets] HTTP response received, status: {}", response.status());
 
             if response.status().is_success() {
                 let brackets: Vec<serde_json::Value> = response.json().await?;
