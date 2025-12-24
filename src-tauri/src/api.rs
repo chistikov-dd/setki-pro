@@ -1145,7 +1145,7 @@ impl ApiClient {
 
     // Получить матчи сетки (из кэша или с локального сервера)
     pub async fn get_bracket_matches(&self, bracket_id: i32) -> Result<Vec<serde_json::Value>> {
-        let is_local_server = self.is_local_server();
+        let is_local_server = is_local_url(&self.base_url);
 
         if is_local_server {
             // Делаем HTTP запрос к локальному серверу
@@ -1161,8 +1161,9 @@ impl ApiClient {
             println!("[ApiClient::get_bracket_matches] HTTP response status: {}", response.status());
 
             if !response.status().is_success() {
+                let status = response.status();
                 let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(anyhow::anyhow!("HTTP error {}: {}", response.status(), error_text));
+                return Err(anyhow::anyhow!("HTTP error {}: {}", status, error_text));
             }
 
             let matches: Vec<serde_json::Value> = response.json().await?;

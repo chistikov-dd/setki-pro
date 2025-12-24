@@ -6,6 +6,7 @@ import {
   getBracketEditHistory,
   createTempParticipant
 } from '../services/api';
+import { useServerModeStore } from './serverModeStore';
 import type { Match } from '../types';
 
 interface DraggedParticipant {
@@ -131,13 +132,19 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
   dropParticipant: async (targetMatchId, targetSlot, bracketId, judgeName, adminId) => {
     const { draggedParticipant } = get();
 
+    // Получить serverUrl из store для локального сервера
+    const { mode, serverUrl } = useServerModeStore.getState();
+    const url = mode === 'local-client' ? serverUrl : null;
+
     console.log('[bracketEditorStore] dropParticipant вызван:', {
       targetMatchId,
       targetSlot,
       bracketId,
       draggedParticipant,
       judgeName,
-      adminId
+      adminId,
+      mode,
+      serverUrl: url
     });
 
     if (!draggedParticipant) {
@@ -168,7 +175,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
         };
 
         console.log('[bracketEditorStore] Отправка swap внутри одного матча:', request);
-        await swapBracketParticipants(request, judgeName, adminId);
+        await swapBracketParticipants(request, judgeName, adminId, url);
         console.log('[bracketEditorStore] Swap внутри матча успешно выполнен');
 
         set({ draggedParticipant: null, isLoading: false });
@@ -200,7 +207,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
       };
 
       console.log('[bracketEditorStore] Отправка запроса swapBracketParticipants:', request);
-      await swapBracketParticipants(request, judgeName, adminId);
+      await swapBracketParticipants(request, judgeName, adminId, url);
       console.log('[bracketEditorStore] swapBracketParticipants успешно выполнен');
 
       set({ draggedParticipant: null, isLoading: false });
@@ -247,6 +254,12 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
+      // Получить serverUrl из store для локального сервера
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      console.log('[bracketEditorStore] addParticipant - mode:', mode, 'serverUrl:', url);
+
       // Если fighter_id не указан, создать временного участника
       let fighterId = fighterData.fighter_id;
 
@@ -256,7 +269,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
           bracketId,
           fullName: fighterData.fighter_name,
           clubName: fighterData.club_name,
-        });
+        }, url);
         console.log('[BracketEditor] Temp participant created with ID:', fighterId);
       }
 
@@ -271,7 +284,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
         operation_type: 'add',
       };
 
-      await updateBracketParticipant(request, judgeName, adminId);
+      await updateBracketParticipant(request, judgeName, adminId, url);
 
       set({ isLoading: false });
       get().closeModals();
@@ -298,6 +311,12 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
+      // Получить serverUrl из store для локального сервера
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      console.log('[bracketEditorStore] removeParticipant - mode:', mode, 'serverUrl:', url);
+
       const request: ParticipantEditRequest = {
         bracket_id: bracketId,
         match_id: matchId,
@@ -306,7 +325,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
       };
 
       console.log('[bracketEditorStore] Отправка запроса на удаление:', request);
-      await updateBracketParticipant(request, judgeName, adminId);
+      await updateBracketParticipant(request, judgeName, adminId, url);
       console.log('[bracketEditorStore] Запрос успешно выполнен');
 
       set({ isLoading: false });
@@ -327,6 +346,12 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
+      // Получить serverUrl из store для локального сервера
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      console.log('[bracketEditorStore] replaceParticipant - mode:', mode, 'serverUrl:', url);
+
       const request: ParticipantEditRequest = {
         bracket_id: bracketId,
         match_id: matchId,
@@ -338,7 +363,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
         operation_type: 'update',
       };
 
-      await updateBracketParticipant(request, judgeName, adminId);
+      await updateBracketParticipant(request, judgeName, adminId, url);
 
       set({ isLoading: false });
       get().closeModals();

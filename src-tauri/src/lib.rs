@@ -1366,8 +1366,12 @@ async fn create_temp_participant(
     bracket_id: i32,
     full_name: String,
     club_name: Option<String>,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<i32, String> {
+    println!("[create_temp_participant] START - bracket_id={}, name={}, server_url={:?}",
+        bracket_id, full_name, server_url);
+
     let pool = &state.db_pool;
 
     // Генерировать уникальный отрицательный ID (timestamp в миллисекундах с минусом)
@@ -1375,6 +1379,44 @@ async fn create_temp_participant(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i32);
+
+    println!("[create_temp_participant] Generated temp_id: {}", temp_id);
+
+    // Если указан server_url, отправить данные на локальный сервер админа
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[create_temp_participant] Отправка на локальный сервер: {}", url);
+
+        // Нормализовать URL
+        let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
+        let api_url = format!("{}/api/v1/desktop/temp-participants", base_url);
+
+        println!("[create_temp_participant] Full API URL: {}", api_url);
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&api_url)
+            .json(&serde_json::json!({
+                "temp_id": temp_id,
+                "bracket_id": bracket_id,
+                "full_name": full_name,
+                "club_name": club_name,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка HTTP запроса: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            println!("[create_temp_participant] HTTP error: {} - {}", status, error_text);
+            return Err(format!("Ошибка сервера: {} - {}", status, error_text));
+        }
+
+        println!("[create_temp_participant] Успешно отправлено на сервер админа");
+
+        // Также сохранить в локальную БД судьи (write-through cache)
+        println!("[create_temp_participant] Сохранение в локальный кэш судьи");
+    }
 
     println!("[create_temp_participant] Creating temp participant with ID: {}, name: {}", temp_id, full_name);
 
@@ -1401,13 +1443,59 @@ async fn update_bracket_participant(
     request: ParticipantEditRequest,
     judge_name: Option<String>,
     admin_id: Option<i32>,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    println!("[update_bracket_participant] START - bracket_id={}, match_id={}, slot={}, server_url={:?}",
+        request.bracket_id, request.match_id, request.participant_slot, server_url);
+
     let pool = &state.db_pool;
 
     // Проверка прав доступа: должен быть либо судья, либо админ
     if judge_name.is_none() && admin_id.is_none() {
         return Err("Требуется авторизация".to_string());
+    }
+
+    // Если указан server_url, отправить данные на локальный сервер админа
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[update_bracket_participant] Отправка на локальный сервер: {}", url);
+
+        // Нормализовать URL (убрать /api/v1 если есть)
+        let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
+        let api_url = format!("{}/api/v1/desktop/matches/participant", base_url);
+
+        println!("[update_bracket_participant] Full API URL: {}", api_url);
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&api_url)
+            .json(&serde_json::json!({
+                "bracket_id": request.bracket_id,
+                "match_id": request.match_id,
+                "participant_slot": request.participant_slot,
+                "fighter_id": request.fighter_id,
+                "fighter_name": request.fighter_name,
+                "club_name": request.club_name,
+                "weight": request.weight,
+                "operation_type": request.operation_type,
+                "judge_name": judge_name,
+                "admin_id": admin_id,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка HTTP запроса: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            println!("[update_bracket_participant] HTTP error: {} - {}", status, error_text);
+            return Err(format!("Ошибка сервера: {} - {}", status, error_text));
+        }
+
+        println!("[update_bracket_participant] Успешно отправлено на сервер админа");
+
+        // Также обновить локальную БД судьи (write-through cache)
+        println!("[update_bracket_participant] Обновление локального кэша судьи");
     }
 
     // Если это судья, проверить что он работает с зарезервированной за ним сеткой
@@ -1574,10 +1662,11 @@ async fn swap_bracket_participants(
     request: SwapParticipantsRequest,
     judge_name: Option<String>,
     admin_id: Option<i32>,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("[swap_bracket_participants] START - bracket_id={}, match1_id={}, match1_slot={}, match2_id={}, match2_slot={}",
-             request.bracket_id, request.match1_id, request.match1_slot, request.match2_id, request.match2_slot);
+    println!("[swap_bracket_participants] START - bracket_id={}, match1_id={}, match1_slot={}, match2_id={}, match2_slot={}, server_url={:?}",
+             request.bracket_id, request.match1_id, request.match1_slot, request.match2_id, request.match2_slot, server_url);
     println!("  judge_name={:?}, admin_id={:?}", judge_name, admin_id);
 
     let pool = &state.db_pool;
@@ -1585,6 +1674,45 @@ async fn swap_bracket_participants(
     // Проверка прав доступа
     if judge_name.is_none() && admin_id.is_none() {
         return Err("Требуется авторизация".to_string());
+    }
+
+    // Если указан server_url, отправить данные на локальный сервер админа
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[swap_bracket_participants] Отправка на локальный сервер: {}", url);
+
+        // Нормализовать URL (убрать /api/v1 если есть)
+        let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
+        let api_url = format!("{}/api/v1/desktop/matches/swap", base_url);
+
+        println!("[swap_bracket_participants] Full API URL: {}", api_url);
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&api_url)
+            .json(&serde_json::json!({
+                "bracket_id": request.bracket_id,
+                "match1_id": request.match1_id,
+                "match1_slot": request.match1_slot,
+                "match2_id": request.match2_id,
+                "match2_slot": request.match2_slot,
+                "judge_name": judge_name,
+                "admin_id": admin_id,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка HTTP запроса: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            println!("[swap_bracket_participants] HTTP error: {} - {}", status, error_text);
+            return Err(format!("Ошибка сервера: {} - {}", status, error_text));
+        }
+
+        println!("[swap_bracket_participants] Успешно отправлено на сервер админа");
+
+        // Также обновить локальную БД судьи (write-through cache)
+        println!("[swap_bracket_participants] Обновление локального кэша судьи");
     }
 
     // ВАЖНО: Если swap внутри одного матча, обрабатываем отдельно

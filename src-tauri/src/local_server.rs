@@ -97,6 +97,40 @@ pub struct UpdateMatchParticipantRequest {
     pub club: Option<String>,
 }
 
+// Bracket editing requests
+#[derive(Debug, Deserialize)]
+pub struct BracketParticipantEditRequest {
+    pub bracket_id: i32,
+    pub match_id: i32,
+    pub participant_slot: String, // "participant1" или "participant2"
+    pub fighter_id: Option<i32>,
+    pub fighter_name: Option<String>,
+    pub club_name: Option<String>,
+    pub weight: Option<f64>,
+    pub operation_type: String, // "add", "update", "remove"
+    pub judge_name: Option<String>,
+    pub admin_id: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SwapParticipantsRequest {
+    pub bracket_id: i32,
+    pub match1_id: i32,
+    pub match1_slot: String,
+    pub match2_id: i32,
+    pub match2_slot: String,
+    pub judge_name: Option<String>,
+    pub admin_id: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTempParticipantRequest {
+    pub temp_id: i32,
+    pub bracket_id: i32,
+    pub full_name: String,
+    pub club_name: Option<String>,
+}
+
 // Middleware для логирования всех входящих запросов
 async fn logging_middleware(req: Request, next: Next) -> Response {
     let method = req.method().clone();
@@ -142,6 +176,10 @@ pub async fn start_server(
         .route("/api/v1/desktop/sync/matches", post(sync_matches_handler))
         .route("/api/v1/desktop/matches/update", post(update_match_score_handler))
         .route("/api/v1/desktop/matches/participant", post(update_match_participant_handler))
+
+        // Bracket editing endpoints
+        .route("/api/v1/desktop/matches/swap", post(swap_bracket_participants_handler))
+        .route("/api/v1/desktop/temp-participants", post(create_temp_participant_handler))
 
         // WebSocket endpoints
         .route("/api/v1/ws/matches/:match_id", get(websocket_handler))
@@ -573,6 +611,221 @@ async fn update_match_participant_handler(
         "match_id": payload.match_id,
         "participant_slot": payload.participant_slot
     })))
+}
+
+// Bracket editing handlers
+async fn update_bracket_participant_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<BracketParticipantEditRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== update_bracket_participant_handler START ==========");
+    println!("[LOCAL SERVER] bracket_id={}, match_id={}, slot={}, operation={}",
+        payload.bracket_id, payload.match_id, payload.participant_slot, payload.operation_type);
+
+    // Получить текущие данные матча
+    let match_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
+        .bind(payload.match_id)
+        .fetch_one(&*state.db)
+        .await?;
+
+    let data_str: String = sqlx::Row::get(&match_data, "data");
+    let mut match_obj: serde_json::Value = serde_json::from_str(&data_str)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Обновить данные участника
+    match payload.operation_type.as_str() {
+        "add" | "update" => {
+            let participant = serde_json::json!({
+                "id": payload.fighter_id,
+                "fighter_id": payload.fighter_id,
+                "full_name": payload.fighter_name,
+                "club_name": payload.club_name,
+                "final_weight": payload.weight,
+            });
+            match_obj[&payload.participant_slot] = participant;
+
+            // Обновить legacy поля
+            if payload.participant_slot == "participant1" {
+                match_obj["fighter1_name"] = serde_json::json!(payload.fighter_name);
+                match_obj["participant1_id"] = serde_json::json!(payload.fighter_id);
+                if let Some(ref club) = payload.club_name {
+                    match_obj["fighter1_club"] = serde_json::json!(club);
+                }
+            } else {
+                match_obj["fighter2_name"] = serde_json::json!(payload.fighter_name);
+                match_obj["participant2_id"] = serde_json::json!(payload.fighter_id);
+                if let Some(ref club) = payload.club_name {
+                    match_obj["fighter2_club"] = serde_json::json!(club);
+                }
+            }
+        },
+        "remove" => {
+            match_obj[&payload.participant_slot] = serde_json::Value::Null;
+
+            if payload.participant_slot == "participant1" {
+                match_obj["participant1_id"] = serde_json::Value::Null;
+                match_obj["fighter1_name"] = serde_json::Value::Null;
+                match_obj["fighter1_club"] = serde_json::Value::Null;
+            } else {
+                match_obj["participant2_id"] = serde_json::Value::Null;
+                match_obj["fighter2_name"] = serde_json::Value::Null;
+                match_obj["fighter2_club"] = serde_json::Value::Null;
+            }
+        },
+        _ => return Err(AppError::BadRequest("Неизвестная операция".to_string())),
+    }
+
+    // Сохранить обновленный матч
+    sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
+        .bind(serde_json::to_string(&match_obj).unwrap())
+        .bind(payload.match_id)
+        .execute(&*state.db)
+        .await?;
+
+    // Записать в историю
+    sqlx::query(
+        "INSERT INTO bracket_participant_edits
+        (bracket_id, match_id, participant_slot, fighter_id, fighter_name, club_name, weight, operation_type, edited_by_judge, edited_by_admin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(payload.bracket_id)
+    .bind(payload.match_id)
+    .bind(&payload.participant_slot)
+    .bind(payload.fighter_id)
+    .bind(&payload.fighter_name)
+    .bind(&payload.club_name)
+    .bind(payload.weight)
+    .bind(&payload.operation_type)
+    .bind(&payload.judge_name)
+    .bind(payload.admin_id)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] ========== update_bracket_participant_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+async fn swap_bracket_participants_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<SwapParticipantsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== swap_bracket_participants_handler START ==========");
+    println!("[LOCAL SERVER] bracket_id={}, match1_id={}, match1_slot={}, match2_id={}, match2_slot={}",
+        payload.bracket_id, payload.match1_id, payload.match1_slot, payload.match2_id, payload.match2_slot);
+
+    // Swap внутри одного матча
+    if payload.match1_id == payload.match2_id {
+        let match_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
+            .bind(payload.match1_id)
+            .fetch_one(&*state.db)
+            .await?;
+
+        let data_str: String = sqlx::Row::get(&match_data, "data");
+        let mut match_obj: serde_json::Value = serde_json::from_str(&data_str)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let slot1_value = match_obj.get(&payload.match1_slot).cloned().unwrap_or(serde_json::Value::Null);
+        let slot2_value = match_obj.get(&payload.match2_slot).cloned().unwrap_or(serde_json::Value::Null);
+
+        match_obj[&payload.match1_slot] = slot2_value;
+        match_obj[&payload.match2_slot] = slot1_value;
+
+        // Обновить legacy поля
+        if !match_obj["participant1"].is_null() && match_obj["participant1"].is_object() {
+            match_obj["fighter1_name"] = match_obj["participant1"]["full_name"].clone();
+            match_obj["participant1_id"] = match_obj["participant1"]["fighter_id"].clone();
+            match_obj["fighter1_club"] = match_obj["participant1"]["club_name"].clone();
+        } else {
+            match_obj["fighter1_name"] = serde_json::Value::Null;
+            match_obj["participant1_id"] = serde_json::Value::Null;
+            match_obj["fighter1_club"] = serde_json::Value::Null;
+        }
+
+        if !match_obj["participant2"].is_null() && match_obj["participant2"].is_object() {
+            match_obj["fighter2_name"] = match_obj["participant2"]["full_name"].clone();
+            match_obj["participant2_id"] = match_obj["participant2"]["fighter_id"].clone();
+            match_obj["fighter2_club"] = match_obj["participant2"]["club_name"].clone();
+        } else {
+            match_obj["fighter2_name"] = serde_json::Value::Null;
+            match_obj["participant2_id"] = serde_json::Value::Null;
+            match_obj["fighter2_club"] = serde_json::Value::Null;
+        }
+
+        sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
+            .bind(serde_json::to_string(&match_obj).unwrap())
+            .bind(payload.match1_id)
+            .execute(&*state.db)
+            .await?;
+
+        println!("[LOCAL SERVER] ========== swap_bracket_participants_handler SUCCESS (same match) ==========");
+        return Ok(Json(serde_json::json!({ "status": "ok" })));
+    }
+
+    // Swap между разными матчами
+    let match1_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
+        .bind(payload.match1_id)
+        .fetch_one(&*state.db)
+        .await?;
+
+    let match2_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
+        .bind(payload.match2_id)
+        .fetch_one(&*state.db)
+        .await?;
+
+    let data1_str: String = sqlx::Row::get(&match1_data, "data");
+    let data2_str: String = sqlx::Row::get(&match2_data, "data");
+
+    let mut match1_obj: serde_json::Value = serde_json::from_str(&data1_str)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut match2_obj: serde_json::Value = serde_json::from_str(&data2_str)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Swap участников
+    let slot1_value = match1_obj.get(&payload.match1_slot).cloned().unwrap_or(serde_json::Value::Null);
+    let slot2_value = match2_obj.get(&payload.match2_slot).cloned().unwrap_or(serde_json::Value::Null);
+
+    match1_obj[&payload.match1_slot] = slot2_value;
+    match2_obj[&payload.match2_slot] = slot1_value;
+
+    // Сохранить оба матча
+    sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
+        .bind(serde_json::to_string(&match1_obj).unwrap())
+        .bind(payload.match1_id)
+        .execute(&*state.db)
+        .await?;
+
+    sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
+        .bind(serde_json::to_string(&match2_obj).unwrap())
+        .bind(payload.match2_id)
+        .execute(&*state.db)
+        .await?;
+
+    println!("[LOCAL SERVER] ========== swap_bracket_participants_handler SUCCESS (different matches) ==========");
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+async fn create_temp_participant_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<CreateTempParticipantRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== create_temp_participant_handler START ==========");
+    println!("[LOCAL SERVER] temp_id={}, bracket_id={}, name={}",
+        payload.temp_id, payload.bracket_id, payload.full_name);
+
+    // Сохранить в таблицу temp_participants
+    sqlx::query(
+        "INSERT INTO temp_participants (temp_id, full_name, club_name, bracket_id, synced)
+         VALUES (?, ?, ?, ?, 0)"
+    )
+    .bind(payload.temp_id)
+    .bind(&payload.full_name)
+    .bind(&payload.club_name)
+    .bind(payload.bracket_id)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] ========== create_temp_participant_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({ "status": "ok", "temp_id": payload.temp_id })))
 }
 
 // WebSocket handler

@@ -363,11 +363,12 @@ export async function createTempParticipant(data: {
   bracketId: number;
   fullName: string;
   clubName?: string;
-}): Promise<number> {
+}, serverUrl?: string | null): Promise<number> {
   return await invoke('create_temp_participant', {
     bracketId: data.bracketId,
     fullName: data.fullName,
     clubName: data.clubName,
+    serverUrl: serverUrl || null,
   });
 }
 
@@ -539,12 +540,14 @@ export interface ParticipantEditRequest {
 export async function updateBracketParticipant(
   request: ParticipantEditRequest,
   judgeName?: string,
-  adminId?: number
+  adminId?: number,
+  serverUrl?: string | null
 ): Promise<void> {
   await invoke('update_bracket_participant', {
     request,
     judgeName,
     adminId,
+    serverUrl: serverUrl || null,
   });
 }
 
@@ -562,12 +565,14 @@ export interface SwapParticipantsRequest {
 export async function swapBracketParticipants(
   request: SwapParticipantsRequest,
   judgeName?: string,
-  adminId?: number
+  adminId?: number,
+  serverUrl?: string | null
 ): Promise<void> {
   await invoke('swap_bracket_participants', {
     request,
     judgeName,
     adminId,
+    serverUrl: serverUrl || null,
   });
 }
 
