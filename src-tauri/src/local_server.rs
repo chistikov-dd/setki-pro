@@ -239,34 +239,58 @@ async fn get_tournament_brackets_handler(
     println!("[LOCAL SERVER] ========== get_tournament_brackets_handler START ==========");
     println!("[LOCAL SERVER] Tournament ID: {}", tournament_id);
 
-    let records = sqlx::query_as::<_, (String,)>(
-        "SELECT data FROM brackets_cache WHERE tournament_id = ?"
+    // 1. Получить сетки
+    let bracket_records = sqlx::query_as::<_, (i32, String)>(
+        "SELECT bracket_id, data FROM brackets_cache WHERE tournament_id = ?"
     )
     .bind(tournament_id)
     .fetch_all(&*state.db)
     .await?;
 
-    println!("[LOCAL SERVER] Found {} bracket records in cache", records.len());
+    println!("[LOCAL SERVER] Found {} bracket records in cache", bracket_records.len());
 
-    let brackets: Vec<serde_json::Value> = records
-        .into_iter()
-        .filter_map(|(data,)| {
-            match serde_json::from_str(&data) {
-                Ok(json) => {
-                    println!("[LOCAL SERVER] Successfully parsed bracket JSON");
-                    Some(json)
+    // 2. Для каждой сетки получить матчи и добавить их
+    let mut brackets_with_matches: Vec<serde_json::Value> = Vec::new();
+
+    for (bracket_id, bracket_data) in bracket_records {
+        match serde_json::from_str::<serde_json::Value>(&bracket_data) {
+            Ok(mut bracket_json) => {
+                println!("[LOCAL SERVER] Processing bracket_id: {}", bracket_id);
+
+                // Получить матчи для этой сетки
+                let match_records = sqlx::query_as::<_, (String,)>(
+                    "SELECT data FROM matches_cache WHERE bracket_id = ?"
+                )
+                .bind(bracket_id)
+                .fetch_all(&*state.db)
+                .await
+                .unwrap_or_default();
+
+                println!("[LOCAL SERVER] Found {} matches for bracket {}", match_records.len(), bracket_id);
+
+                // Парсить матчи в JSON
+                let matches: Vec<serde_json::Value> = match_records
+                    .into_iter()
+                    .filter_map(|(data,)| serde_json::from_str(&data).ok())
+                    .collect();
+
+                // Добавить матчи в сетку
+                if let Some(obj) = bracket_json.as_object_mut() {
+                    obj.insert("matches".to_string(), serde_json::json!(matches));
+                    println!("[LOCAL SERVER] Added {} matches to bracket {}", matches.len(), bracket_id);
                 }
-                Err(e) => {
-                    println!("[LOCAL SERVER] Failed to parse bracket JSON: {}", e);
-                    None
-                }
+
+                brackets_with_matches.push(bracket_json);
             }
-        })
-        .collect();
+            Err(e) => {
+                println!("[LOCAL SERVER] Failed to parse bracket JSON: {}", e);
+            }
+        }
+    }
 
-    println!("[LOCAL SERVER] Returning {} brackets to client", brackets.len());
+    println!("[LOCAL SERVER] Returning {} brackets with matches to client", brackets_with_matches.len());
     println!("[LOCAL SERVER] ========== get_tournament_brackets_handler END ==========");
-    Ok(Json(brackets))
+    Ok(Json(brackets_with_matches))
 }
 
 // Sync matches handler

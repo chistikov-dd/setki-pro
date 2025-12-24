@@ -106,7 +106,17 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       await Promise.all(
         data.map(async (bracket) => {
           try {
-            const matches = await getBracketMatches(bracket.id);
+            // ОПТИМИЗАЦИЯ: Если сетка уже содержит matches (локальный сервер), используем их
+            let matches: any[];
+            if (bracket.matches && Array.isArray(bracket.matches) && bracket.matches.length > 0) {
+              console.log(`[BracketSelection] Сетка ${bracket.id}: используем вложенные матчи (${bracket.matches.length})`);
+              matches = bracket.matches;
+            } else {
+              // Иначе загружаем отдельно (для online режима или если пусто)
+              console.log(`[BracketSelection] Сетка ${bracket.id}: загружаем матчи отдельно`);
+              matches = await getBracketMatches(bracket.id);
+            }
+
             const participants = new Set<string>();
 
             // Собрать уникальные имена участников из матчей

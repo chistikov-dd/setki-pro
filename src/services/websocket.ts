@@ -19,15 +19,17 @@ export class MatchWebSocket {
   private ws: WebSocket | null = null;
   private matchId: number;
   private pinCode?: string;
+  private customUrl?: string; // Кастомный URL для локального сервера
   private handlers: Map<WSMessageType, Set<MessageHandler>> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private reconnectTimer: number | null = null;
 
-  constructor(matchId: number, pinCode?: string) {
+  constructor(matchId: number, pinCode?: string, customUrl?: string) {
     this.matchId = matchId;
     this.pinCode = pinCode;
+    this.customUrl = customUrl;
   }
 
   /**
@@ -36,13 +38,16 @@ export class MatchWebSocket {
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
+        // Используем кастомный URL если передан (для локального сервера), иначе default
+        const baseUrl = this.customUrl || WS_BASE_URL;
         const url = this.pinCode
-          ? `${WS_BASE_URL}/${this.matchId}?pin_code=${this.pinCode}`
-          : `${WS_BASE_URL}/${this.matchId}`;
+          ? `${baseUrl}/${this.matchId}?pin_code=${this.pinCode}`
+          : `${baseUrl}/${this.matchId}`;
 
         logger.info(LOG_CATEGORIES.WEBSOCKET, 'Connecting to WebSocket', {
           matchId: this.matchId,
           url: url.replace(/pin_code=[^&]+/, 'pin_code=***'), // Hide PIN in logs
+          isCustomUrl: !!this.customUrl,
         });
 
         this.ws = new WebSocket(url);
@@ -287,7 +292,10 @@ export class MatchWebSocket {
 
 /**
  * Создать WebSocket подключение к матчу
+ * @param matchId - ID матча
+ * @param pinCode - PIN-код судьи
+ * @param customUrl - Кастомный WebSocket URL (для локального сервера)
  */
-export function createMatchWebSocket(matchId: number, pinCode?: string): MatchWebSocket {
-  return new MatchWebSocket(matchId, pinCode);
+export function createMatchWebSocket(matchId: number, pinCode?: string, customUrl?: string): MatchWebSocket {
+  return new MatchWebSocket(matchId, pinCode, customUrl);
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createMatchWebSocket, type MatchWebSocket } from '../services/websocket';
 import type { WSScoreUpdateData } from '../types';
+import { useServerModeStore } from '../stores/serverModeStore';
 
 interface UseMatchWebSocketOptions {
   matchId: number;
@@ -51,8 +52,22 @@ export function useMatchWebSocket({
   useEffect(() => {
     if (!autoConnect) return;
 
-    // Create WebSocket instance
-    const ws = createMatchWebSocket(matchId, pinCode);
+    // Получаем текущий режим и serverUrl из store
+    const { mode, serverUrl } = useServerModeStore.getState();
+
+    // Формируем WebSocket URL для локального сервера
+    let wsUrl: string | undefined;
+    if (mode === 'local-client' && serverUrl) {
+      // Конвертируем HTTP URL в WebSocket URL
+      const httpUrl = serverUrl.replace(/^https?:\/\//, ''); // убираем http(s)://
+      wsUrl = `ws://${httpUrl}/api/v1/ws/matches`;
+      console.log('[useMatchWebSocket] Using local server WebSocket:', wsUrl);
+    } else {
+      console.log('[useMatchWebSocket] Using default WebSocket (setki.pro)');
+    }
+
+    // Create WebSocket instance с кастомным URL если нужно
+    const ws = createMatchWebSocket(matchId, pinCode, wsUrl);
     wsRef.current = ws;
 
     // Subscribe to events

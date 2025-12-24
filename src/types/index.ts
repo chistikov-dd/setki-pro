@@ -199,6 +199,8 @@ export interface BracketResponse {
   max_age?: number;
   min_weight?: number;
   max_weight?: number;
+  // Опциональные вложенные матчи (возвращаются локальным сервером)
+  matches?: MatchResponse[];
 }
 
 // Match API Responses
