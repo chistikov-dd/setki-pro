@@ -1,9 +1,10 @@
 use axum::{
-    extract::{Path, State, WebSocketUpgrade},
+    extract::{Path, State, WebSocketUpgrade, Request},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
+    middleware::{self, Next},
 };
 use axum::extract::ws::{WebSocket, Message};
 use serde::{Deserialize, Serialize};
@@ -96,6 +97,25 @@ pub struct UpdateMatchParticipantRequest {
     pub club: Option<String>,
 }
 
+// Middleware для логирования всех входящих запросов
+async fn logging_middleware(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let headers = req.headers().clone();
+
+    println!("[LOCAL SERVER] ========== INCOMING REQUEST ==========");
+    println!("[LOCAL SERVER] Method: {}", method);
+    println!("[LOCAL SERVER] URI: {}", uri);
+    println!("[LOCAL SERVER] Headers: {:?}", headers);
+
+    let response = next.run(req).await;
+
+    println!("[LOCAL SERVER] Response status: {}", response.status());
+    println!("[LOCAL SERVER] ========== REQUEST COMPLETED ==========");
+
+    response
+}
+
 // Start the local HTTP/WebSocket server
 pub async fn start_server(
     db: Arc<SqlitePool>,
@@ -129,6 +149,7 @@ pub async fn start_server(
         // Health check
         .route("/health", get(health_handler))
 
+        .layer(middleware::from_fn(logging_middleware))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

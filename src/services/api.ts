@@ -78,12 +78,22 @@ export async function loginByPin(
   data: { pin_code: string; judge_name: string; table_number: number },
   serverUrl?: string | null
 ): Promise<AuthResponse> {
-  return await invoke<AuthResponse>('login_by_pin', {
+  console.log('[api.ts] loginByPin START');
+  console.log('[api.ts]   pin_code:', data.pin_code);
+  console.log('[api.ts]   judge_name:', data.judge_name);
+  console.log('[api.ts]   table_number:', data.table_number);
+  console.log('[api.ts]   serverUrl:', serverUrl);
+  console.log('[api.ts] Calling Tauri command: login_by_pin');
+
+  const result = await invoke<AuthResponse>('login_by_pin', {
     pinCode: data.pin_code,
     judgeName: data.judge_name,
     tableNumber: data.table_number,
     serverUrl: serverUrl || undefined,
   });
+
+  console.log('[api.ts] loginByPin SUCCESS, response:', result);
+  return result;
 }
 
 /**

@@ -172,7 +172,7 @@ impl ApiClient {
 
         println!("[ApiClient::login_by_pin] is_local_server: {}", is_local_server);
 
-        #[derive(serde::Serialize)]
+        #[derive(serde::Serialize, Debug)]
         struct LocalLoginRequest {
             pin_code: String,
             judge_name: Option<String>,
@@ -183,27 +183,41 @@ impl ApiClient {
         println!("[ApiClient::login_by_pin] Sending HTTP request...");
         let online_result = if is_local_server {
             println!("[ApiClient::login_by_pin] Sending LOCAL SERVER request with judge_name and table_number");
+            let request_body = LocalLoginRequest {
+                pin_code: pin_code.clone(),
+                judge_name: judge_name.clone(),
+                table_number,
+            };
+            println!("[ApiClient::login_by_pin] Request body: {:?}", serde_json::to_string(&request_body).unwrap_or_default());
+            println!("[ApiClient::login_by_pin] POST URL: {}", url);
+
             // Для локального сервера отправляем расширенный запрос
-            self.client
+            let result = self.client
                 .post(&url)
-                .json(&LocalLoginRequest {
-                    pin_code: pin_code.clone(),
-                    judge_name: judge_name.clone(),
-                    table_number,
-                })
+                .json(&request_body)
                 .send()
-                .await
+                .await;
+
+            println!("[ApiClient::login_by_pin] HTTP send completed (local)");
+            result
         } else {
             println!("[ApiClient::login_by_pin] Sending ONLINE request (setki.pro) with PIN only");
+            let request_body = PinLoginRequest { pin_code: pin_code.clone() };
+            println!("[ApiClient::login_by_pin] Request body: {:?}", serde_json::to_string(&request_body).unwrap_or_default());
+            println!("[ApiClient::login_by_pin] POST URL: {}", url);
+
             // Для setki.pro отправляем только PIN
-            self.client
+            let result = self.client
                 .post(&url)
-                .json(&PinLoginRequest { pin_code: pin_code.clone() })
+                .json(&request_body)
                 .send()
-                .await
+                .await;
+
+            println!("[ApiClient::login_by_pin] HTTP send completed (online)");
+            result
         };
 
-        println!("[ApiClient::login_by_pin] HTTP request completed");
+        println!("[ApiClient::login_by_pin] HTTP request completed, checking response...");
 
         match online_result {
             Ok(response) if response.status().is_success() => {
