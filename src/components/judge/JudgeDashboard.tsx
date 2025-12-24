@@ -86,7 +86,12 @@ export const JudgeDashboard: React.FC = () => {
   const loadMatches = async (bracketId: number) => {
     setIsLoadingMatches(true);
     try {
-      const data = await getBracketMatches(bracketId);
+      // Получаем serverUrl из store для локального сервера
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      console.log('[JudgeDashboard] Загрузка матчей, bracket_id:', bracketId, 'mode:', mode, 'serverUrl:', url);
+      const data = await getBracketMatches(bracketId, url);
 
       // Преобразуем MatchResponse в Match
       const mappedMatches: Match[] = data.map((matchResponse: any) => {

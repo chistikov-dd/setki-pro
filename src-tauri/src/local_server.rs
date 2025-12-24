@@ -138,6 +138,7 @@ pub async fn start_server(
 
         // Desktop endpoints (compatible with existing API)
         .route("/api/v1/desktop/brackets/tournament/:id", get(get_tournament_brackets_handler))
+        .route("/api/v1/desktop/brackets/:bracket_id/matches", get(get_bracket_matches_handler))
         .route("/api/v1/desktop/sync/matches", post(sync_matches_handler))
         .route("/api/v1/desktop/matches/update", post(update_match_score_handler))
         .route("/api/v1/desktop/matches/participant", post(update_match_participant_handler))
@@ -260,6 +261,35 @@ async fn login_by_pin_handler(
             Err(AppError::Unauthorized("Invalid PIN code".to_string()))
         }
     }
+}
+
+// Get bracket matches handler (отдельный endpoint для получения матчей конкретной сетки)
+async fn get_bracket_matches_handler(
+    State(state): State<LocalServerState>,
+    Path(bracket_id): Path<i32>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    println!("[LOCAL SERVER] ========== get_bracket_matches_handler START ==========");
+    println!("[LOCAL SERVER] Bracket ID: {}", bracket_id);
+
+    // Получить матчи для этой сетки
+    let match_records = sqlx::query_as::<_, (String,)>(
+        "SELECT data FROM matches_cache WHERE bracket_id = ?"
+    )
+    .bind(bracket_id)
+    .fetch_all(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] Found {} matches for bracket {}", match_records.len(), bracket_id);
+
+    // Парсить матчи в JSON
+    let matches: Vec<serde_json::Value> = match_records
+        .into_iter()
+        .filter_map(|(data,)| serde_json::from_str(&data).ok())
+        .collect();
+
+    println!("[LOCAL SERVER] Returning {} matches to client", matches.len());
+    println!("[LOCAL SERVER] ========== get_bracket_matches_handler END ==========");
+    Ok(Json(matches))
 }
 
 // Get tournament brackets handler

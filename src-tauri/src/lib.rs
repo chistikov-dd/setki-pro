@@ -547,11 +547,24 @@ async fn migrate_matches_to_new_format(
 #[tauri::command]
 async fn get_bracket_matches(
     bracket_id: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    println!("[get_bracket_matches] bracket_id: {}, server_url: {:?}", bracket_id, server_url);
+
     let pool = &state.db_pool;
 
-    // Сначала пытаемся загрузить из кэша
+    // Если передан server_url, используем его для создания временного клиента
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[get_bracket_matches] Запрос к локальному серверу: {}", url);
+        let api_client = ApiClient::new(url, Arc::clone(&state.db_pool));
+        return api_client
+            .get_bracket_matches(bracket_id)
+            .await
+            .map_err(|e| e.to_string());
+    }
+
+    // Иначе пытаемся загрузить из локального кэша
     let cached_matches = sqlx::query(
         "SELECT match_id, data FROM matches_cache WHERE bracket_id = ? ORDER BY match_id"
     )
@@ -573,9 +586,10 @@ async fn get_bracket_matches(
         // Мигрируем все матчи из старого формата в новый (объекты участников)
         migrate_matches_to_new_format(&mut matches, pool).await?;
 
+        println!("[get_bracket_matches] Возвращаем {} матчей из локального кэша", matches.len());
         Ok(matches)
     } else {
-        println!("[get_bracket_matches] Кэш пуст, загружаем с сервера");
+        println!("[get_bracket_matches] Кэш пуст, загружаем с сервера по умолчанию");
         // Нет кэша - загружаем с сервера
         state.api_client
             .get_bracket_matches(bracket_id)

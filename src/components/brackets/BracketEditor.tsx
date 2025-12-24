@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
 import { useToast } from '../../hooks/useToast';
 import { getBracketMatches } from '../../services/api';
 import type { Match } from '../../types';
@@ -58,7 +59,12 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
     setError(null);
 
     try {
-      const data = await getBracketMatches(bracketId);
+      // Получаем serverUrl из store для локального сервера
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      console.log('[BracketEditor] Загрузка матчей, bracket_id:', bracketId, 'mode:', mode, 'serverUrl:', url);
+      const data = await getBracketMatches(bracketId, url);
       console.log('[BracketEditor] Получено матчей:', data.length, data);
       setMatches(data as MatchWithData[]);
     } catch (err) {

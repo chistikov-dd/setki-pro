@@ -1143,21 +1143,49 @@ impl ApiClient {
         Ok(result)
     }
 
-    // Получить матчи сетки из кэша
+    // Получить матчи сетки (из кэша или с локального сервера)
     pub async fn get_bracket_matches(&self, bracket_id: i32) -> Result<Vec<serde_json::Value>> {
-        let records = sqlx::query_as::<_, (String,)>(
-            "SELECT data FROM matches_cache WHERE bracket_id = ?"
-        )
-        .bind(bracket_id)
-        .fetch_all(self.db.as_ref())
-        .await?;
+        let is_local_server = self.is_local_server();
 
-        let matches: Vec<serde_json::Value> = records
-            .into_iter()
-            .filter_map(|r| serde_json::from_str(&r.0).ok())
-            .collect();
+        if is_local_server {
+            // Делаем HTTP запрос к локальному серверу
+            println!("[ApiClient::get_bracket_matches] Requesting from local server: {}", self.base_url);
+            let url = format!("{}/desktop/brackets/{}/matches", self.base_url, bracket_id);
+            println!("[ApiClient::get_bracket_matches] Full URL: {}", url);
 
-        Ok(matches)
+            let response = self.client
+                .get(&url)
+                .send()
+                .await?;
+
+            println!("[ApiClient::get_bracket_matches] HTTP response status: {}", response.status());
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow::anyhow!("HTTP error {}: {}", response.status(), error_text));
+            }
+
+            let matches: Vec<serde_json::Value> = response.json().await?;
+            println!("[ApiClient::get_bracket_matches] Received {} matches from local server", matches.len());
+            Ok(matches)
+        } else {
+            // Читаем из локального кэша
+            println!("[ApiClient::get_bracket_matches] Reading from local cache");
+            let records = sqlx::query_as::<_, (String,)>(
+                "SELECT data FROM matches_cache WHERE bracket_id = ?"
+            )
+            .bind(bracket_id)
+            .fetch_all(self.db.as_ref())
+            .await?;
+
+            let matches: Vec<serde_json::Value> = records
+                .into_iter()
+                .filter_map(|r| serde_json::from_str(&r.0).ok())
+                .collect();
+
+            println!("[ApiClient::get_bracket_matches] Found {} matches in local cache", matches.len());
+            Ok(matches)
+        }
     }
 
     // ====== Методы для работы с поединками ======

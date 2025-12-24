@@ -242,10 +242,13 @@ export async function getBracketReservation(
 }
 
 /**
- * Получить матчи сетки из кэша
+ * Получить матчи сетки из кэша (или с локального сервера если serverUrl указан)
  */
-export async function getBracketMatches(bracketId: number): Promise<any[]> {
-  return await invoke<any[]>('get_bracket_matches', { bracketId });
+export async function getBracketMatches(bracketId: number, serverUrl?: string | null): Promise<any[]> {
+  return await invoke<any[]>('get_bracket_matches', {
+    bracketId,
+    serverUrl: serverUrl || null
+  });
 }
 
 /**

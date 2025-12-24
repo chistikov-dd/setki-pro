@@ -113,8 +113,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
               matches = bracket.matches;
             } else {
               // Иначе загружаем отдельно (для online режима или если пусто)
-              console.log(`[BracketSelection] Сетка ${bracket.id}: загружаем матчи отдельно`);
-              matches = await getBracketMatches(bracket.id);
+              console.log(`[BracketSelection] Сетка ${bracket.id}: загружаем матчи отдельно, serverUrl: ${url}`);
+              matches = await getBracketMatches(bracket.id, url);
             }
 
             const participants = new Set<string>();
