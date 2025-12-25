@@ -346,13 +346,32 @@ async fn login_by_pin_handler(
 
     match record {
         Some((tournament_id, tournament_name)) => {
-            println!("[LOCAL SERVER] PIN FOUND in database!");
-            println!("[LOCAL SERVER]   tournament_id: {}", tournament_id);
-            println!("[LOCAL SERVER]   tournament_name: {}", tournament_name);
+            state.logger.info("PIN FOUND in database!");
+            state.logger.info(&format!("  tournament_id: {}", tournament_id));
+            state.logger.info(&format!("  tournament_name: {}", tournament_name));
 
             // Generate a simple token (in local mode, security is less critical)
             let token = format!("local_token_{}", uuid::Uuid::new_v4());
-            println!("[LOCAL SERVER] Generated token: {}", token);
+            state.logger.info(&format!("Generated token: {}", token));
+
+            // КРИТИЧЕСКИ ВАЖНО: Сохранить токен в БД админа для auth middleware
+            state.logger.info("Saving judge token to database...");
+            let judge_name = payload.judge_name.clone().unwrap_or_else(|| "Unknown".to_string());
+            let table_number = payload.table_number.unwrap_or(0);
+
+            sqlx::query(
+                "INSERT OR REPLACE INTO judge_auth (pin_code, token, judge_name, table_number, tournament_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, datetime('now'))"
+            )
+            .bind(&payload.pin_code)
+            .bind(&token)
+            .bind(&judge_name)
+            .bind(table_number)
+            .bind(tournament_id)
+            .execute(&*state.db)
+            .await?;
+
+            state.logger.info("Token saved to judge_auth table");
 
             // Если переданы имя и номер стола - отправляем событие админу
             if payload.judge_name.is_some() && payload.table_number.is_some() {
@@ -367,13 +386,13 @@ async fn login_by_pin_handler(
 
                 // Broadcast событие всем подключенным админам (игнорируем ошибки если нет слушателей)
                 let _ = state.admin_events_channel.send(event.to_string());
-                println!("[LOCAL SERVER] Admin event sent: Judge {} connected at table {}",
+                state.logger.info(&format!("Admin event sent: Judge {} connected at table {}",
                     payload.judge_name.as_ref().unwrap(),
-                    payload.table_number.unwrap());
+                    payload.table_number.unwrap()));
             }
 
-            println!("[LOCAL SERVER] Returning SUCCESS response");
-            println!("[LOCAL SERVER] ========== login_by_pin_handler SUCCESS ==========");
+            state.logger.info("Returning SUCCESS response");
+            state.logger.info("========== login_by_pin_handler SUCCESS ==========");
             Ok(Json(AuthResponse {
                 access_token: token,
                 user_id: 0, // Временный ID для offline судьи
