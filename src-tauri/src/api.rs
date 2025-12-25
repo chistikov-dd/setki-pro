@@ -616,8 +616,10 @@ impl ApiClient {
             .ok_or_else(|| anyhow::anyhow!("Неверный формат ответа"))?;
 
         // Сохраняем сетки и матчи
+        println!("[downloadTournament] Начинаем сохранение {} сеток", brackets.len());
         for bracket in brackets {
             let bracket_id = bracket["id"].as_i64().unwrap() as i32;
+            println!("[downloadTournament] Обработка сетки ID: {}", bracket_id);
 
             // Сохранить сетку (без вложенных matches)
             let mut bracket_copy = bracket.clone();
@@ -636,9 +638,74 @@ impl ApiClient {
 
             // Сохранить все матчи этой сетки
             if let Some(matches) = bracket["matches"].as_array() {
-                for match_data in matches {
+                println!("[downloadTournament] Сетка {} содержит {} матчей", bracket_id, matches.len());
+                for (idx, match_data) in matches.iter().enumerate() {
                     let match_id = match_data["id"].as_i64().unwrap_or(0) as i32;
-                    let match_json = serde_json::to_string(&match_data)?;
+
+                    // DEBUG: Выводим ПОЛНЫЙ JSON первого матча
+                    if idx == 0 {
+                        println!("[downloadTournament] === ПОЛНЫЙ JSON ПЕРВОГО МАТЧА (bracket {}) ===", bracket_id);
+                        println!("{}", serde_json::to_string_pretty(&match_data).unwrap_or_default());
+                        println!("[downloadTournament] === КОНЕЦ JSON ===");
+                    }
+
+                    // DEBUG: Проверяем наличие данных участников
+                    let p1_name = match_data.get("participant1")
+                        .and_then(|p| p.get("full_name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("null");
+                    let p2_name = match_data.get("participant2")
+                        .and_then(|p| p.get("full_name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("null");
+
+                    // DEBUG: Также проверяем fighter1_name/fighter2_name
+                    let f1_name = match_data.get("fighter1_name").and_then(|n| n.as_str()).unwrap_or("null");
+                    let f2_name = match_data.get("fighter2_name").and_then(|n| n.as_str()).unwrap_or("null");
+
+                    println!("[downloadTournament]   Матч {} (bracket={}): participant1={}, participant2={}, fighter1_name={}, fighter2_name={}",
+                        match_id, bracket_id, p1_name, p2_name, f1_name, f2_name);
+
+                    // КРИТИЧНО: Создаём объекты participant1/participant2 из legacy полей если их нет
+                    let mut match_obj = match_data.clone();
+
+                    // Если participant1 объект отсутствует, но есть legacy поля - создаём объект
+                    if match_obj.get("participant1").is_none() || match_obj["participant1"].is_null() {
+                        if let Some(fighter1_name) = match_obj.get("fighter1_name").and_then(|v| v.as_str()) {
+                            if !fighter1_name.is_empty() {
+                                let participant1_id = match_obj.get("participant1_id").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let fighter1_club = match_obj.get("fighter1_club").and_then(|v| v.as_str()).unwrap_or("");
+
+                                match_obj["participant1"] = serde_json::json!({
+                                    "id": participant1_id,
+                                    "fighter_id": participant1_id,
+                                    "full_name": fighter1_name,
+                                    "club_name": fighter1_club
+                                });
+                                println!("[downloadTournament]   ✓ Создан объект participant1 для матча {}", match_id);
+                            }
+                        }
+                    }
+
+                    // Если participant2 объект отсутствует, но есть legacy поля - создаём объект
+                    if match_obj.get("participant2").is_none() || match_obj["participant2"].is_null() {
+                        if let Some(fighter2_name) = match_obj.get("fighter2_name").and_then(|v| v.as_str()) {
+                            if !fighter2_name.is_empty() {
+                                let participant2_id = match_obj.get("participant2_id").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let fighter2_club = match_obj.get("fighter2_club").and_then(|v| v.as_str()).unwrap_or("");
+
+                                match_obj["participant2"] = serde_json::json!({
+                                    "id": participant2_id,
+                                    "fighter_id": participant2_id,
+                                    "full_name": fighter2_name,
+                                    "club_name": fighter2_club
+                                });
+                                println!("[downloadTournament]   ✓ Создан объект participant2 для матча {}", match_id);
+                            }
+                        }
+                    }
+
+                    let match_json = serde_json::to_string(&match_obj)?;
 
                     sqlx::query(
                         "INSERT OR REPLACE INTO matches_cache (match_id, bracket_id, data, updated_at)
@@ -650,8 +717,12 @@ impl ApiClient {
                     .execute(self.db.as_ref())
                     .await?;
                 }
+                println!("[downloadTournament] Сохранено {} матчей для сетки {}", matches.len(), bracket_id);
+            } else {
+                println!("[downloadTournament] WARNING: Сетка {} не содержит матчей!", bracket_id);
             }
         }
+        println!("[downloadTournament] Все сетки и матчи сохранены");
 
         // Кэшируем PIN-код если есть
         if let Some(pin_code) = data["pin_code"].as_str() {

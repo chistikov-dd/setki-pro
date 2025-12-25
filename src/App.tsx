@@ -31,29 +31,23 @@ function LoadingSpinner() {
 }
 
 function App() {
+  // КРИТИЧНО: Проверяем label окна СИНХРОННО до первого рендера
+  // чтобы избежать бесконечного цикла ре-рендеров публичного табло
+  const currentWindow = getCurrentWebviewWindow();
+  const isPublicDisplayWindow = currentWindow.label === 'public-display';
+
   const [authScreen, setAuthScreen] = useState<AuthScreen>('choice');
-  const [isPublicDisplay, setIsPublicDisplay] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isAutoLoginInProgress, setIsAutoLoginInProgress] = useState(false);
   const [autoLoginRole, setAutoLoginRole] = useState<'admin' | 'judge' | null>(null);
   const { isAuthenticated, user, loginAsAdmin, loginAsAdminOffline, loginAsJudge, logout } = useAuthStore();
 
-  // Check if this is the public display window
-  useEffect(() => {
-    const currentWindow = getCurrentWebviewWindow();
-    console.log('[App] Проверка окна, label:', currentWindow.label);
-    if (currentWindow.label === 'public-display') {
-      console.log('[App] Это окно публичного табло!');
-      setIsPublicDisplay(true);
-    } else {
-      console.log('[App] Это НЕ окно публичного табло');
-    }
-  }, []);
+  console.log('[App] Window label:', currentWindow.label, 'isPublicDisplay:', isPublicDisplayWindow);
 
   // Автоосвобождение стола при закрытии приложения (если судья)
   useEffect(() => {
     // Не устанавливать обработчик для публичного табло
-    if (isPublicDisplay) return;
+    if (isPublicDisplayWindow) return;
     if (!user || user.role !== 'referee') return;
 
     const currentWindow = getCurrentWebviewWindow();
@@ -111,11 +105,19 @@ function App() {
 
         console.log('[Window Close] Releasing table before close...');
 
+        // FIX: Используем Promise.race с timeout 2000ms вместо 100ms
+        // logout() может занять до 1500ms (3 попытки × 500ms для release_table_number)
         try {
-          await logout();
+          await Promise.race([
+            logout(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Logout timeout')), 2000)
+            )
+          ]);
           console.log('[Window Close] Table released successfully');
         } catch (error) {
           console.error('[Window Close] Error during logout:', error);
+          // Продолжаем закрытие даже если logout failed
         }
 
         if (unlistenClose) {
@@ -123,9 +125,7 @@ function App() {
           unlistenClose = null;
         }
 
-        // Даем время на завершение logout (100ms)
-        await new Promise(resolve => setTimeout(resolve, 100));
-
+        // Без дополнительной задержки, т.к. logout уже отработал или превысил timeout
         // Закрываем окно
         await currentWindow.destroy();
       });
@@ -142,7 +142,7 @@ function App() {
       }
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [user, logout, isPublicDisplay]);
+  }, [user, logout, isPublicDisplayWindow]);
 
   // Инициализация завершена
   useEffect(() => {
@@ -157,7 +157,7 @@ function App() {
   }, [isAuthenticated]);
 
   // Render public display if this window is for that
-  if (isPublicDisplay) {
+  if (isPublicDisplayWindow) {
     return (
       <ErrorBoundary>
         <Suspense fallback={<LoadingSpinner />}>

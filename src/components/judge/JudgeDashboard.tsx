@@ -110,15 +110,27 @@ export const JudgeDashboard: React.FC = () => {
           participant1: matchResponse.participant1 || (matchResponse.participant1_id ? {
             id: matchResponse.participant1_id,
             fighter_id: matchResponse.participant1_id,
-            full_name: matchResponse.fighter1_name || 'TBD',
+            full_name: matchResponse.fighter1_name || '',
             club_name: matchResponse.fighter1_club || matchResponse.participant1?.club_name,
-          } : undefined),
+          } : {
+            // Всегда создаём объект участника, даже если данных нет (исправление ошибки открытия MatchScreen)
+            id: 0,
+            fighter_id: 0,
+            full_name: '',
+            club_name: undefined,
+          }),
           participant2: matchResponse.participant2 || (matchResponse.participant2_id ? {
             id: matchResponse.participant2_id,
             fighter_id: matchResponse.participant2_id,
-            full_name: matchResponse.fighter2_name || 'TBD',
+            full_name: matchResponse.fighter2_name || '',
             club_name: matchResponse.fighter2_club || matchResponse.participant2?.club_name,
-          } : undefined),
+          } : {
+            // Всегда создаём объект участника, даже если данных нет (исправление ошибки открытия MatchScreen)
+            id: 0,
+            fighter_id: 0,
+            full_name: '',
+            club_name: undefined,
+          }),
         };
       });
 

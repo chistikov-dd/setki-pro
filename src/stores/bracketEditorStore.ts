@@ -230,6 +230,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
       isAddParticipantModalOpen: true,
       selectedMatch: match,
       selectedSlot: slot,
+      error: null, // Сбрасываем предыдущую ошибку
     });
   },
 
@@ -238,6 +239,7 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
       isReplaceParticipantModalOpen: true,
       selectedMatch: match,
       selectedSlot: slot,
+      error: null, // Сбрасываем предыдущую ошибку
     });
   },
 

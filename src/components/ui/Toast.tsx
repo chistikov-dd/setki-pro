@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 interface ToastProps {
@@ -13,13 +13,22 @@ interface ToastProps {
  * Автоматически закрывается через duration мс
  */
 export function Toast({ message, type = 'info', duration = 3000, onClose }: ToastProps) {
+  // FIX: Используем useRef для onClose чтобы избежать memory leak
+  // когда onClose передается как inline функция
+  const onCloseRef = useRef(onClose);
+
+  // Обновляем ref при изменении callback
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      onClose();
+      onCloseRef.current();
     }, duration);
 
     return () => clearTimeout(timer);
-  }, [duration, onClose]);
+  }, [duration]); // Убрали onClose из deps
 
   // Цвета по типу
   const bgColors = {

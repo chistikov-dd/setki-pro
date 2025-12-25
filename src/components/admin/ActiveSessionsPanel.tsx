@@ -1,31 +1,22 @@
-import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from '../../stores/authStore';
+import { useJudgeMonitorStore } from '../../stores/judgeMonitorStore';
 import { useToast } from '../../hooks/useToast';
-import type { ActiveJudgeSession } from '../../types';
 
 export function ActiveSessionsPanel() {
-  const [sessions, setSessions] = useState<ActiveJudgeSession[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const { user } = useAuthStore();
   const { showToast } = useToast();
 
-  const loadSessions = async () => {
-    if (!user?.tournament_id) return;
+  // Получаем список судей из reactive store (автоматически обновляется через WebSocket)
+  // ВАЖНО: Используем selector напрямую к connectedJudges, а не через getJudgesList()
+  // чтобы избежать бесконечного цикла обновлений
+  const connectedJudges = useJudgeMonitorStore((state) => state.connectedJudges);
 
-    setIsLoading(true);
-    try {
-      const data = await invoke<ActiveJudgeSession[]>('get_active_judge_sessions', {
-        tournamentId: user.tournament_id,
-      });
-      setSessions(data);
-    } catch (error) {
-      console.error('[ActiveSessionsPanel] Failed to load sessions:', error);
-      showToast('Ошибка загрузки активных судей', 'error', 3000);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const tournamentJudges = user?.tournament_id
+    ? Array.from(connectedJudges.values())
+        .filter((judge) => judge.tournament_id === user.tournament_id)
+        .sort((a, b) => a.table_number - b.table_number)
+    : [];
 
   const handleReleaseTable = async (tableNumber: number) => {
     if (!user?.tournament_id) return;
@@ -43,7 +34,7 @@ export function ActiveSessionsPanel() {
       });
 
       showToast(`Стол №${tableNumber} освобожден`, 'success', 2000);
-      await loadSessions();
+      // Store обновится автоматически через WebSocket событие judge_disconnected
     } catch (error) {
       console.error('[ActiveSessionsPanel] Failed to release table:', error);
       showToast('Ошибка освобождения стола', 'error', 3000);
@@ -54,7 +45,7 @@ export function ActiveSessionsPanel() {
     if (!user?.tournament_id) return;
 
     const confirmed = window.confirm(
-      `Освободить ВСЕ столы (${sessions.length})?\n\n` +
+      `Освободить ВСЕ столы (${tournamentJudges.length})?\n\n` +
         'Все судьи потеряют доступ к своим сеткам.\n' +
         'Это действие рекомендуется только между раундами турнира.'
     );
@@ -67,21 +58,12 @@ export function ActiveSessionsPanel() {
       });
 
       showToast(`Освобождено столов: ${count}`, 'success', 3000);
-      await loadSessions();
+      // Store обновится автоматически через WebSocket события
     } catch (error) {
       console.error('[ActiveSessionsPanel] Failed to clear all:', error);
       showToast('Ошибка сброса резерваций', 'error', 3000);
     }
   };
-
-  useEffect(() => {
-    loadSessions();
-
-    // Автообновление каждые 10 секунд
-    const interval = setInterval(loadSessions, 10000);
-
-    return () => clearInterval(interval);
-  }, [user?.tournament_id]);
 
   if (!user?.tournament_id) {
     return (
@@ -97,23 +79,18 @@ export function ActiveSessionsPanel() {
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-3">
           <h2 className="text-xl font-bold text-gray-900">
-            Активные судьи
+            Подключенные судьи
           </h2>
           <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-            {sessions.length} {sessions.length === 1 ? 'судья' : 'судей'}
+            {tournamentJudges.length} {tournamentJudges.length === 1 ? 'судья' : 'судей'}
+          </span>
+          <span className="text-xs text-gray-500">
+            (обновляется автоматически)
           </span>
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={loadSessions}
-            disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isLoading ? 'Обновление...' : 'Обновить'}
-          </button>
-
-          {sessions.length > 0 && (
+          {tournamentJudges.length > 0 && (
             <button
               onClick={handleClearAll}
               className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
@@ -125,7 +102,7 @@ export function ActiveSessionsPanel() {
       </div>
 
       {/* Таблица */}
-      {sessions.length === 0 ? (
+      {tournamentJudges.length === 0 ? (
         <div className="text-center py-12">
           <svg
             className="mx-auto h-12 w-12 text-gray-400"
@@ -159,10 +136,7 @@ export function ActiveSessionsPanel() {
                   Судья
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Сетка
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Время входа
+                  Время подключения
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Действия
@@ -170,36 +144,25 @@ export function ActiveSessionsPanel() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {sessions.map((session) => (
-                <tr key={session.table_number} className="hover:bg-gray-50">
+              {tournamentJudges.map((judge) => (
+                <tr key={judge.table_number} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       <div className="flex-shrink-0 h-10 w-10 bg-blue-100 rounded-lg flex items-center justify-center">
                         <span className="text-blue-800 font-bold">
-                          {session.table_number}
+                          {judge.table_number}
                         </span>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">
-                      {session.judge_name}
+                      {judge.judge_name}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {session.bracket_name ? (
-                      <div className="text-sm text-gray-900">
-                        {session.bracket_name}
-                      </div>
-                    ) : (
-                      <span className="text-sm text-gray-400 italic">
-                        Сетка не выбрана
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-gray-500">
-                      {new Date(session.logged_in_at).toLocaleString('ru-RU', {
+                      {new Date(judge.connected_at).toLocaleString('ru-RU', {
                         day: '2-digit',
                         month: '2-digit',
                         hour: '2-digit',
@@ -209,7 +172,7 @@ export function ActiveSessionsPanel() {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
-                      onClick={() => handleReleaseTable(session.table_number)}
+                      onClick={() => handleReleaseTable(judge.table_number)}
                       className="text-red-600 hover:text-red-900 hover:underline transition-colors"
                     >
                       Освободить

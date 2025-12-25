@@ -149,6 +149,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     const newBlueScore = participant === 'blue' ? blueScore + points : blueScore;
     const timestamp = new Date().toISOString(); // ISO 8601 для timestamp comparison
 
+    // FIX: OPTIMISTIC UPDATE - сразу обновляем UI для быстрого отклика
+    set({
+      redScore: newRedScore,
+      blueScore: newBlueScore,
+      lastUpdateTimestamp: timestamp,
+    });
+
     try {
       console.log('[matchStore.addScore] Step 1: Calling batchUpdateMatch...');
 
@@ -190,21 +197,27 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
       console.log('[matchStore.addScore] Step 2 complete');
 
-      // Update local state with timestamp
-      set({
-        redScore: newRedScore,
-        blueScore: newBlueScore,
-        events,
-        lastUpdateTimestamp: timestamp,
-      });
+      // Успешно - обновляем только events
+      set({ events });
 
       console.log('[matchStore.addScore] SUCCESS - state updated');
     } catch (error) {
-      console.error('[matchStore.addScore] ERROR:', error);
-      console.error('[matchStore.addScore] Error details:', {
+      console.error('[matchStore.addScore] ERROR, rolling back:', error);
+
+      // FIX: ROLLBACK - восстанавливаем старое состояние при ошибке
+      set({
+        redScore,
+        blueScore,
+        lastUpdateTimestamp: get().lastUpdateTimestamp, // keep current timestamp
+      });
+
+      console.error('[matchStore.addScore] ROLLBACK complete, Error details:', {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
+
+      // Пробрасываем ошибку для показа toast в UI
+      throw error;
     }
   },
 
@@ -243,6 +256,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     // Check for disqualification (disqualify when reaching 4th warning with max=3)
     // При достижении максимума просто записываем предупреждение
     // MatchScreen автоматически откроет диалог завершения матча
+
+    // FIX: OPTIMISTIC UPDATE - сразу обновляем UI
+    set({
+      redWarnings: newRedWarnings,
+      blueWarnings: newBlueWarnings,
+      lastUpdateTimestamp: timestamp,
+    });
 
     try {
       console.log('[matchStore.addWarning] Step 1: Calling batchUpdateMatch...');
@@ -283,21 +303,27 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
       console.log('[matchStore.addWarning] Step 2 complete');
 
-      // Update local state with timestamp
-      set({
-        redWarnings: newRedWarnings,
-        blueWarnings: newBlueWarnings,
-        lastUpdateTimestamp: timestamp,
-        events,
-      });
+      // Успешно - обновляем только events
+      set({ events });
 
       console.log('[matchStore.addWarning] SUCCESS - state updated');
     } catch (error) {
-      console.error('[matchStore.addWarning] ERROR:', error);
-      console.error('[matchStore.addWarning] Error details:', {
+      console.error('[matchStore.addWarning] ERROR, rolling back:', error);
+
+      // FIX: ROLLBACK - восстанавливаем старое состояние
+      set({
+        redWarnings,
+        blueWarnings,
+        lastUpdateTimestamp: get().lastUpdateTimestamp,
+      });
+
+      console.error('[matchStore.addWarning] ROLLBACK complete, Error details:', {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
+
+      // Пробрасываем ошибку для показа toast в UI
+      throw error;
     }
   },
 
@@ -335,6 +361,15 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     const { match, events } = get();
     if (!match || events.length === 0) return;
 
+    // FIX: Сохраняем старое состояние для rollback
+    const oldState = {
+      redScore: get().redScore,
+      blueScore: get().blueScore,
+      redWarnings: get().redWarnings,
+      blueWarnings: get().blueWarnings,
+      events: [...events],
+    };
+
     try {
       // Remove event from database
       await apiUndoLastEvent(match.id);
@@ -347,11 +382,18 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       let blueWarnings = 0;
 
       remainingEvents.forEach((event) => {
+        // FIX: Type guard для participant
+        if (!event.participant || (event.participant !== 'red' && event.participant !== 'blue')) {
+          console.warn('[matchStore.undoLastAction] Invalid participant:', event);
+          return;
+        }
+
         if (event.event_type === 'score') {
+          const points = event.points || 0;
           if (event.participant === 'red') {
-            redScore += event.points || 0;
+            redScore += points;
           } else {
-            blueScore += event.points || 0;
+            blueScore += points;
           }
         } else if (event.event_type === 'warning') {
           if (event.participant === 'red') {
@@ -381,7 +423,12 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         events: remainingEvents,
       });
     } catch (error) {
-      console.error('Failed to undo:', error);
+      console.error('[matchStore.undoLastAction] Failed, rolling back:', error);
+
+      // FIX: ROLLBACK при ошибке
+      set(oldState);
+
+      throw error;
     }
   },
 

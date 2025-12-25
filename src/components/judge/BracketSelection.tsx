@@ -45,8 +45,10 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     if (saved) {
       try {
         return JSON.parse(saved);
-      } catch {
-        // Ignore parse errors
+      } catch (error) {
+        // FIX: Логируем ошибку парсинга и очищаем поврежденные данные
+        console.error('[BracketSelection] Failed to parse filters from localStorage:', error);
+        localStorage.removeItem(FILTERS_STORAGE_KEY);
       }
     }
     return {
@@ -85,14 +87,34 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
     console.log('[BracketSelection] Запуск polling занятых столов (каждые 5 сек)');
 
+    // FIX: Добавляем abort controller и флаг isFetching для предотвращения memory leak
+    let isFetching = false;
+    let abortController: AbortController | null = null;
+
     // Обновлять информацию о столах каждые 5 секунд
     const intervalId = setInterval(async () => {
+      // Пропускаем если предыдущий запрос еще выполняется
+      if (isFetching) {
+        console.warn('[BracketSelection] Previous fetch still running, skipping...');
+        return;
+      }
+
+      isFetching = true;
+      abortController = new AbortController();
+
       try {
         // Получаем актуальный serverUrl для каждого запроса
         const { mode: currentMode, serverUrl: currentServerUrl } = useServerModeStore.getState();
         const url = currentMode === 'local-client' ? currentServerUrl : null;
 
         const assignments = await getBracketTableAssignments(tournamentId, url);
+
+        // Проверка что ответ - массив
+        if (!Array.isArray(assignments)) {
+          console.error('[BracketSelection] Invalid response (not an array):', assignments);
+          return;
+        }
+
         const assignmentsMap = new Map<number, BracketTableAssignment>();
         assignments.forEach((assignment) => {
           assignmentsMap.set(assignment.bracket_id, assignment);
@@ -100,14 +122,26 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         setTableAssignments(assignmentsMap);
         console.log('[BracketSelection] Polling: обновлено занятых столов:', assignments.length);
       } catch (err) {
-        console.error('[BracketSelection] Polling ошибка:', err);
+        // Проверяем тип ошибки
+        if (err instanceof Error && err.name === 'AbortError') {
+          console.log('[BracketSelection] Polling aborted');
+        } else {
+          console.error('[BracketSelection] Polling ошибка:', err);
+        }
         // Не прерываем polling при ошибке
+      } finally {
+        isFetching = false;
       }
     }, 5000); // 5 секунд
 
     return () => {
       console.log('[BracketSelection] Остановка polling занятых столов');
       clearInterval(intervalId);
+
+      // Отменяем текущий fetch если есть
+      if (abortController) {
+        abortController.abort();
+      }
     };
   }, [tournamentId]);
 

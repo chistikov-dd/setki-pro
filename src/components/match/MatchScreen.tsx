@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -36,9 +36,8 @@ interface MatchScreenProps {
  *
  * Оптимизации:
  * - Проверяет существование окна через WebviewWindow.getByLabel()
- * - Использует refs для хранения актуальных данных
- * - Немедленная отправка при изменении счета/предупреждений
- * - Отправка таймера каждую секунду
+ * - ЕДИНЫЙ useEffect для избежания бесконечных циклов
+ * - Отправка только при реальных изменениях данных
  */
 function useMatchUpdateEmitter(
   redFighter: Participant | null,
@@ -48,80 +47,49 @@ function useMatchUpdateEmitter(
   remainingSeconds: number,
   isRunning: boolean
 ) {
-  // Refs для хранения актуальных значений
-  const dataRef = useRef({
-    redFighter,
-    blueFighter,
-    redScore,
-    blueScore,
-    remainingSeconds,
-    isRunning,
-  });
-
-  // Обновляем ref при каждом рендере
+  // ЕДИНЫЙ useEffect для всех обновлений - избегаем бесконечного цикла
   useEffect(() => {
-    dataRef.current = {
-      redFighter,
-      blueFighter,
-      redScore,
-      blueScore,
-      remainingSeconds,
-      isRunning,
-    };
-  });
+    const sendUpdate = async () => {
+      try {
+        // Проверяем существует ли окно публичного табло
+        const publicWindow = WebviewWindow.getByLabel('public-display');
+        if (!publicWindow) {
+          // Окно не открыто - не отправляем обновления и не логируем
+          return;
+        }
 
-  // Функция отправки - проверяем существование окна перед отправкой
-  const sendUpdate = useRef(async () => {
-    try {
-      // Проверяем существует ли окно публичного табло
-      const publicWindow = WebviewWindow.getByLabel('public-display');
-      if (!publicWindow) {
-        fileLogger.debug('[MatchScreen] sendUpdate skipped - no public-display window');
-        return;
+        const matchData = {
+          redFighter,
+          blueFighter,
+          redScore,
+          blueScore,
+          remainingSeconds,
+          isRunning,
+        };
+
+        const logData = {
+          redFighter: matchData.redFighter?.full_name,
+          blueFighter: matchData.blueFighter?.full_name,
+          redScore: matchData.redScore,
+          blueScore: matchData.blueScore,
+          remainingSeconds: matchData.remainingSeconds,
+          isRunning: matchData.isRunning,
+        };
+
+        console.log('[MatchScreen] 📤 Отправка обновления в публичное табло:', logData);
+        fileLogger.info('[MatchScreen] Sending update to public display', logData);
+
+        await emit('match-update', matchData);
+      } catch (error) {
+        console.error('[PublicDisplay] Ошибка при отправке события:', error);
+        fileLogger.error('[PublicDisplay] Error sending event', { error: String(error) });
       }
+    };
 
-      const matchData = {
-        redFighter: dataRef.current.redFighter,
-        blueFighter: dataRef.current.blueFighter,
-        redScore: dataRef.current.redScore,
-        blueScore: dataRef.current.blueScore,
-        remainingSeconds: dataRef.current.remainingSeconds,
-        isRunning: dataRef.current.isRunning,
-      };
-
-      const logData = {
-        redFighter: matchData.redFighter?.full_name,
-        blueFighter: matchData.blueFighter?.full_name,
-        redScore: matchData.redScore,
-        blueScore: matchData.blueScore,
-        remainingSeconds: matchData.remainingSeconds,
-        isRunning: matchData.isRunning,
-      };
-
-      console.log('[MatchScreen] 📤 Отправка обновления в публичное табло:', logData);
-      fileLogger.info('[MatchScreen] Sending update to public display', logData);
-
-      await emit('match-update', matchData);
-    } catch (error) {
-      console.error('[PublicDisplay] Ошибка при отправке события:', error);
-      fileLogger.error('[PublicDisplay] Error sending event', { error: String(error) });
-    }
-  });
-
-  // Немедленная отправка при изменении счета, бойцов или предупреждений
-  useEffect(() => {
-    sendUpdate.current();
-  }, [redFighter, blueFighter, redScore, blueScore]);
-
-  // Отправка таймера: при старте/остановке
-  useEffect(() => {
-    sendUpdate.current();
-  }, [isRunning]);
-
-  // Отправка таймера КАЖДУЮ СЕКУНДУ для синхронизации
-  useEffect(() => {
-    sendUpdate.current();
-  }, [remainingSeconds]);
+    sendUpdate();
+    // Зависимости: используем ID бойцов вместо полных объектов чтобы избежать бесконечного цикла
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [redFighter?.id, blueFighter?.id, redScore, blueScore, remainingSeconds, isRunning]);
 }
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
@@ -376,13 +344,19 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
     return () => {
       cleanup();
-      // Закрыть публичное окно при выходе
+      // FIX: Безопасное закрытие публичного окна при выходе
       if (publicWindowOpen) {
-        WebviewWindow.getByLabel('public-display').then((publicWindow) => {
-          if (publicWindow) {
-            publicWindow.close().catch(console.error);
+        (async () => {
+          try {
+            const publicWindow = await WebviewWindow.getByLabel('public-display');
+            if (publicWindow) {
+              await publicWindow.close();
+            }
+          } catch (error) {
+            console.error('[MatchScreen] Failed to close public display on cleanup:', error);
+            // Не критично, продолжаем
           }
-        }).catch(console.error);
+        })();
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

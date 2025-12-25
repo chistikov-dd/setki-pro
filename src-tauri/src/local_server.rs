@@ -90,6 +90,8 @@ pub struct UpdateMatchScoreRequest {
     pub winner_id: Option<i32>,
 }
 
+// DEPRECATED: используется только старым handler
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct UpdateMatchParticipantRequest {
     pub match_id: i32,
@@ -108,9 +110,9 @@ pub struct SwapParticipantsRequest {
     pub match2_id: i32,
     pub match2_slot: String,
     #[allow(dead_code)]
-    pub judge_name: Option<String>,
+    pub judge_name: Option<String>, // Для логирования (пока не используется)
     #[allow(dead_code)]
-    pub admin_id: Option<i32>,
+    pub admin_id: Option<i32>, // Для логирования (пока не используется)
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +121,24 @@ pub struct CreateTempParticipantRequest {
     pub bracket_id: i32,
     pub full_name: String,
     pub club_name: Option<String>,
+}
+
+// Request для редактирования участников судьями (добавление/удаление/обновление)
+#[derive(Debug, Deserialize)]
+pub struct UpdateBracketParticipantRequest {
+    pub bracket_id: i32,
+    pub match_id: i32,
+    pub participant_slot: String, // "participant1" или "participant2"
+    pub fighter_id: Option<i32>,
+    pub fighter_name: Option<String>,
+    pub club_name: Option<String>,
+    #[allow(dead_code)]
+    pub weight: Option<f64>, // Пока не используется, но может пригодиться в будущем
+    pub operation_type: String, // "add", "update", "remove"
+    #[allow(dead_code)]
+    pub judge_name: Option<String>, // Для логирования (пока не используется)
+    #[allow(dead_code)]
+    pub admin_id: Option<i32>, // Для логирования (пока не используется)
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,7 +219,9 @@ async fn auth_middleware(
 
     // ИСПРАВЛЕНО: Проверяем токен в БД (таблица auth для админа, judge_auth для судей)
     state.logger.info("[AUTH MIDDLEWARE] Checking token in database...");
-    let is_valid = sqlx::query_scalar::<_, i64>(
+
+    // FIX: Правильная обработка ошибок БД вместо unwrap_or
+    let is_valid = match sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM (
             SELECT token FROM auth WHERE token = ?
             UNION ALL
@@ -210,11 +232,18 @@ async fn auth_middleware(
     .bind(token)
     .fetch_one(&*state.db)
     .await
-    .unwrap_or(0);
+    {
+        Ok(count) => count > 0,
+        Err(e) => {
+            state.logger.error(&format!("[AUTH MIDDLEWARE] Database error during token validation: {:?}", e));
+            // Возвращаем 500 Internal Server Error вместо молча отклоняя запрос
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
-    state.logger.info(&format!("[AUTH MIDDLEWARE] Token validation result: {}", if is_valid > 0 { "VALID" } else { "INVALID" }));
+    state.logger.info(&format!("[AUTH MIDDLEWARE] Token validation result: {}", if is_valid { "VALID" } else { "INVALID" }));
 
-    if is_valid == 0 {
+    if !is_valid {
         state.logger.error(&format!("[AUTH MIDDLEWARE] Invalid token for {}", uri));
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -259,7 +288,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/brackets/:bracket_id/matches", get(get_bracket_matches_handler))
         .route("/api/v1/desktop/sync/matches", post(sync_matches_handler))
         .route("/api/v1/desktop/matches/update", post(update_match_score_handler))
-        .route("/api/v1/desktop/matches/participant", post(update_match_participant_handler))
+        .route("/api/v1/desktop/matches/participant", post(update_bracket_participant_handler)) // Редактирование участников судьями
 
         // Bracket editing endpoints
         .route("/api/v1/desktop/matches/swap", post(swap_bracket_participants_handler))
@@ -458,7 +487,37 @@ async fn get_tournament_brackets_handler(
 
     state.logger.info(&format!("Found {} bracket records in cache", bracket_records.len()));
 
-    // 2. Для каждой сетки получить матчи и добавить их
+    // 2. Получить ВСЕ матчи для всех сеток одним запросом (оптимизация производительности)
+    let bracket_ids: Vec<i32> = bracket_records.iter().map(|(id, _)| *id).collect();
+
+    state.logger.info(&format!("Fetching all matches for {} brackets in single query...", bracket_ids.len()));
+
+    // Создаём плейсхолдеры для IN clause: (?, ?, ?, ...)
+    let placeholders = bracket_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let query_str = format!("SELECT bracket_id, data FROM matches_cache WHERE bracket_id IN ({})", placeholders);
+
+    // Строим запрос динамически
+    let mut query = sqlx::query_as::<_, (i32, String)>(&query_str);
+    for bracket_id in &bracket_ids {
+        query = query.bind(bracket_id);
+    }
+
+    let all_matches = query.fetch_all(&*state.db).await.unwrap_or_default();
+    state.logger.info(&format!("Fetched {} total matches", all_matches.len()));
+
+    // 3. Группируем матчи по bracket_id в HashMap для быстрого поиска
+    use std::collections::HashMap;
+    let mut matches_by_bracket: HashMap<i32, Vec<serde_json::Value>> = HashMap::new();
+
+    for (bracket_id, match_data) in all_matches {
+        if let Ok(match_json) = serde_json::from_str::<serde_json::Value>(&match_data) {
+            matches_by_bracket.entry(bracket_id).or_insert_with(Vec::new).push(match_json);
+        }
+    }
+
+    state.logger.info(&format!("Grouped matches into {} brackets", matches_by_bracket.len()));
+
+    // 4. Для каждой сетки добавить соответствующие матчи
     let mut brackets_with_matches: Vec<serde_json::Value> = Vec::new();
 
     for (bracket_id, bracket_data) in bracket_records {
@@ -466,22 +525,9 @@ async fn get_tournament_brackets_handler(
             Ok(mut bracket_json) => {
                 state.logger.info(&format!("Processing bracket_id: {}", bracket_id));
 
-                // Получить матчи для этой сетки
-                let match_records = sqlx::query_as::<_, (String,)>(
-                    "SELECT data FROM matches_cache WHERE bracket_id = ?"
-                )
-                .bind(bracket_id)
-                .fetch_all(&*state.db)
-                .await
-                .unwrap_or_default();
-
-                state.logger.info(&format!("Found {} matches for bracket {}", match_records.len(), bracket_id));
-
-                // Парсить матчи в JSON
-                let matches: Vec<serde_json::Value> = match_records
-                    .into_iter()
-                    .filter_map(|(data,)| serde_json::from_str(&data).ok())
-                    .collect();
+                // Получить матчи из HashMap
+                let matches = matches_by_bracket.get(&bracket_id).cloned().unwrap_or_default();
+                state.logger.info(&format!("Found {} matches for bracket {}", matches.len(), bracket_id));
 
                 // Добавить матчи в сетку
                 if let Some(obj) = bracket_json.as_object_mut() {
@@ -622,7 +668,8 @@ async fn update_match_score_handler(
     })))
 }
 
-// Update match participant handler (for winner advancement)
+// Update match participant handler (for winner advancement) - DEPRECATED, не используется
+#[allow(dead_code)]
 async fn update_match_participant_handler(
     State(state): State<LocalServerState>,
     Json(payload): Json<UpdateMatchParticipantRequest>,
@@ -807,12 +854,98 @@ async fn swap_bracket_participants_handler(
     let mut match2_obj: serde_json::Value = serde_json::from_str(&data2_str)
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // DEBUG: Логируем данные ДО swap
+    println!("[LOCAL SERVER] === BEFORE SWAP ===");
+    println!("[LOCAL SERVER] match1 (id={}): participant1={}, participant2={}",
+        payload.match1_id,
+        match1_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
+        match1_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
+    );
+    println!("[LOCAL SERVER] match2 (id={}): participant1={}, participant2={}",
+        payload.match2_id,
+        match2_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
+        match2_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
+    );
+
     // Swap участников
     let slot1_value = match1_obj.get(&payload.match1_slot).cloned().unwrap_or(serde_json::Value::Null);
     let slot2_value = match2_obj.get(&payload.match2_slot).cloned().unwrap_or(serde_json::Value::Null);
 
+    println!("[LOCAL SERVER] Swapping: match1[{}] <-> match2[{}]", payload.match1_slot, payload.match2_slot);
+    println!("[LOCAL SERVER] slot1_value (from match1): {}", serde_json::to_string(&slot1_value).unwrap_or_default());
+    println!("[LOCAL SERVER] slot2_value (from match2): {}", serde_json::to_string(&slot2_value).unwrap_or_default());
+
     match1_obj[&payload.match1_slot] = slot2_value;
     match2_obj[&payload.match2_slot] = slot1_value;
+
+    println!("[LOCAL SERVER] === AFTER SWAP (before legacy update) ===");
+    println!("[LOCAL SERVER] match1 (id={}): participant1={}, participant2={}",
+        payload.match1_id,
+        match1_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
+        match1_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
+    );
+    println!("[LOCAL SERVER] match2 (id={}): participant1={}, participant2={}",
+        payload.match2_id,
+        match2_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
+        match2_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
+    );
+
+    // КРИТИЧНО: Обновить legacy поля для match1
+    if !match1_obj["participant1"].is_null() && match1_obj["participant1"].is_object() {
+        match1_obj["fighter1_name"] = match1_obj["participant1"]["full_name"].clone();
+        match1_obj["participant1_id"] = match1_obj["participant1"]["fighter_id"].clone();
+        match1_obj["fighter1_club"] = match1_obj["participant1"]["club_name"].clone();
+    } else {
+        match1_obj["fighter1_name"] = serde_json::Value::Null;
+        match1_obj["participant1_id"] = serde_json::Value::Null;
+        match1_obj["fighter1_club"] = serde_json::Value::Null;
+    }
+
+    if !match1_obj["participant2"].is_null() && match1_obj["participant2"].is_object() {
+        match1_obj["fighter2_name"] = match1_obj["participant2"]["full_name"].clone();
+        match1_obj["participant2_id"] = match1_obj["participant2"]["fighter_id"].clone();
+        match1_obj["fighter2_club"] = match1_obj["participant2"]["club_name"].clone();
+    } else {
+        match1_obj["fighter2_name"] = serde_json::Value::Null;
+        match1_obj["participant2_id"] = serde_json::Value::Null;
+        match1_obj["fighter2_club"] = serde_json::Value::Null;
+    }
+
+    // КРИТИЧНО: Обновить legacy поля для match2
+    if !match2_obj["participant1"].is_null() && match2_obj["participant1"].is_object() {
+        match2_obj["fighter1_name"] = match2_obj["participant1"]["full_name"].clone();
+        match2_obj["participant1_id"] = match2_obj["participant1"]["fighter_id"].clone();
+        match2_obj["fighter1_club"] = match2_obj["participant1"]["club_name"].clone();
+    } else {
+        match2_obj["fighter1_name"] = serde_json::Value::Null;
+        match2_obj["participant1_id"] = serde_json::Value::Null;
+        match2_obj["fighter1_club"] = serde_json::Value::Null;
+    }
+
+    if !match2_obj["participant2"].is_null() && match2_obj["participant2"].is_object() {
+        match2_obj["fighter2_name"] = match2_obj["participant2"]["full_name"].clone();
+        match2_obj["participant2_id"] = match2_obj["participant2"]["fighter_id"].clone();
+        match2_obj["fighter2_club"] = match2_obj["participant2"]["club_name"].clone();
+    } else {
+        match2_obj["fighter2_name"] = serde_json::Value::Null;
+        match2_obj["participant2_id"] = serde_json::Value::Null;
+        match2_obj["fighter2_club"] = serde_json::Value::Null;
+    }
+
+    println!("[LOCAL SERVER] Updated legacy fields for both matches");
+
+    // DEBUG: Логируем финальное состояние перед сохранением
+    println!("[LOCAL SERVER] === FINAL STATE (after legacy update) ===");
+    println!("[LOCAL SERVER] match1 (id={}): fighter1_name={}, fighter2_name={}",
+        payload.match1_id,
+        match1_obj.get("fighter1_name").and_then(|v| v.as_str()).unwrap_or("null"),
+        match1_obj.get("fighter2_name").and_then(|v| v.as_str()).unwrap_or("null")
+    );
+    println!("[LOCAL SERVER] match2 (id={}): fighter1_name={}, fighter2_name={}",
+        payload.match2_id,
+        match2_obj.get("fighter1_name").and_then(|v| v.as_str()).unwrap_or("null"),
+        match2_obj.get("fighter2_name").and_then(|v| v.as_str()).unwrap_or("null")
+    );
 
     // Сохранить оба матча атомарно
     sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
@@ -857,6 +990,121 @@ async fn create_temp_participant_handler(
 
     println!("[LOCAL SERVER] ========== create_temp_participant_handler SUCCESS ==========");
     Ok(Json(serde_json::json!({ "status": "ok", "temp_id": payload.temp_id })))
+}
+
+// Handler для редактирования участников судьями (добавление/удаление/обновление)
+async fn update_bracket_participant_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<UpdateBracketParticipantRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== update_bracket_participant_handler START ==========");
+    println!("[LOCAL SERVER] operation={}, bracket_id={}, match_id={}, slot={}, fighter_id={:?}, fighter_name={:?}",
+        payload.operation_type, payload.bracket_id, payload.match_id,
+        payload.participant_slot, payload.fighter_id, payload.fighter_name);
+
+    // Получить текущие данные матча
+    let current_data: Option<String> = sqlx::query_scalar(
+        "SELECT data FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(payload.match_id)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    let mut match_data = if let Some(data_str) = current_data {
+        serde_json::from_str(&data_str).unwrap_or(serde_json::json!({}))
+    } else {
+        println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
+        return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
+    };
+
+    // Определить, какие поля обновлять в зависимости от slot
+    let (id_field, name_field, club_field, participant_field) = if payload.participant_slot == "participant1" {
+        ("participant1_id", "fighter1_name", "fighter1_club", "participant1")
+    } else if payload.participant_slot == "participant2" {
+        ("participant2_id", "fighter2_name", "fighter2_club", "participant2")
+    } else {
+        println!("[LOCAL SERVER] ERROR: Invalid participant_slot: {}", payload.participant_slot);
+        return Err(AppError::BadRequest("Invalid participant_slot (must be participant1 or participant2)".to_string()));
+    };
+
+    // Обработка операций
+    match payload.operation_type.as_str() {
+        "add" | "update" => {
+            // Добавление или обновление участника
+            if let Some(fighter_id) = payload.fighter_id {
+                match_data[id_field] = serde_json::json!(fighter_id);
+            }
+            if let Some(ref fighter_name) = payload.fighter_name {
+                match_data[name_field] = serde_json::json!(fighter_name);
+
+                // Обновить participant объект
+                if match_data[participant_field].is_null() || !match_data[participant_field].is_object() {
+                    match_data[participant_field] = serde_json::json!({});
+                }
+                match_data[participant_field]["full_name"] = serde_json::json!(fighter_name);
+
+                if let Some(fighter_id) = payload.fighter_id {
+                    match_data[participant_field]["id"] = serde_json::json!(fighter_id);
+                    match_data[participant_field]["fighter_id"] = serde_json::json!(fighter_id);
+                }
+            }
+            if let Some(ref club_name) = payload.club_name {
+                match_data[club_field] = serde_json::json!(club_name);
+                if match_data[participant_field].is_object() {
+                    match_data[participant_field]["club_name"] = serde_json::json!(club_name);
+                }
+            }
+
+            println!("[LOCAL SERVER] Updated {}: id={:?}, name={:?}, club={:?}",
+                payload.participant_slot, payload.fighter_id, payload.fighter_name, payload.club_name);
+        },
+        "remove" => {
+            // Удаление участника
+            match_data[id_field] = serde_json::Value::Null;
+            match_data[name_field] = serde_json::Value::Null;
+            match_data[club_field] = serde_json::Value::Null;
+            match_data[participant_field] = serde_json::Value::Null;
+
+            println!("[LOCAL SERVER] Removed {}", payload.participant_slot);
+        },
+        _ => {
+            println!("[LOCAL SERVER] ERROR: Unknown operation_type: {}", payload.operation_type);
+            return Err(AppError::BadRequest(format!("Unknown operation_type: {}", payload.operation_type)));
+        }
+    }
+
+    // Сохранить в БД
+    sqlx::query(
+        "UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?"
+    )
+    .bind(match_data.to_string())
+    .bind(payload.match_id)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] Participant data saved to matches_cache");
+
+    // Broadcast через WebSocket (если есть подключенные судьи к этому матчу)
+    let channels = state.match_channels.read().await;
+    if let Some(tx) = channels.get(&payload.match_id.to_string()) {
+        let ws_message = serde_json::json!({
+            "type": "participant_update",
+            "match_id": payload.match_id,
+            "participant_slot": payload.participant_slot,
+            "operation": payload.operation_type,
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        });
+
+        let _ = tx.send(ws_message.to_string());
+        println!("[LOCAL SERVER] Broadcast participant update to WebSocket subscribers");
+    }
+
+    println!("[LOCAL SERVER] ========== update_bracket_participant_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({
+        "status": "updated",
+        "match_id": payload.match_id,
+        "operation": payload.operation_type
+    })))
 }
 
 // Reserve bracket handler - резервирование сетки судьей

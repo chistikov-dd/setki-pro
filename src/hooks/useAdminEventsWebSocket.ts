@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useServerModeStore } from '../stores/serverModeStore';
+import { useJudgeMonitorStore } from '../stores/judgeMonitorStore';
 import { logger, LOG_CATEGORIES } from '../utils/logger';
 
 export interface JudgeConnectedEvent {
@@ -52,6 +53,23 @@ export function useAdminEventsWebSocket({
 }: UseAdminEventsWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const { serverUrl, mode } = useServerModeStore();
+  const { addJudge, removeJudge } = useJudgeMonitorStore();
+
+  // FIX: Используем useRef для WebSocket вместо let переменной
+  // Это решает race condition когда cleanup вызывается до завершения connectWebSocket
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // FIX: Используем useRef для callbacks чтобы избежать reconnect при изменении callback функций
+  const onJudgeConnectedRef = useRef(onJudgeConnected);
+  const onJudgeDisconnectedRef = useRef(onJudgeDisconnected);
+  const onErrorRef = useRef(onError);
+
+  // Обновляем refs при изменении callbacks
+  useEffect(() => {
+    onJudgeConnectedRef.current = onJudgeConnected;
+    onJudgeDisconnectedRef.current = onJudgeDisconnected;
+    onErrorRef.current = onError;
+  });
 
   useEffect(() => {
     // Подключаемся только если enabled и режим local-server
@@ -100,27 +118,49 @@ export function useAdminEventsWebSocket({
       }
     };
 
-    let ws: WebSocket | null = null;
-
     connectWebSocket().then((socket) => {
       if (!socket) return;
-      ws = socket;
 
-      ws.onopen = () => {
+      // Сохраняем WebSocket в ref
+      wsRef.current = socket;
+
+      socket.onopen = () => {
         setIsConnected(true);
         logger.info(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket connected');
       };
 
-      ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
         try {
           const message: AdminEvent = JSON.parse(event.data);
           logger.debug(LOG_CATEGORIES.WEBSOCKET, 'Admin event received', { message });
 
           // Обработка события в зависимости от типа
-          if (message.type === 'judge_connected' && onJudgeConnected) {
-            onJudgeConnected(message as JudgeConnectedEvent);
-          } else if (message.type === 'judge_disconnected' && onJudgeDisconnected) {
-            onJudgeDisconnected(message as JudgeDisconnectedEvent);
+          if (message.type === 'judge_connected') {
+            const judgeEvent = message as JudgeConnectedEvent;
+
+            // Обновляем store с информацией о подключенном судье
+            addJudge({
+              user_id: judgeEvent.user_id,
+              judge_name: judgeEvent.judge_name,
+              table_number: judgeEvent.table_number,
+              tournament_id: judgeEvent.tournament_id,
+              connected_at: judgeEvent.timestamp,
+            });
+
+            // Вызываем callback если есть (используем ref)
+            if (onJudgeConnectedRef.current) {
+              onJudgeConnectedRef.current(judgeEvent);
+            }
+          } else if (message.type === 'judge_disconnected') {
+            const judgeEvent = message as JudgeDisconnectedEvent;
+
+            // Удаляем судью из store
+            removeJudge(judgeEvent.table_number);
+
+            // Вызываем callback если есть (используем ref)
+            if (onJudgeDisconnectedRef.current) {
+              onJudgeDisconnectedRef.current(judgeEvent);
+            }
           }
         } catch (error) {
           logger.error(
@@ -132,15 +172,15 @@ export function useAdminEventsWebSocket({
         }
       };
 
-      ws.onerror = () => {
+      socket.onerror = () => {
         const error = new Error('Admin WebSocket error');
         logger.error(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket error', {}, error);
-        if (onError) {
-          onError(error);
+        if (onErrorRef.current) {
+          onErrorRef.current(error);
         }
       };
 
-      ws.onclose = () => {
+      socket.onclose = () => {
         setIsConnected(false);
         logger.info(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket disconnected');
       };
@@ -148,11 +188,15 @@ export function useAdminEventsWebSocket({
 
     // Cleanup on unmount
     return () => {
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        ws.close();
+      if (wsRef.current &&
+          (wsRef.current.readyState === WebSocket.OPEN ||
+           wsRef.current.readyState === WebSocket.CONNECTING)) {
+        logger.debug(LOG_CATEGORIES.WEBSOCKET, 'Closing admin WebSocket on cleanup');
+        wsRef.current.close();
       }
+      wsRef.current = null;
     };
-  }, [enabled, mode, serverUrl, onJudgeConnected, onJudgeDisconnected, onError]);
+  }, [enabled, mode, serverUrl, addJudge, removeJudge]); // Убрали callbacks из deps
 
   return {
     isConnected,

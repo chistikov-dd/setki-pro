@@ -363,8 +363,6 @@ export const AdminDashboard = () => {
             {/* Judge Tables Monitor */}
             <JudgeTablesMonitor
               tournamentId={currentSession.tournament_id}
-              autoRefresh={true}
-              refreshInterval={5000}
             />
 
             {/* Active Matches Monitor */}

@@ -1657,8 +1657,31 @@ async fn update_bracket_participant(
 
         println!("[update_bracket_participant] Успешно отправлено на сервер админа");
 
-        // Также обновить локальную БД судьи (write-through cache)
-        println!("[update_bracket_participant] Обновление локального кэша судьи");
+        // ВАЖНО: Данные обновлены на сервере админа, локальный кэш судьи НЕ обновляем
+        // Судья получит актуальные данные при следующем запросе getBracketMatches
+        println!("[update_bracket_participant] Операция завершена успешно (локальный сервер)");
+
+        // Записать изменение в таблицу редактирований для истории
+        sqlx::query(
+            "INSERT INTO bracket_participant_edits
+            (bracket_id, match_id, participant_slot, fighter_id, fighter_name, club_name, weight, operation_type, edited_by_judge, edited_by_admin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(request.bracket_id)
+        .bind(request.match_id)
+        .bind(&request.participant_slot)
+        .bind(request.fighter_id)
+        .bind(&request.fighter_name)
+        .bind(&request.club_name)
+        .bind(request.weight)
+        .bind(&request.operation_type)
+        .bind(&judge_name)
+        .bind(admin_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        return Ok(()); // Выходим здесь, не обновляя локальный кэш
     }
 
     // Если это судья, проверить что он работает с зарезервированной за ним сеткой
@@ -1847,6 +1870,11 @@ async fn swap_bracket_participants(
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
         state.logger.info(&format!("Sending to local server: {}", url));
 
+        // Получаем токен для авторизации
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден (требуется авторизация)".to_string())?;
+
         // Нормализовать URL (убрать /api/v1 если есть)
         let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
         let api_url = format!("{}/api/v1/desktop/matches/swap", base_url);
@@ -1856,6 +1884,7 @@ async fn swap_bracket_participants(
         let client = reqwest::Client::new();
         let response = client
             .post(&api_url)
+            .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({
                 "bracket_id": request.bracket_id,
                 "match1_id": request.match1_id,
@@ -1878,8 +1907,31 @@ async fn swap_bracket_participants(
 
         println!("[swap_bracket_participants] Успешно отправлено на сервер админа");
 
-        // Также обновить локальную БД судьи (write-through cache)
-        println!("[swap_bracket_participants] Обновление локального кэша судьи");
+        // ВАЖНО: Данные обновлены на сервере админа, локальный кэш судьи НЕ обновляем
+        // Судья получит актуальные данные при следующем запросе getBracketMatches
+        println!("[swap_bracket_participants] Операция завершена успешно (локальный сервер)");
+
+        // Записать изменение в таблицу редактирований для истории
+        sqlx::query(
+            "INSERT INTO bracket_participant_edits
+            (bracket_id, match_id, participant_slot, operation_type, edited_by_judge, edited_by_admin)
+            VALUES (?, ?, ?, 'swap', ?, ?), (?, ?, ?, 'swap', ?, ?)"
+        )
+        .bind(request.bracket_id)
+        .bind(request.match1_id)
+        .bind(&request.match1_slot)
+        .bind(&judge_name)
+        .bind(admin_id)
+        .bind(request.bracket_id)
+        .bind(request.match2_id)
+        .bind(&request.match2_slot)
+        .bind(&judge_name)
+        .bind(admin_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        return Ok(()); // Выходим здесь, не обновляя локальный кэш
     }
 
     // ВАЖНО: Если swap внутри одного матча, обрабатываем отдельно
@@ -2224,13 +2276,22 @@ pub fn run() {
         .setup(|app| {
             // Портативный режим: ~/.setki-keeper/data
             // Работает для всех платформ и форматов (AppImage, .exe, etc.)
-            let home_dir = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .expect("Failed to get home directory");
+            // НОВОЕ: Поддержка SETKI_DATA_DIR для множественных профилей тестирования
+            let app_data_dir = if let Ok(custom_dir) = std::env::var("SETKI_DATA_DIR") {
+                // Используем кастомную директорию из переменной окружения
+                let custom_path = std::path::PathBuf::from(custom_dir).join("data");
+                println!("🔧 [PROFILE] Using custom data directory: {:?}", custom_path);
+                custom_path
+            } else {
+                // Стандартная директория
+                let home_dir = std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .expect("Failed to get home directory");
 
-            let app_data_dir = std::path::PathBuf::from(home_dir)
-                .join(".setki-keeper")
-                .join("data");
+                std::path::PathBuf::from(home_dir)
+                    .join(".setki-keeper")
+                    .join("data")
+            };
 
             // Убедиться что директория существует
             std::fs::create_dir_all(&app_data_dir)

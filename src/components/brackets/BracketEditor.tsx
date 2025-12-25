@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
@@ -48,12 +48,8 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
   const { user } = useAuthStore();
   const { showToast } = useToast();
 
-  useEffect(() => {
-    console.log('[BracketEditor] Компонент смонтирован, bracketId:', bracketId);
-    loadMatches();
-  }, [bracketId]);
-
-  const loadMatches = async () => {
+  // FIX: Используем useCallback для loadMatches чтобы избежать лишних рендеров
+  const loadMatches = useCallback(async () => {
     console.log('[BracketEditor] loadMatches вызван');
     setIsLoading(true);
     setError(null);
@@ -65,15 +61,23 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
 
       console.log('[BracketEditor] Загрузка матчей, bracket_id:', bracketId, 'mode:', mode, 'serverUrl:', url);
       const data = await getBracketMatches(bracketId, url);
-      console.log('[BracketEditor] Получено матчей:', data.length, data);
-      setMatches(data as MatchWithData[]);
+      console.log('[BracketEditor] Получено матчей:', data.length);
+      console.log('[BracketEditor] Первые 2 матча:', data.slice(0, 2));
+
+      // КРИТИЧНО: создаем новый массив чтобы React гарантированно обновил UI
+      setMatches([...data as MatchWithData[]]);
     } catch (err) {
       console.error('[BracketEditor] Ошибка загрузки:', err);
       setError(err instanceof Error ? err.message : 'Ошибка загрузки матчей');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [bracketId]);
+
+  useEffect(() => {
+    console.log('[BracketEditor] Компонент смонтирован, bracketId:', bracketId);
+    loadMatches();
+  }, [bracketId, loadMatches]);
 
   const handleDragStart = (
     matchId: number,
