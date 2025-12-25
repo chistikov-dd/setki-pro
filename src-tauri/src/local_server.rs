@@ -1049,7 +1049,7 @@ async fn websocket_handler(
             "SELECT COUNT(*) FROM judge_auth WHERE token = ?"
         )
         .bind(token_value)
-        .fetch_one(&*state.db_pool)
+        .fetch_one(&*state.db)
         .await
         {
             Ok(count) if count > 0 => {
@@ -1233,7 +1233,7 @@ async fn admin_websocket_handler(
             "SELECT COUNT(*) FROM judge_auth WHERE token = ?"
         )
         .bind(token_value)
-        .fetch_one(&*state.db_pool)
+        .fetch_one(&*state.db)
         .await
         {
             Ok(count) if count > 0 => {

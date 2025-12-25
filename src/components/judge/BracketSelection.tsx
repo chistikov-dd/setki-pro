@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { getCachedBrackets, getBracketMatches, getBracketTableAssignments, type BracketTableAssignment } from '../../services/api';
+import { getCachedBrackets, getBracketTableAssignments, type BracketTableAssignment } from '../../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { BracketCardSkeleton, SkeletonList } from '../ui/Skeleton';
@@ -120,7 +120,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       const { mode, serverUrl } = useServerModeStore.getState();
       const url = mode === 'local-client' ? serverUrl : null;
 
-      const startTime = performance.now();
+      const loadStartTime = performance.now();
       console.log('[BracketSelection] ===== НАЧАЛО ЗАГРУЗКИ СЕТОК =====');
       console.log('[BracketSelection] tournamentId:', tournamentId);
       console.log('[BracketSelection] mode:', mode);
@@ -128,7 +128,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       const data = await getCachedBrackets(tournamentId, url);
 
-      const fetchTime = performance.now() - startTime;
+      const fetchTime = performance.now() - loadStartTime;
       console.log(`[BracketSelection] getCachedBrackets завершен за ${fetchTime.toFixed(0)}ms`);
       console.log(`[BracketSelection] Получено ${data.length} сеток`);
 
@@ -150,7 +150,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       // Загрузить участников для каждой сетки (для поиска)
       const participantsMap: Record<number, string[]> = {};
-      const startTime = performance.now();
+      const processStartTime = performance.now();
 
       console.log('[BracketSelection] Начало обработки участников для', data.length, 'сеток');
 
@@ -183,8 +183,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         }
       }
 
-      const elapsed = performance.now() - startTime;
-      console.log(`[BracketSelection] Загрузка завершена за ${elapsed.toFixed(0)}ms: ${data.length} сеток, ${Object.values(participantsMap).flat().length} уникальных участников`);
+      const elapsed = performance.now() - processStartTime;
+      console.log(`[BracketSelection] Обработка завершена за ${elapsed.toFixed(0)}ms: ${data.length} сеток, ${Object.values(participantsMap).flat().length} уникальных участников`);
 
       setParticipantsByBracket(participantsMap);
     } catch (err) {
