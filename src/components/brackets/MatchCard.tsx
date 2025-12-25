@@ -112,7 +112,8 @@ function MatchCardBase({
           draggable={canEdit && !!participant1Name}
           style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
           onDragStart={(e) => {
-            const logData = `matchId=${match.id}, participant1Name=${participant1Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}`;
+            const draggableAttr = e.currentTarget.getAttribute('draggable');
+            const logData = `matchId=${match.id}, participant1Name=${participant1Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}, draggable=${draggableAttr}`;
             logger.info(`[MatchCard] DragStart participant1: ${logData}`);
             if (!canEdit || !participant1Name) {
               e.preventDefault();
@@ -134,11 +135,12 @@ function MatchCardBase({
             onDragStart?.(match.id, 'participant1', participant1Name, match.participant1?.id);
           }}
           onDragEnd={(e) => {
-            console.log('[MatchCard] DragEnd, dropEffect:', e.dataTransfer.dropEffect);
+            const dropEffect = e.dataTransfer.dropEffect;
+            logger.info(`[MatchCard] DragEnd participant1: matchId=${match.id}, dropEffect=${dropEffect}`);
             // НЕ вызываем onDragEnd() если был успешный drop (dropEffect === 'move')
             // Store сам очистит draggedParticipant после обработки drop
-            if (e.dataTransfer.dropEffect === 'none') {
-              console.log('[MatchCard] Drop не произошёл, очищаем draggedParticipant');
+            if (dropEffect === 'none') {
+              logger.info(`[MatchCard] Drop не произошёл (dropEffect=none), очищаем draggedParticipant`);
               onDragEnd?.();
             }
           }}
@@ -151,7 +153,7 @@ function MatchCardBase({
             }
           }}
           onDragLeave={() => {
-            console.log('[MatchCard] DragLeave participant1');
+            logger.info(`[MatchCard] DragLeave participant1: matchId=${match.id}`);
             setDragOverSlot(null);
           }}
           onDrop={(e) => {
@@ -247,10 +249,12 @@ function MatchCardBase({
           draggable={canEdit && !!participant2Name}
           style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
           onDragStart={(e) => {
-            console.log('[MatchCard] DragStart participant2:', match.id, participant2Name, 'canEdit:', canEdit);
+            const draggableAttr = e.currentTarget.getAttribute('draggable');
+            const logData = `matchId=${match.id}, participant2Name=${participant2Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}, draggable=${draggableAttr}`;
+            logger.info(`[MatchCard] DragStart participant2: ${logData}`);
             if (!canEdit || !participant2Name) {
               e.preventDefault();
-              console.log('[MatchCard] DragStart cancelled - canEdit or participant2Name is false');
+              logger.warn(`[MatchCard] DragStart CANCELLED: ${logData}`);
               return;
             }
 
@@ -268,11 +272,12 @@ function MatchCardBase({
             onDragStart?.(match.id, 'participant2', participant2Name, match.participant2?.id);
           }}
           onDragEnd={(e) => {
-            console.log('[MatchCard] DragEnd, dropEffect:', e.dataTransfer.dropEffect);
+            const dropEffect = e.dataTransfer.dropEffect;
+            logger.info(`[MatchCard] DragEnd participant2: matchId=${match.id}, dropEffect=${dropEffect}`);
             // НЕ вызываем onDragEnd() если был успешный drop (dropEffect === 'move')
             // Store сам очистит draggedParticipant после обработки drop
-            if (e.dataTransfer.dropEffect === 'none') {
-              console.log('[MatchCard] Drop не произошёл, очищаем draggedParticipant');
+            if (dropEffect === 'none') {
+              logger.info(`[MatchCard] Drop не произошёл (dropEffect=none), очищаем draggedParticipant`);
               onDragEnd?.();
             }
           }}
@@ -281,21 +286,23 @@ function MatchCardBase({
               e.preventDefault();
               e.stopPropagation();
               e.dataTransfer.dropEffect = 'move';
-              console.log('[MatchCard] DragOver participant2:', match.id);
               setDragOverSlot('participant2');
             }
           }}
           onDragLeave={() => {
-            console.log('[MatchCard] DragLeave participant2');
+            logger.info(`[MatchCard] DragLeave participant2: matchId=${match.id}`);
             setDragOverSlot(null);
           }}
           onDrop={(e) => {
             e.preventDefault(); // КРИТИЧНО!
             e.stopPropagation();
-            console.log('[MatchCard] Drop participant2:', match.id, 'canEdit:', canEdit);
+            const logData = `matchId=${match.id}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}`;
+            logger.info(`[MatchCard] DROP participant2: ${logData}`);
             if (canEdit) {
               onDrop?.(match.id, 'participant2');
               setDragOverSlot(null);
+            } else {
+              logger.error(`[MatchCard] DROP ОТКЛОНЁН! ${logData}`);
             }
           }}
         >
