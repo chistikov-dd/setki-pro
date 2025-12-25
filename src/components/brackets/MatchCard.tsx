@@ -3,6 +3,7 @@ import { Button } from '../ui/Button';
 import type { Match } from '../../types';
 import { useState, memo } from 'react';
 import { removePatronymic } from '../../lib/utils';
+import { logger } from '../../lib/logger';
 
 interface MatchCardProps {
   match: Match;
@@ -111,10 +112,11 @@ function MatchCardBase({
           draggable={canEdit && !!participant1Name}
           style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
           onDragStart={(e) => {
-            console.log('[MatchCard] DragStart participant1:', match.id, participant1Name, 'canEdit:', canEdit);
+            const logData = `matchId=${match.id}, participant1Name=${participant1Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}`;
+            logger.info(`[MatchCard] DragStart participant1: ${logData}`);
             if (!canEdit || !participant1Name) {
               e.preventDefault();
-              console.log('[MatchCard] DragStart cancelled - canEdit or participant1Name is false');
+              logger.warn(`[MatchCard] DragStart CANCELLED: ${logData}`);
               return;
             }
 
@@ -141,12 +143,15 @@ function MatchCardBase({
             }
           }}
           onDragOver={(e) => {
+            const logData = `matchId=${match.id}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}`;
+            logger.info(`[MatchCard] DragOver participant1: ${logData}`);
             if (canEdit) {
               e.preventDefault();
               e.stopPropagation();
               e.dataTransfer.dropEffect = 'move';
-              console.log('[MatchCard] DragOver participant1:', match.id);
               setDragOverSlot('participant1');
+            } else {
+              logger.error(`[MatchCard] DROP ЗАПРЕЩЁН! canEdit=false, ${logData}`);
             }
           }}
           onDragLeave={() => {
