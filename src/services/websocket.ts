@@ -41,27 +41,48 @@ export class MatchWebSocket {
   /**
    * Подключиться к WebSocket
    */
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
+  async connect(): Promise<void> {
+    return new Promise(async (resolve, reject) => {
       try {
+        // Получаем токен из базы данных через Tauri API
+        const { invoke } = await import('@tauri-apps/api/core');
+        const token = await invoke<string | null>('get_token');
+
         // Используем кастомный URL если передан (для локального сервера), иначе default
         const baseUrl = this.customUrl || WS_BASE_URL;
-        const url = this.pinCode
-          ? `${baseUrl}/${this.matchId}?pin_code=${this.pinCode}`
-          : `${baseUrl}/${this.matchId}`;
 
-        logger.info(LOG_CATEGORIES.WEBSOCKET, 'Connecting to WebSocket', {
+        // Формируем URL с токеном вместо pin_code для авторизации
+        let url = `${baseUrl}/${this.matchId}`;
+        if (token) {
+          url += `?token=${encodeURIComponent(token)}`;
+        } else if (this.pinCode) {
+          // Fallback на pin_code если токена нет
+          url += `?pin_code=${encodeURIComponent(this.pinCode)}`;
+        }
+
+        logger.info(LOG_CATEGORIES.WEBSOCKET, '===== WebSocket CONNECTION START =====', {
           matchId: this.matchId,
-          url: url.replace(/pin_code=[^&]+/, 'pin_code=***'), // Hide PIN in logs
+          url: url.replace(/token=[^&]+/, 'token=***').replace(/pin_code=[^&]+/, 'pin_code=***'), // Hide sensitive data in logs
           isCustomUrl: !!this.customUrl,
+          hasToken: !!token,
+          tokenLength: token ? token.length : 0,
+          pinCodeLength: this.pinCode ? this.pinCode.length : 0,
         });
+
+        console.log('[WebSocket] Creating WebSocket connection...');
+        console.log('[WebSocket]   Match ID:', this.matchId);
+        console.log('[WebSocket]   Has Token:', !!token);
+        console.log('[WebSocket]   Has PIN:', !!this.pinCode);
+        console.log('[WebSocket]   Custom URL:', this.customUrl);
 
         this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
-          logger.info(LOG_CATEGORIES.WEBSOCKET, 'WebSocket connected successfully', {
+          console.log('[WebSocket] ✅ Connection OPENED successfully');
+          logger.info(LOG_CATEGORIES.WEBSOCKET, '===== WebSocket CONNECTED =====', {
             matchId: this.matchId,
             reconnectAttempts: this.reconnectAttempts,
+            readyState: this.ws?.readyState,
           });
           this.reconnectAttempts = 0;
           resolve();

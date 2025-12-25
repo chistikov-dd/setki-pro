@@ -64,56 +64,91 @@ export function useAdminEventsWebSocket({
       return;
     }
 
-    // Формируем WebSocket URL (ws:// вместо http://)
-    const wsUrl = serverUrl.replace('http://', 'ws://') + '/ws/admin/events';
-
-    logger.info(LOG_CATEGORIES.WEBSOCKET, 'Connecting to admin events WebSocket', { wsUrl });
-
-    // Создаём WebSocket соединение
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      logger.info(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket connected');
-    };
-
-    ws.onmessage = (event) => {
+    // Получаем токен и подключаемся к WebSocket
+    const connectWebSocket = async () => {
       try {
-        const message: AdminEvent = JSON.parse(event.data);
-        logger.debug(LOG_CATEGORIES.WEBSOCKET, 'Admin event received', { message });
+        // Получаем токен из базы данных через Tauri API
+        const { invoke } = await import('@tauri-apps/api/core');
+        const token = await invoke<string | null>('get_token');
 
-        // Обработка события в зависимости от типа
-        if (message.type === 'judge_connected' && onJudgeConnected) {
-          onJudgeConnected(message as JudgeConnectedEvent);
-        } else if (message.type === 'judge_disconnected' && onJudgeDisconnected) {
-          onJudgeDisconnected(message as JudgeDisconnectedEvent);
+        // Формируем WebSocket URL (ws:// вместо http://)
+        let wsUrl = serverUrl.replace('http://', 'ws://') + '/ws/admin/events';
+
+        // Добавляем токен в query параметр
+        if (token) {
+          wsUrl += `?token=${encodeURIComponent(token)}`;
+          logger.info(LOG_CATEGORIES.WEBSOCKET, 'Connecting to admin events WebSocket with token', {
+            url: wsUrl.replace(/token=[^&]+/, 'token=***'),
+            hasToken: true
+          });
+        } else {
+          logger.warn(LOG_CATEGORIES.WEBSOCKET, 'No token found for admin WebSocket', { wsUrl });
         }
+
+        // Создаём WebSocket соединение
+        const ws = new WebSocket(wsUrl);
+
+        return ws;
       } catch (error) {
         logger.error(
           LOG_CATEGORIES.WEBSOCKET,
-          'Failed to parse admin event',
-          { raw: event.data },
+          'Failed to get token for admin WebSocket',
+          {},
           error instanceof Error ? error : new Error(String(error))
         );
+        return null;
       }
     };
 
-    ws.onerror = () => {
-      const error = new Error('Admin WebSocket error');
-      logger.error(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket error', {}, error);
-      if (onError) {
-        onError(error);
-      }
-    };
+    let ws: WebSocket | null = null;
 
-    ws.onclose = () => {
-      setIsConnected(false);
-      logger.info(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket disconnected');
-    };
+    connectWebSocket().then((socket) => {
+      if (!socket) return;
+      ws = socket;
+
+      ws.onopen = () => {
+        setIsConnected(true);
+        logger.info(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket connected');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message: AdminEvent = JSON.parse(event.data);
+          logger.debug(LOG_CATEGORIES.WEBSOCKET, 'Admin event received', { message });
+
+          // Обработка события в зависимости от типа
+          if (message.type === 'judge_connected' && onJudgeConnected) {
+            onJudgeConnected(message as JudgeConnectedEvent);
+          } else if (message.type === 'judge_disconnected' && onJudgeDisconnected) {
+            onJudgeDisconnected(message as JudgeDisconnectedEvent);
+          }
+        } catch (error) {
+          logger.error(
+            LOG_CATEGORIES.WEBSOCKET,
+            'Failed to parse admin event',
+            { raw: event.data },
+            error instanceof Error ? error : new Error(String(error))
+          );
+        }
+      };
+
+      ws.onerror = () => {
+        const error = new Error('Admin WebSocket error');
+        logger.error(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket error', {}, error);
+        if (onError) {
+          onError(error);
+        }
+      };
+
+      ws.onclose = () => {
+        setIsConnected(false);
+        logger.info(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket disconnected');
+      };
+    });
 
     // Cleanup on unmount
     return () => {
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         ws.close();
       }
     };

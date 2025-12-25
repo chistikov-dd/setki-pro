@@ -120,8 +120,18 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       const { mode, serverUrl } = useServerModeStore.getState();
       const url = mode === 'local-client' ? serverUrl : null;
 
-      console.log('[BracketSelection] Загрузка сеток, mode:', mode, 'serverUrl:', url);
+      const startTime = performance.now();
+      console.log('[BracketSelection] ===== НАЧАЛО ЗАГРУЗКИ СЕТОК =====');
+      console.log('[BracketSelection] tournamentId:', tournamentId);
+      console.log('[BracketSelection] mode:', mode);
+      console.log('[BracketSelection] serverUrl:', url);
+
       const data = await getCachedBrackets(tournamentId, url);
+
+      const fetchTime = performance.now() - startTime;
+      console.log(`[BracketSelection] getCachedBrackets завершен за ${fetchTime.toFixed(0)}ms`);
+      console.log(`[BracketSelection] Получено ${data.length} сеток`);
+
       setBrackets(data);
 
       // Загрузить информацию о занятых столах
@@ -140,40 +150,43 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       // Загрузить участников для каждой сетки (для поиска)
       const participantsMap: Record<number, string[]> = {};
+      const startTime = performance.now();
 
-      await Promise.all(
-        data.map(async (bracket) => {
-          try {
-            // ОПТИМИЗАЦИЯ: Если сетка уже содержит matches (локальный сервер), используем их
-            let matches: any[];
-            if (bracket.matches && Array.isArray(bracket.matches) && bracket.matches.length > 0) {
-              console.log(`[BracketSelection] Сетка ${bracket.id}: используем вложенные матчи (${bracket.matches.length})`);
-              matches = bracket.matches;
-            } else {
-              // Иначе загружаем отдельно (для online режима или если пусто)
-              console.log(`[BracketSelection] Сетка ${bracket.id}: загружаем матчи отдельно, serverUrl: ${url}`);
-              matches = await getBracketMatches(bracket.id, url);
-            }
+      console.log('[BracketSelection] Начало обработки участников для', data.length, 'сеток');
 
+      // ОПТИМИЗАЦИЯ: Обрабатываем все сетки синхронно, используя вложенные matches
+      for (const bracket of data) {
+        try {
+          // Проверяем наличие вложенных матчей (локальный сервер всегда их возвращает)
+          if (bracket.matches && Array.isArray(bracket.matches) && bracket.matches.length > 0) {
             const participants = new Set<string>();
 
             // Собрать уникальные имена участников из матчей
-            matches.forEach((match: any) => {
+            bracket.matches.forEach((match: any) => {
               if (match.fighter1_name) participants.add(match.fighter1_name);
               if (match.fighter2_name) participants.add(match.fighter2_name);
+              // Также проверяем альтернативные поля
+              if (match.participant1?.full_name) participants.add(match.participant1.full_name);
+              if (match.participant2?.full_name) participants.add(match.participant2.full_name);
             });
 
             participantsMap[bracket.id] = Array.from(participants);
-            console.log(`[BracketSelection] Сетка ${bracket.id} (${bracket.category_name}): найдено ${participants.size} участников`);
-          } catch (err) {
-            console.error(`Ошибка загрузки матчей для сетки ${bracket.id}:`, err);
+            console.log(`[BracketSelection] Сетка ${bracket.id}: ${participants.size} участников из ${bracket.matches.length} матчей (используем вложенные данные)`);
+          } else {
+            // Fallback: если matches отсутствуют (не должно случаться с локальным сервером)
+            console.warn(`[BracketSelection] Сетка ${bracket.id}: matches отсутствуют, пропускаем`);
             participantsMap[bracket.id] = [];
           }
-        })
-      );
+        } catch (err) {
+          console.error(`[BracketSelection] Ошибка обработки сетки ${bracket.id}:`, err);
+          participantsMap[bracket.id] = [];
+        }
+      }
+
+      const elapsed = performance.now() - startTime;
+      console.log(`[BracketSelection] Загрузка завершена за ${elapsed.toFixed(0)}ms: ${data.length} сеток, ${Object.values(participantsMap).flat().length} уникальных участников`);
 
       setParticipantsByBracket(participantsMap);
-      console.log('[BracketSelection] Загрузка завершена, всего сеток:', data.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки сеток');
     } finally {

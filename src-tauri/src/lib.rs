@@ -40,6 +40,16 @@ async fn has_saved_auth(
 }
 
 #[tauri::command]
+async fn get_token(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state.api_client
+        .get_token()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_saved_credentials(
     state: State<'_, AppState>,
 ) -> Result<Option<(String, String, i32)>, String> {
@@ -847,10 +857,16 @@ async fn get_bracket_table_assignments(
     if let Some(url) = server_url {
         println!("[get_bracket_table_assignments] Запрос к локальному серверу: {}", url);
 
+        // Получаем токен для авторизации
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден (требуется авторизация)".to_string())?;
+
         let client = reqwest::Client::new();
         let endpoint = format!("{}/api/v1/desktop/bracket-assignments/{}", url, tournament_id);
 
         let response = client.get(&endpoint)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
             .map_err(|e| format!("Ошибка запроса к локальному серверу: {}", e))?;
@@ -1521,6 +1537,11 @@ async fn create_temp_participant(
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
         state.logger.info(&format!("Sending to local server: {}", url));
 
+        // Получаем токен для авторизации
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден (требуется авторизация)".to_string())?;
+
         // Нормализовать URL
         let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
         let api_url = format!("{}/api/v1/desktop/temp-participants", base_url);
@@ -1530,6 +1551,7 @@ async fn create_temp_participant(
         let client = reqwest::Client::new();
         let response = client
             .post(&api_url)
+            .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({
                 "temp_id": temp_id,
                 "bracket_id": bracket_id,
@@ -1595,6 +1617,11 @@ async fn update_bracket_participant(
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
         println!("[update_bracket_participant] Отправка на локальный сервер: {}", url);
 
+        // Получаем токен для авторизации
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден (требуется авторизация)".to_string())?;
+
         // Нормализовать URL (убрать /api/v1 если есть)
         let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
         let api_url = format!("{}/api/v1/desktop/matches/participant", base_url);
@@ -1604,6 +1631,7 @@ async fn update_bracket_participant(
         let client = reqwest::Client::new();
         let response = client
             .post(&api_url)
+            .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({
                 "bracket_id": request.bracket_id,
                 "match_id": request.match_id,
@@ -2259,6 +2287,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             has_saved_auth,
+            get_token,
             get_saved_credentials,
             get_saved_judge_credentials,
             clear_saved_credentials,

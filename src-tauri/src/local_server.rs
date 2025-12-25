@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State, WebSocketUpgrade, Request},
+    extract::{Path, State, WebSocketUpgrade, Request, Query},
     http::{StatusCode, HeaderMap},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -268,17 +268,19 @@ pub async fn start_server(
         .route("/api/v1/desktop/brackets/reserve", post(reserve_bracket_handler))
         .route("/api/v1/desktop/brackets/release", post(release_bracket_handler))
 
-        // WebSocket endpoints
+        // Применяем auth_middleware ко всем HTTP endpoints
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+
+        // WebSocket endpoints (БЕЗ auth_middleware - у них своя проверка токена через query params)
         .route("/api/v1/ws/matches/:match_id", get(websocket_handler))
         .route("/api/v1/ws/admin/events", get(admin_websocket_handler))
 
-        // Health check
+        // Health check (публичный endpoint)
         .route("/health", get(health_handler))
 
         .layer(middleware::from_fn(logging_middleware))
         .layer(CorsLayer::permissive())
-        .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+        .with_state(state.clone());
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -1024,12 +1026,46 @@ async fn get_bracket_assignments_handler(
     Ok(Json(result))
 }
 
+// WebSocket query params
+#[derive(Deserialize)]
+struct WsQuery {
+    token: Option<String>,
+    pin_code: Option<String>,
+}
+
 // WebSocket handler
 async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<LocalServerState>,
     Path(match_id): Path<String>,
+    Query(params): Query<WsQuery>,
 ) -> Response {
+    // Проверка токена для авторизации
+    let token = params.token.or(params.pin_code);
+
+    if let Some(ref token_value) = token {
+        // Проверяем токен в базе данных
+        match sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM judge_auth WHERE token = ?"
+        )
+        .bind(token_value)
+        .fetch_one(&*state.db_pool)
+        .await
+        {
+            Ok(count) if count > 0 => {
+                println!("[WebSocket] Token valid for match {}", match_id);
+                // Токен валиден - продолжаем
+            }
+            _ => {
+                println!("[WebSocket] Invalid token for match {}", match_id);
+                return (StatusCode::UNAUTHORIZED, "Invalid token").into_response();
+            }
+        }
+    } else {
+        println!("[WebSocket] No token provided for match {}", match_id);
+        return (StatusCode::UNAUTHORIZED, "Token required").into_response();
+    }
+
     ws.on_upgrade(move |socket| handle_socket(socket, state, match_id))
 }
 
@@ -1186,7 +1222,33 @@ async fn handle_socket(socket: WebSocket, state: LocalServerState, match_id: Str
 async fn admin_websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<LocalServerState>,
+    Query(params): Query<WsQuery>,
 ) -> Response {
+    // Проверка токена для авторизации (аналогично websocket_handler)
+    let token = params.token.or(params.pin_code);
+
+    if let Some(ref token_value) = token {
+        // Проверяем токен в базе данных
+        match sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM judge_auth WHERE token = ?"
+        )
+        .bind(token_value)
+        .fetch_one(&*state.db_pool)
+        .await
+        {
+            Ok(count) if count > 0 => {
+                println!("[Admin WebSocket] Token valid, admin authorized");
+            }
+            _ => {
+                println!("[Admin WebSocket] Invalid token");
+                return (StatusCode::UNAUTHORIZED, "Invalid token").into_response();
+            }
+        }
+    } else {
+        println!("[Admin WebSocket] No token provided");
+        return (StatusCode::UNAUTHORIZED, "Token required").into_response();
+    }
+
     ws.on_upgrade(move |socket| handle_admin_socket(socket, state))
 }
 

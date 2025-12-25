@@ -72,38 +72,40 @@ function useMatchUpdateEmitter(
 
   // Функция отправки - проверяем существование окна перед отправкой
   const sendUpdate = useRef(async () => {
-    // Проверяем существует ли окно публичного табло
-    const publicWindow = WebviewWindow.getByLabel('public-display');
-    if (!publicWindow) {
-      fileLogger.debug('[MatchScreen] sendUpdate skipped - no public-display window');
-      return;
-    }
+    try {
+      // Проверяем существует ли окно публичного табло
+      const publicWindow = WebviewWindow.getByLabel('public-display');
+      if (!publicWindow) {
+        fileLogger.debug('[MatchScreen] sendUpdate skipped - no public-display window');
+        return;
+      }
 
-    const matchData = {
-      redFighter: dataRef.current.redFighter,
-      blueFighter: dataRef.current.blueFighter,
-      redScore: dataRef.current.redScore,
-      blueScore: dataRef.current.blueScore,
-      remainingSeconds: dataRef.current.remainingSeconds,
-      isRunning: dataRef.current.isRunning,
-    };
+      const matchData = {
+        redFighter: dataRef.current.redFighter,
+        blueFighter: dataRef.current.blueFighter,
+        redScore: dataRef.current.redScore,
+        blueScore: dataRef.current.blueScore,
+        remainingSeconds: dataRef.current.remainingSeconds,
+        isRunning: dataRef.current.isRunning,
+      };
 
-    const logData = {
-      redFighter: matchData.redFighter?.full_name,
-      blueFighter: matchData.blueFighter?.full_name,
-      redScore: matchData.redScore,
-      blueScore: matchData.blueScore,
-      remainingSeconds: matchData.remainingSeconds,
-      isRunning: matchData.isRunning,
-    };
+      const logData = {
+        redFighter: matchData.redFighter?.full_name,
+        blueFighter: matchData.blueFighter?.full_name,
+        redScore: matchData.redScore,
+        blueScore: matchData.blueScore,
+        remainingSeconds: matchData.remainingSeconds,
+        isRunning: matchData.isRunning,
+      };
 
-    console.log('[MatchScreen] 📤 Отправка обновления в публичное табло:', logData);
-    fileLogger.info('[MatchScreen] Sending update to public display', logData);
+      console.log('[MatchScreen] 📤 Отправка обновления в публичное табло:', logData);
+      fileLogger.info('[MatchScreen] Sending update to public display', logData);
 
-    emit('match-update', matchData).catch((error) => {
+      await emit('match-update', matchData);
+    } catch (error) {
       console.error('[PublicDisplay] Ошибка при отправке события:', error);
       fileLogger.error('[PublicDisplay] Error sending event', { error: String(error) });
-    });
+    }
   });
 
   // Немедленная отправка при изменении счета, бойцов или предупреждений
@@ -123,6 +125,11 @@ function useMatchUpdateEmitter(
 }
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
+  console.log('[MatchScreen] ===== COMPONENT RENDER START =====');
+  console.log('[MatchScreen] Match ID:', match?.id);
+  console.log('[MatchScreen] Category:', categoryName);
+  console.log('[MatchScreen] Has onExit:', !!onExit);
+
   const [showEndDialog, setShowEndDialog] = useState(false);
   const [showTimerEditDialog, setShowTimerEditDialog] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -134,6 +141,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const { toasts, showToast, hideToast } = useToast();
   const { playSound } = useSound();
   const { currentSession } = useSessionStore();
+
+  console.log('[MatchScreen] Hooks initialized, currentSession:', currentSession?.tournament_id);
 
   // Zustand селекторы с shallow comparison для оптимизации ре-рендеров
   const { redFighter, blueFighter } = useMatchStore(useShallow(matchStoreSelectors.fighters));
