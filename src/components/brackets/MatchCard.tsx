@@ -143,15 +143,11 @@ function MatchCardBase({
             }
           }}
           onDragOver={(e) => {
-            const logData = `matchId=${match.id}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}`;
-            logger.info(`[MatchCard] DragOver participant1: ${logData}`);
             if (canEdit) {
               e.preventDefault();
               e.stopPropagation();
               e.dataTransfer.dropEffect = 'move';
               setDragOverSlot('participant1');
-            } else {
-              logger.error(`[MatchCard] DROP ЗАПРЕЩЁН! canEdit=false, ${logData}`);
             }
           }}
           onDragLeave={() => {
@@ -161,10 +157,13 @@ function MatchCardBase({
           onDrop={(e) => {
             e.preventDefault(); // КРИТИЧНО!
             e.stopPropagation();
-            console.log('[MatchCard] Drop participant1:', match.id, 'canEdit:', canEdit);
+            const logData = `matchId=${match.id}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}`;
+            logger.info(`[MatchCard] DROP participant1: ${logData}`);
             if (canEdit) {
               onDrop?.(match.id, 'participant1');
               setDragOverSlot(null);
+            } else {
+              logger.error(`[MatchCard] DROP ОТКЛОНЁН! ${logData}`);
             }
           }}
         >
