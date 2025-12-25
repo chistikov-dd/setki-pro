@@ -99,7 +99,7 @@ async fn login_by_pin(
     // Валидация: игнорируем пустые строки
     let api_client: Arc<ApiClient> = if let Some(url) = server_url.clone().filter(|s| !s.is_empty()) {
         state.logger.info(&format!("[login_by_pin] Creating custom ApiClient with URL: {}", url));
-        Arc::new(ApiClient::new(url, Arc::clone(&state.db_pool)))
+        Arc::new(ApiClient::new(url, Arc::clone(&state.db_pool), Arc::clone(&state.logger)))
     } else {
         state.logger.info("[login_by_pin] Using default API client (setki.pro)");
         Arc::clone(&state.api_client)
@@ -215,23 +215,43 @@ async fn get_cached_brackets(
     server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    println!("[get_cached_brackets] tournament_id: {}, server_url: {:?}", tournament_id, server_url);
+    state.logger.info("========== GET_CACHED_BRACKETS START ==========");
+    state.logger.info(&format!("tournament_id: {}", tournament_id));
+    state.logger.info(&format!("server_url: {:?}", server_url));
 
     // Если передан server_url, используем его для создания временного клиента
     // Валидация: игнорируем пустые строки
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
-        println!("[get_cached_brackets] Using custom server URL: {}", url);
-        let api_client = ApiClient::new(url, Arc::clone(&state.db_pool));
-        api_client
-            .get_cached_brackets(tournament_id)
-            .await
-            .map_err(|e| e.to_string())
+        state.logger.info(&format!("Using custom server URL: {}", url));
+        let api_client = ApiClient::new(url.clone(), Arc::clone(&state.db_pool), Arc::clone(&state.logger));
+
+        match api_client.get_cached_brackets(tournament_id).await {
+            Ok(brackets) => {
+                state.logger.info(&format!("SUCCESS: Received {} brackets", brackets.len()));
+                state.logger.info("========== GET_CACHED_BRACKETS END ==========");
+                Ok(brackets)
+            }
+            Err(e) => {
+                state.logger.error(&format!("ERROR: {}", e));
+                state.logger.error("========== GET_CACHED_BRACKETS END ==========");
+                Err(e.to_string())
+            }
+        }
     } else {
-        println!("[get_cached_brackets] Using default API client");
-        state.api_client
-            .get_cached_brackets(tournament_id)
-            .await
-            .map_err(|e| e.to_string())
+        state.logger.info("Using default API client");
+
+        match state.api_client.get_cached_brackets(tournament_id).await {
+            Ok(brackets) => {
+                state.logger.info(&format!("SUCCESS: Received {} brackets", brackets.len()));
+                state.logger.info("========== GET_CACHED_BRACKETS END ==========");
+                Ok(brackets)
+            }
+            Err(e) => {
+                state.logger.error(&format!("ERROR: {}", e));
+                state.logger.error("========== GET_CACHED_BRACKETS END ==========");
+                Err(e.to_string())
+            }
+        }
     }
 }
 
@@ -556,8 +576,8 @@ async fn get_bracket_matches(
 
     // Если передан server_url, используем его для создания временного клиента
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
-        println!("[get_bracket_matches] Запрос к локальному серверу: {}", url);
-        let api_client = ApiClient::new(url, Arc::clone(&state.db_pool));
+        state.logger.info(&format!("[get_bracket_matches] Запрос к локальному серверу: {}", url));
+        let api_client = ApiClient::new(url, Arc::clone(&state.db_pool), Arc::clone(&state.logger));
         return api_client
             .get_bracket_matches(bracket_id)
             .await
@@ -2170,7 +2190,8 @@ pub fn run() {
             file_logger.info(&format!("API client creating: {}", api_url));
 
             let db_pool = Arc::new(pool);
-            let api_client = Arc::new(ApiClient::new(api_url, Arc::clone(&db_pool)));
+            let logger_arc = Arc::new(file_logger.clone());
+            let api_client = Arc::new(ApiClient::new(api_url, Arc::clone(&db_pool), Arc::clone(&logger_arc)));
 
             file_logger.info("API client created");
 

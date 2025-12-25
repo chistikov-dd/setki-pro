@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
+use crate::logger::FileLogger;
 
 // Helper функция для определения локального сервера
 fn is_local_url(url: &str) -> bool {
@@ -113,10 +114,11 @@ pub struct ApiClient {
     client: Client,
     base_url: String,
     db: Arc<SqlitePool>,
+    logger: Arc<FileLogger>,
 }
 
 impl ApiClient {
-    pub fn new(base_url: String, db: Arc<SqlitePool>) -> Self {
+    pub fn new(base_url: String, db: Arc<SqlitePool>, logger: Arc<FileLogger>) -> Self {
         // Если base_url - локальный сервер и не содержит /api/v1, добавляем его
         let normalized_url = if is_local_url(&base_url) && !base_url.contains("/api/v1") {
             format!("{}/api/v1", base_url.trim_end_matches('/'))
@@ -124,13 +126,15 @@ impl ApiClient {
             base_url.clone()
         };
 
-        println!("[ApiClient::new] Original base_url: {}", base_url);
-        println!("[ApiClient::new] Normalized base_url: {}", normalized_url);
+        logger.info(&format!("[ApiClient::new] Original base_url: {}", base_url));
+        logger.info(&format!("[ApiClient::new] Normalized base_url: {}", normalized_url));
+        logger.info(&format!("[ApiClient::new] is_local_url: {}", is_local_url(&base_url)));
 
         Self {
             client: Client::new(),
             base_url: normalized_url,
             db,
+            logger,
         }
     }
 
@@ -618,36 +622,62 @@ impl ApiClient {
 
     // Получить сетки из кэша (offline)
     pub async fn get_cached_brackets(&self, tournament_id: i32) -> Result<Vec<serde_json::Value>> {
+        self.logger.info("========== ApiClient::get_cached_brackets START ==========");
+        self.logger.info(&format!("tournament_id: {}", tournament_id));
+        self.logger.info(&format!("base_url: {}", self.base_url));
+
         // Проверяем, это локальный сервер или setki.pro
         let is_local_server = is_local_url(&self.base_url);
+        self.logger.info(&format!("is_local_server: {}", is_local_server));
 
         if is_local_server {
             // Делаем HTTP запрос к локальному серверу
-            println!("[ApiClient::get_cached_brackets] Requesting from local server: {}", self.base_url);
-            println!("[ApiClient::get_cached_brackets] is_local_server: true");
+            self.logger.info("Requesting from local server");
 
-            let token = self.get_token().await?
-                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+            self.logger.info("Getting auth token...");
+            let token = match self.get_token().await {
+                Ok(Some(t)) => {
+                    self.logger.info(&format!("Token retrieved: {}...", &t[..t.len().min(10)]));
+                    t
+                }
+                Ok(None) => {
+                    self.logger.error("ERROR: No auth token found");
+                    return Err(anyhow::anyhow!("Не авторизован"));
+                }
+                Err(e) => {
+                    self.logger.error(&format!("ERROR getting token: {}", e));
+                    return Err(e);
+                }
+            };
 
             let url = format!("{}/desktop/brackets/tournament/{}", self.base_url, tournament_id);
-            println!("[ApiClient::get_cached_brackets] Full URL: {}", url);
-            println!("[ApiClient::get_cached_brackets] Sending HTTP GET request with auth token...");
+            self.logger.info(&format!("Full URL: {}", url));
+            self.logger.info("Sending HTTP GET request with auth token...");
 
-            let response = self.client
+            let response = match self.client
                 .get(&url)
                 .bearer_auth(&token)
                 .send()
-                .await?;
+                .await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.logger.error(&format!("HTTP request failed: {}", e));
+                        return Err(anyhow::anyhow!("HTTP request failed: {}", e));
+                    }
+                };
 
-            println!("[ApiClient::get_cached_brackets] HTTP response received, status: {}", response.status());
+            self.logger.info(&format!("HTTP response received, status: {}", response.status()));
 
             if response.status().is_success() {
                 let brackets: Vec<serde_json::Value> = response.json().await?;
-                println!("[ApiClient::get_cached_brackets] Received {} brackets from local server", brackets.len());
+                self.logger.info(&format!("SUCCESS: Received {} brackets from local server", brackets.len()));
+                self.logger.info("========== ApiClient::get_cached_brackets END ==========");
                 Ok(brackets)
             } else {
                 let status = response.status();
                 let error_text = response.text().await.unwrap_or_default();
+                self.logger.error(&format!("Local server error {}: {}", status, error_text));
+                self.logger.error("========== ApiClient::get_cached_brackets END ==========");
                 Err(anyhow::anyhow!("Local server error {}: {}", status, error_text))
             }
         } else {
