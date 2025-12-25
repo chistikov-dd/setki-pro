@@ -1043,7 +1043,17 @@ async fn batch_update_match(
     server_url: Option<String>, // НОВЫЙ ПАРАМЕТР для local-client режима
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    state.logger.info("========== BATCH_UPDATE_MATCH START ==========");
+    state.logger.info(&format!("match_id: {}", match_id));
+    state.logger.info(&format!("event_type: {}, participant: {}", event_type, participant));
+    state.logger.info(&format!("points: {:?}, action_name: {:?}", points, action_name));
+    state.logger.info(&format!("scores: red={}, blue={}", red_score, blue_score));
+    state.logger.info(&format!("warnings: red={}, blue={}", red_warnings, blue_warnings));
+    state.logger.info(&format!("status: {}", status));
+    state.logger.info(&format!("server_url: {:?}", server_url));
+
     // 1. Локальное сохранение в sync_queue (как обычно)
+    state.logger.info("Saving to local sync_queue...");
     let events = state.api_client
         .batch_update_match(
             match_id,
@@ -1060,10 +1070,11 @@ async fn batch_update_match(
         )
         .await
         .map_err(|e| e.to_string())?;
+    state.logger.info(&format!("Saved {} events to sync_queue", events.len()));
 
     // 2. Если local-client режим - отправить на сервер админа
     if let Some(url) = server_url {
-        println!("[batch_update_match] Отправка на локальный сервер: {}", url);
+        state.logger.info(&format!("Sending to local server: {}", url));
 
         let client = reqwest::Client::new();
         let payload = serde_json::json!({
@@ -1076,16 +1087,18 @@ async fn batch_update_match(
         });
 
         let endpoint = format!("{}/api/v1/desktop/matches/update", url);
+        state.logger.info(&format!("Endpoint: {}", endpoint));
 
         // Retry 3 раза с задержкой 500ms
         for attempt in 0..3 {
+            state.logger.info(&format!("HTTP POST attempt {} of 3", attempt + 1));
             match client.post(&endpoint).json(&payload).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    println!("[batch_update_match] Успешно отправлено на локальный сервер");
+                    state.logger.info("Successfully sent to local server");
                     break;
                 }
                 Ok(resp) => {
-                    eprintln!("[batch_update_match] Ошибка локального сервера: {}", resp.status());
+                    state.logger.error(&format!("Local server error: {}", resp.status()));
                     if attempt == 2 {
                         // НЕ возвращаем ошибку - данные уже в sync_queue
                         eprintln!("[batch_update_match] Данные сохранены локально, синхронизация через sync_worker");
@@ -1488,8 +1501,11 @@ async fn create_temp_participant(
     server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<i32, String> {
-    println!("[create_temp_participant] START - bracket_id={}, name={}, server_url={:?}",
-        bracket_id, full_name, server_url);
+    state.logger.info("========== CREATE_TEMP_PARTICIPANT START ==========");
+    state.logger.info(&format!("bracket_id: {}", bracket_id));
+    state.logger.info(&format!("full_name: {}", full_name));
+    state.logger.info(&format!("club_name: {:?}", club_name));
+    state.logger.info(&format!("server_url: {:?}", server_url));
 
     let pool = &state.db_pool;
 
@@ -1499,17 +1515,17 @@ async fn create_temp_participant(
         .unwrap()
         .as_millis() as i32);
 
-    println!("[create_temp_participant] Generated temp_id: {}", temp_id);
+    state.logger.info(&format!("Generated temp_id: {}", temp_id));
 
     // Если указан server_url, отправить данные на локальный сервер админа
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
-        println!("[create_temp_participant] Отправка на локальный сервер: {}", url);
+        state.logger.info(&format!("Sending to local server: {}", url));
 
         // Нормализовать URL
         let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
         let api_url = format!("{}/api/v1/desktop/temp-participants", base_url);
 
-        println!("[create_temp_participant] Full API URL: {}", api_url);
+        state.logger.info(&format!("Full API URL: {}", api_url));
 
         let client = reqwest::Client::new();
         let response = client
@@ -1784,26 +1800,30 @@ async fn swap_bracket_participants(
     server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("[swap_bracket_participants] START - bracket_id={}, match1_id={}, match1_slot={}, match2_id={}, match2_slot={}, server_url={:?}",
-             request.bracket_id, request.match1_id, request.match1_slot, request.match2_id, request.match2_slot, server_url);
-    println!("  judge_name={:?}, admin_id={:?}", judge_name, admin_id);
+    state.logger.info("========== SWAP_BRACKET_PARTICIPANTS START ==========");
+    state.logger.info(&format!("bracket_id: {}", request.bracket_id));
+    state.logger.info(&format!("match1_id: {}, match1_slot: {}", request.match1_id, request.match1_slot));
+    state.logger.info(&format!("match2_id: {}, match2_slot: {}", request.match2_id, request.match2_slot));
+    state.logger.info(&format!("judge_name: {:?}, admin_id: {:?}", judge_name, admin_id));
+    state.logger.info(&format!("server_url: {:?}", server_url));
 
     let pool = &state.db_pool;
 
     // Проверка прав доступа
     if judge_name.is_none() && admin_id.is_none() {
+        state.logger.error("Access denied: no judge_name or admin_id");
         return Err("Требуется авторизация".to_string());
     }
 
     // Если указан server_url, отправить данные на локальный сервер админа
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
-        println!("[swap_bracket_participants] Отправка на локальный сервер: {}", url);
+        state.logger.info(&format!("Sending to local server: {}", url));
 
         // Нормализовать URL (убрать /api/v1 если есть)
         let base_url = url.trim_end_matches('/').trim_end_matches("/api/v1");
         let api_url = format!("{}/api/v1/desktop/matches/swap", base_url);
 
-        println!("[swap_bracket_participants] Full API URL: {}", api_url);
+        state.logger.info(&format!("Full API URL: {}", api_url));
 
         let client = reqwest::Client::new();
         let response = client

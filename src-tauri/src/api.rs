@@ -891,14 +891,22 @@ impl ApiClient {
         participant_name: Option<String>,
         club: Option<String>,
     ) -> Result<()> {
-        println!("[ApiClient] Sending participant update to local server: match_id={}, slot={}, name={:?}",
-            match_id, participant_slot, participant_name);
+        self.logger.info("========== update_match_participant_on_local_server START ==========");
+        self.logger.info(&format!("server_url: {}", server_url));
+        self.logger.info(&format!("match_id: {}", match_id));
+        self.logger.info(&format!("participant_slot: {}", participant_slot));
+        self.logger.info(&format!("participant_id: {:?}", participant_id));
+        self.logger.info(&format!("participant_name: {:?}", participant_name));
+        self.logger.info(&format!("club: {:?}", club));
 
         let url = format!("{}/api/v1/desktop/matches/participant", server_url);
+        self.logger.info(&format!("Full URL: {}", url));
 
         // Retry логика: 5 попыток с экспоненциальной задержкой (1s, 2s, 4s, 8s, 16s)
         let max_retries = 5;
         for attempt in 0..max_retries {
+            self.logger.info(&format!("Attempt {} of {}", attempt + 1, max_retries));
+
             let response = reqwest::Client::new()
                 .post(&url)
                 .header("Content-Type", "application/json")
@@ -915,20 +923,24 @@ impl ApiClient {
 
             match response {
                 Ok(resp) if resp.status().is_success() => {
-                    println!("[ApiClient] Participant update sent successfully on attempt {}", attempt + 1);
+                    self.logger.info(&format!("SUCCESS on attempt {}", attempt + 1));
+                    self.logger.info("========== update_match_participant_on_local_server END ==========");
                     return Ok(());
                 },
                 Ok(resp) => {
-                    println!("[ApiClient] Participant update failed with status {} on attempt {}", resp.status(), attempt + 1);
+                    let status = resp.status();
+                    self.logger.error(&format!("Failed with status {} on attempt {}", status, attempt + 1));
                     if attempt < max_retries - 1 {
                         let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        self.logger.info(&format!("Retrying after {}ms...", delay.as_millis()));
                         tokio::time::sleep(delay).await;
                     }
                 },
                 Err(e) => {
-                    println!("[ApiClient] Participant update network error on attempt {}: {}", attempt + 1, e);
+                    self.logger.error(&format!("Network error on attempt {}: {}", attempt + 1, e));
                     if attempt < max_retries - 1 {
                         let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        self.logger.info(&format!("Retrying after {}ms...", delay.as_millis()));
                         tokio::time::sleep(delay).await;
                     }
                 }
@@ -936,6 +948,8 @@ impl ApiClient {
         }
 
         // Все попытки исчерпаны
+        self.logger.error(&format!("Failed to send participant update after {} retries", max_retries));
+        self.logger.error("========== update_match_participant_on_local_server END ==========");
         Err(anyhow::anyhow!("Failed to send participant update to local server after {} retries", max_retries))
     }
 
