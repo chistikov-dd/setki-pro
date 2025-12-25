@@ -626,12 +626,16 @@ impl ApiClient {
             println!("[ApiClient::get_cached_brackets] Requesting from local server: {}", self.base_url);
             println!("[ApiClient::get_cached_brackets] is_local_server: true");
 
+            let token = self.get_token().await?
+                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+
             let url = format!("{}/desktop/brackets/tournament/{}", self.base_url, tournament_id);
             println!("[ApiClient::get_cached_brackets] Full URL: {}", url);
-            println!("[ApiClient::get_cached_brackets] Sending HTTP GET request...");
+            println!("[ApiClient::get_cached_brackets] Sending HTTP GET request with auth token...");
 
             let response = self.client
                 .get(&url)
+                .bearer_auth(&token)
                 .send()
                 .await?;
 
@@ -1227,11 +1231,16 @@ impl ApiClient {
         if is_local_server {
             // Делаем HTTP запрос к локальному серверу
             println!("[ApiClient::get_bracket_matches] Requesting from local server: {}", self.base_url);
+
+            let token = self.get_token().await?
+                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+
             let url = format!("{}/desktop/brackets/{}/matches", self.base_url, bracket_id);
             println!("[ApiClient::get_bracket_matches] Full URL: {}", url);
 
             let response = self.client
                 .get(&url)
+                .bearer_auth(&token)
                 .send()
                 .await?;
 
