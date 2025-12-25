@@ -381,8 +381,9 @@ async fn start_local_server(
     }
 
     // Запустить сервер в фоновом режиме с graceful shutdown
+    let logger_clone = Arc::clone(&state.logger);
     tokio::spawn(async move {
-        if let Err(e) = local_server::start_server(db_pool, port, shutdown_rx).await {
+        if let Err(e) = local_server::start_server(db_pool, port, shutdown_rx, logger_clone).await {
             eprintln!("Local server error: {}", e);
         }
     });
@@ -570,51 +571,72 @@ async fn get_bracket_matches(
     server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    println!("[get_bracket_matches] bracket_id: {}, server_url: {:?}", bracket_id, server_url);
+    state.logger.info("========== GET_BRACKET_MATCHES START ==========");
+    state.logger.info(&format!("bracket_id: {}", bracket_id));
+    state.logger.info(&format!("server_url: {:?}", server_url));
 
     let pool = &state.db_pool;
 
     // Если передан server_url, используем его для создания временного клиента
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
-        state.logger.info(&format!("[get_bracket_matches] Запрос к локальному серверу: {}", url));
-        let api_client = ApiClient::new(url, Arc::clone(&state.db_pool), Arc::clone(&state.logger));
-        return api_client
-            .get_bracket_matches(bracket_id)
-            .await
-            .map_err(|e| e.to_string());
-    }
+        state.logger.info(&format!("Using custom server URL: {}", url));
+        let api_client = ApiClient::new(url.clone(), Arc::clone(&state.db_pool), Arc::clone(&state.logger));
 
-    // Иначе пытаемся загрузить из локального кэша
-    let cached_matches = sqlx::query(
-        "SELECT match_id, data FROM matches_cache WHERE bracket_id = ? ORDER BY match_id"
-    )
-    .bind(bracket_id)
-    .fetch_all(pool.as_ref())
-    .await
-    .map_err(|e| e.to_string())?;
-
-    if !cached_matches.is_empty() {
-        // Есть кэш - возвращаем его с миграцией в новый формат
-        let mut matches: Vec<serde_json::Value> = cached_matches
-            .iter()
-            .filter_map(|row| {
-                let data_str: String = sqlx::Row::get(row, "data");
-                serde_json::from_str(&data_str).ok()
-            })
-            .collect();
-
-        // Мигрируем все матчи из старого формата в новый (объекты участников)
-        migrate_matches_to_new_format(&mut matches, pool).await?;
-
-        println!("[get_bracket_matches] Возвращаем {} матчей из локального кэша", matches.len());
-        Ok(matches)
+        match api_client.get_bracket_matches(bracket_id).await {
+            Ok(matches) => {
+                state.logger.info(&format!("SUCCESS: Received {} matches", matches.len()));
+                state.logger.info("========== GET_BRACKET_MATCHES END ==========");
+                Ok(matches)
+            }
+            Err(e) => {
+                state.logger.error(&format!("ERROR: {}", e));
+                state.logger.error("========== GET_BRACKET_MATCHES END ==========");
+                Err(e.to_string())
+            }
+        }
     } else {
-        println!("[get_bracket_matches] Кэш пуст, загружаем с сервера по умолчанию");
-        // Нет кэша - загружаем с сервера
-        state.api_client
-            .get_bracket_matches(bracket_id)
-            .await
-            .map_err(|e| e.to_string())
+        // Иначе пытаемся загрузить из локального кэша
+        state.logger.info("Loading from local cache...");
+        let cached_matches = sqlx::query(
+            "SELECT match_id, data FROM matches_cache WHERE bracket_id = ? ORDER BY match_id"
+        )
+        .bind(bracket_id)
+        .fetch_all(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if !cached_matches.is_empty() {
+            // Есть кэш - возвращаем его с миграцией в новый формат
+            let mut matches: Vec<serde_json::Value> = cached_matches
+                .iter()
+                .filter_map(|row| {
+                    let data_str: String = sqlx::Row::get(row, "data");
+                    serde_json::from_str(&data_str).ok()
+                })
+                .collect();
+
+            // Мигрируем все матчи из старого формата в новый (объекты участников)
+            migrate_matches_to_new_format(&mut matches, pool).await?;
+
+            state.logger.info(&format!("Returning {} matches from local cache", matches.len()));
+            state.logger.info("========== GET_BRACKET_MATCHES END ==========");
+            Ok(matches)
+        } else {
+            state.logger.info("Cache is empty, loading from default server");
+            // Нет кэша - загружаем с сервера
+            match state.api_client.get_bracket_matches(bracket_id).await {
+                Ok(matches) => {
+                    state.logger.info(&format!("SUCCESS: Received {} matches from server", matches.len()));
+                    state.logger.info("========== GET_BRACKET_MATCHES END ==========");
+                    Ok(matches)
+                }
+                Err(e) => {
+                    state.logger.error(&format!("ERROR: {}", e));
+                    state.logger.error("========== GET_BRACKET_MATCHES END ==========");
+                    Err(e.to_string())
+                }
+            }
+        }
     }
 }
 

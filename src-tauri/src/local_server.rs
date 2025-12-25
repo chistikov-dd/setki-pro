@@ -52,6 +52,8 @@ pub struct LocalServerState {
     pub match_channels: Arc<RwLock<HashMap<String, BroadcastTx>>>,
     // Broadcast канал для административных событий (подключения судей, отключения и т.д.)
     pub admin_events_channel: BroadcastTx,
+    // Логгер для записи в файл
+    pub logger: Arc<crate::logger::FileLogger>,
 }
 
 // Request/Response types
@@ -173,6 +175,14 @@ async fn auth_middleware(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
 
+    state.logger.info(&format!("[AUTH MIDDLEWARE] Request to: {}", uri));
+    let auth_preview = if auth_header.is_empty() {
+        "(empty)".to_string()
+    } else {
+        format!("{}...", &auth_header[..auth_header.len().min(20)])
+    };
+    state.logger.info(&format!("[AUTH MIDDLEWARE] Authorization header: {}", auth_preview));
+
     // Извлекаем токен (формат: "Bearer <token>" или просто "<token>")
     let token = if auth_header.starts_with("Bearer ") {
         &auth_header[7..]
@@ -181,15 +191,20 @@ async fn auth_middleware(
     };
 
     if token.is_empty() {
-        println!("[AUTH] Отсутствует Authorization заголовок для {}", uri);
+        state.logger.error(&format!("[AUTH MIDDLEWARE] Missing Authorization header for {}", uri));
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    // Проверяем токен в БД (таблица auth или cached_pins)
+    state.logger.info(&format!("[AUTH MIDDLEWARE] Extracted token: {}...", &token[..token.len().min(10)]));
+
+    // ИСПРАВЛЕНО: Проверяем токен в БД (таблица auth для админа, judge_auth для судей)
+    state.logger.info("[AUTH MIDDLEWARE] Checking token in database...");
     let is_valid = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM auth WHERE token = ?
-         UNION ALL
-         SELECT COUNT(*) FROM cached_pins WHERE pin_code = ?"
+        "SELECT COUNT(*) FROM (
+            SELECT token FROM auth WHERE token = ?
+            UNION ALL
+            SELECT token FROM judge_auth WHERE token = ?
+         )"
     )
     .bind(token)
     .bind(token)
@@ -197,10 +212,14 @@ async fn auth_middleware(
     .await
     .unwrap_or(0);
 
+    state.logger.info(&format!("[AUTH MIDDLEWARE] Token validation result: {}", if is_valid > 0 { "VALID" } else { "INVALID" }));
+
     if is_valid == 0 {
-        println!("[AUTH] Неверный токен для {}", uri);
+        state.logger.error(&format!("[AUTH MIDDLEWARE] Invalid token for {}", uri));
         return Err(StatusCode::UNAUTHORIZED);
     }
+
+    state.logger.info(&format!("[AUTH MIDDLEWARE] Token valid, allowing request to {}", uri));
 
     println!("[AUTH] ✅ Авторизация успешна для {}", uri);
 
@@ -215,14 +234,19 @@ pub async fn start_server(
     db: Arc<SqlitePool>,
     port: u16,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    logger: Arc<crate::logger::FileLogger>,
 ) -> Result<(), anyhow::Error> {
     // Создаём broadcast канал для административных событий (capacity 100)
     let (admin_tx, _) = broadcast::channel::<String>(100);
+
+    logger.info("========== LOCAL SERVER STARTING ==========");
+    logger.info(&format!("Port: {}", port));
 
     let state = LocalServerState {
         db,
         match_channels: Arc::new(RwLock::new(HashMap::new())),
         admin_events_channel: admin_tx,
+        logger: Arc::clone(&logger),
     };
 
     let app = Router::new()
@@ -399,10 +423,11 @@ async fn get_tournament_brackets_handler(
     State(state): State<LocalServerState>,
     Path(tournament_id): Path<i32>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    println!("[LOCAL SERVER] ========== get_tournament_brackets_handler START ==========");
-    println!("[LOCAL SERVER] Tournament ID: {}", tournament_id);
+    state.logger.info("========== get_tournament_brackets_handler START ==========");
+    state.logger.info(&format!("Tournament ID: {}", tournament_id));
 
     // 1. Получить сетки
+    state.logger.info("Querying brackets_cache table...");
     let bracket_records = sqlx::query_as::<_, (i32, String)>(
         "SELECT bracket_id, data FROM brackets_cache WHERE tournament_id = ?"
     )
@@ -410,7 +435,7 @@ async fn get_tournament_brackets_handler(
     .fetch_all(&*state.db)
     .await?;
 
-    println!("[LOCAL SERVER] Found {} bracket records in cache", bracket_records.len());
+    state.logger.info(&format!("Found {} bracket records in cache", bracket_records.len()));
 
     // 2. Для каждой сетки получить матчи и добавить их
     let mut brackets_with_matches: Vec<serde_json::Value> = Vec::new();
@@ -418,7 +443,7 @@ async fn get_tournament_brackets_handler(
     for (bracket_id, bracket_data) in bracket_records {
         match serde_json::from_str::<serde_json::Value>(&bracket_data) {
             Ok(mut bracket_json) => {
-                println!("[LOCAL SERVER] Processing bracket_id: {}", bracket_id);
+                state.logger.info(&format!("Processing bracket_id: {}", bracket_id));
 
                 // Получить матчи для этой сетки
                 let match_records = sqlx::query_as::<_, (String,)>(
@@ -429,7 +454,7 @@ async fn get_tournament_brackets_handler(
                 .await
                 .unwrap_or_default();
 
-                println!("[LOCAL SERVER] Found {} matches for bracket {}", match_records.len(), bracket_id);
+                state.logger.info(&format!("Found {} matches for bracket {}", match_records.len(), bracket_id));
 
                 // Парсить матчи в JSON
                 let matches: Vec<serde_json::Value> = match_records
@@ -440,19 +465,19 @@ async fn get_tournament_brackets_handler(
                 // Добавить матчи в сетку
                 if let Some(obj) = bracket_json.as_object_mut() {
                     obj.insert("matches".to_string(), serde_json::json!(matches));
-                    println!("[LOCAL SERVER] Added {} matches to bracket {}", matches.len(), bracket_id);
+                    state.logger.info(&format!("Added {} matches to bracket {}", matches.len(), bracket_id));
                 }
 
                 brackets_with_matches.push(bracket_json);
             }
             Err(e) => {
-                println!("[LOCAL SERVER] Failed to parse bracket JSON: {}", e);
+                state.logger.error(&format!("Failed to parse bracket JSON: {}", e));
             }
         }
     }
 
-    println!("[LOCAL SERVER] Returning {} brackets with matches to client", brackets_with_matches.len());
-    println!("[LOCAL SERVER] ========== get_tournament_brackets_handler END ==========");
+    state.logger.info(&format!("Returning {} brackets with matches to client", brackets_with_matches.len()));
+    state.logger.info("========== get_tournament_brackets_handler SUCCESS ==========");
     Ok(Json(brackets_with_matches))
 }
 

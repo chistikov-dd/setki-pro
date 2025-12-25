@@ -179,17 +179,17 @@ impl ApiClient {
     ) -> Result<AuthResponse> {
         let url = format!("{}/desktop/auth/pin-auth", self.base_url);
 
-        println!("[ApiClient::login_by_pin] ========== START ==========");
-        println!("[ApiClient::login_by_pin] base_url: {}", self.base_url);
-        println!("[ApiClient::login_by_pin] full URL: {}", url);
-        println!("[ApiClient::login_by_pin] pin_code: {}", pin_code);
-        println!("[ApiClient::login_by_pin] judge_name: {:?}", judge_name);
-        println!("[ApiClient::login_by_pin] table_number: {:?}", table_number);
+        self.logger.info("========== ApiClient::login_by_pin START ==========");
+        self.logger.info(&format!("base_url: {}", self.base_url));
+        self.logger.info(&format!("full URL: {}", url));
+        self.logger.info(&format!("pin_code: {}", pin_code));
+        self.logger.info(&format!("judge_name: {:?}", judge_name));
+        self.logger.info(&format!("table_number: {:?}", table_number));
 
         // Если base_url - локальный сервер (содержит 192.168 или 10.0), отправляем judge_name и table_number
         let is_local_server = is_local_url(&self.base_url);
 
-        println!("[ApiClient::login_by_pin] is_local_server: {}", is_local_server);
+        self.logger.info(&format!("is_local_server: {}", is_local_server));
 
         #[derive(serde::Serialize, Debug)]
         struct LocalLoginRequest {
@@ -199,16 +199,16 @@ impl ApiClient {
         }
 
         // Попытка online авторизации
-        println!("[ApiClient::login_by_pin] Sending HTTP request...");
+        self.logger.info("Sending HTTP request...");
         let online_result = if is_local_server {
-            println!("[ApiClient::login_by_pin] Sending LOCAL SERVER request with judge_name and table_number");
+            self.logger.info("Sending LOCAL SERVER request with judge_name and table_number");
             let request_body = LocalLoginRequest {
                 pin_code: pin_code.clone(),
                 judge_name: judge_name.clone(),
                 table_number,
             };
-            println!("[ApiClient::login_by_pin] Request body: {:?}", serde_json::to_string(&request_body).unwrap_or_default());
-            println!("[ApiClient::login_by_pin] POST URL: {}", url);
+            self.logger.info(&format!("Request body: {:?}", serde_json::to_string(&request_body).unwrap_or_default()));
+            self.logger.info(&format!("POST URL: {}", url));
 
             // Для локального сервера отправляем расширенный запрос
             let result = self.client
@@ -217,13 +217,13 @@ impl ApiClient {
                 .send()
                 .await;
 
-            println!("[ApiClient::login_by_pin] HTTP send completed (local)");
+            self.logger.info("HTTP send completed (local)");
             result
         } else {
-            println!("[ApiClient::login_by_pin] Sending ONLINE request (setki.pro) with PIN only");
+            self.logger.info("Sending ONLINE request (setki.pro) with PIN only");
             let request_body = PinLoginRequest { pin_code: pin_code.clone() };
-            println!("[ApiClient::login_by_pin] Request body: {:?}", serde_json::to_string(&request_body).unwrap_or_default());
-            println!("[ApiClient::login_by_pin] POST URL: {}", url);
+            self.logger.info(&format!("Request body: {:?}", serde_json::to_string(&request_body).unwrap_or_default()));
+            self.logger.info(&format!("POST URL: {}", url));
 
             // Для setki.pro отправляем только PIN
             let result = self.client
@@ -232,34 +232,36 @@ impl ApiClient {
                 .send()
                 .await;
 
-            println!("[ApiClient::login_by_pin] HTTP send completed (online)");
+            self.logger.info("HTTP send completed (online)");
             result
         };
 
-        println!("[ApiClient::login_by_pin] HTTP request completed, checking response...");
+        self.logger.info("HTTP request completed, checking response...");
 
         match online_result {
             Ok(response) if response.status().is_success() => {
-                println!("[ApiClient::login_by_pin] HTTP SUCCESS - status: {}", response.status());
+                self.logger.info(&format!("HTTP SUCCESS - status: {}", response.status()));
                 // Online успешно
                 let mut auth: AuthResponse = response.json().await?;
                 auth.judge_name = None; // Имя будет добавлено в Tauri command
                 // Токен будет сохранен в save_judge_session с полными данными
-                println!("[ApiClient::login_by_pin] ========== SUCCESS ==========");
+                self.logger.info(&format!("Received auth response: user_id={}, role={}, tournament_id={:?}",
+                    auth.user_id, auth.role, auth.tournament_id));
+                self.logger.info("========== ApiClient::login_by_pin SUCCESS ==========");
                 Ok(auth)
             },
             Ok(response) => {
                 // HTTP запрос прошёл, но статус не успешный
                 let status = response.status();
                 let error_text = response.text().await.unwrap_or_else(|_| "No response body".to_string());
-                println!("[ApiClient::login_by_pin] HTTP FAILED - status: {}, body: {}", status, error_text);
-                println!("[ApiClient::login_by_pin] Falling back to offline mode...");
+                self.logger.error(&format!("HTTP FAILED - status: {}, body: {}", status, error_text));
+                self.logger.info("Falling back to offline mode...");
                 self.login_by_pin_offline(pin_code).await
             },
             Err(e) => {
                 // Ошибка сети (нет соединения)
-                println!("[ApiClient::login_by_pin] HTTP ERROR - network error: {}", e);
-                println!("[ApiClient::login_by_pin] Falling back to offline mode...");
+                self.logger.error(&format!("HTTP ERROR - network error: {}", e));
+                self.logger.info("Falling back to offline mode...");
                 self.login_by_pin_offline(pin_code).await
             }
         }
@@ -297,8 +299,16 @@ impl ApiClient {
 
     // Сохранить сессию судьи (имя и номер стола) + токен
     pub async fn save_judge_session(&self, pin_code: &str, judge_name: &str, table_number: i32, tournament_id: Option<i32>, token: &str) -> Result<()> {
+        self.logger.info("========== ApiClient::save_judge_session START ==========");
+        self.logger.info(&format!("pin_code: {}", pin_code));
+        self.logger.info(&format!("judge_name: {}", judge_name));
+        self.logger.info(&format!("table_number: {}", table_number));
+        self.logger.info(&format!("tournament_id: {:?}", tournament_id));
+        self.logger.info(&format!("token: {}...", &token[..token.len().min(10)]));
+
         // 1. Проверить, что номер стола свободен
         if let Some(tid) = tournament_id {
+            self.logger.info(&format!("Checking if table {} is free for tournament {}...", table_number, tid));
             let occupied = sqlx::query_as::<_, (i32,)>(
                 "SELECT COUNT(*) FROM table_numbers WHERE tournament_id = ? AND table_number = ?"
             )
@@ -308,14 +318,19 @@ impl ApiClient {
             .await?;
 
             if occupied.0 > 0 {
+                self.logger.error(&format!("Table {} is already occupied", table_number));
                 return Err(anyhow::anyhow!("Номер стола {} уже занят", table_number));
             }
+            self.logger.info(&format!("Table {} is free", table_number));
         }
 
         // 2. Сохранить токен судьи
+        self.logger.info("Saving judge token...");
         self.save_judge_token(token, pin_code, judge_name, table_number, tournament_id).await?;
+        self.logger.info("Judge token saved successfully");
 
         // 3. Сохранить сессию судьи
+        self.logger.info("Inserting judge session into database...");
         let session_id = sqlx::query(
             "INSERT INTO judge_sessions (pin_code, judge_name, table_number, tournament_id, logged_in_at)
              VALUES (?, ?, ?, ?, datetime('now'))"
@@ -327,9 +342,11 @@ impl ApiClient {
         .execute(self.db.as_ref())
         .await?
         .last_insert_rowid();
+        self.logger.info(&format!("Judge session created with id: {}", session_id));
 
         // 4. Зарезервировать номер стола
         if let Some(tid) = tournament_id {
+            self.logger.info(&format!("Reserving table {} for tournament {}...", table_number, tid));
             sqlx::query(
                 "INSERT INTO table_numbers (tournament_id, table_number, judge_name, judge_session_id, occupied_at)
                  VALUES (?, ?, ?, ?, datetime('now'))"
@@ -340,8 +357,10 @@ impl ApiClient {
             .bind(session_id)
             .execute(self.db.as_ref())
             .await?;
+            self.logger.info(&format!("Table {} reserved successfully", table_number));
         }
 
+        self.logger.info("========== ApiClient::save_judge_session SUCCESS ==========");
         Ok(())
     }
 
@@ -414,6 +433,13 @@ impl ApiClient {
 
     // Сохранить токен судьи в БД (по pin_code)
     async fn save_judge_token(&self, token: &str, pin_code: &str, judge_name: &str, table_number: i32, tournament_id: Option<i32>) -> Result<()> {
+        self.logger.info("========== save_judge_token START ==========");
+        self.logger.info(&format!("pin_code: {}", pin_code));
+        self.logger.info(&format!("token: {}...", &token[..token.len().min(10)]));
+        self.logger.info(&format!("judge_name: {}", judge_name));
+        self.logger.info(&format!("table_number: {}", table_number));
+        self.logger.info(&format!("tournament_id: {:?}", tournament_id));
+
         sqlx::query(
             "INSERT OR REPLACE INTO judge_auth (pin_code, token, judge_name, table_number, tournament_id, created_at)
              VALUES (?, ?, ?, ?, ?, datetime('now'))"
@@ -426,6 +452,8 @@ impl ApiClient {
         .execute(self.db.as_ref())
         .await?;
 
+        self.logger.info("Token saved to judge_auth table successfully");
+        self.logger.info("========== save_judge_token END ==========");
         Ok(())
     }
 
@@ -460,14 +488,28 @@ impl ApiClient {
 
     // Получить сохранённый токен (общий метод - проверяет сначала админа, потом любого судью)
     pub async fn get_token(&self) -> Result<Option<String>> {
+        self.logger.info("========== get_token START ==========");
+
         // Сначала проверяем админа
+        self.logger.info("Checking admin token...");
         if let Some(token) = self.get_admin_token().await? {
+            self.logger.info(&format!("Found admin token: {}...", &token[..token.len().min(10)]));
+            self.logger.info("========== get_token END (admin) ==========");
             return Ok(Some(token));
         }
+        self.logger.info("No admin token found");
+
         // Потом любого судью
+        self.logger.info("Checking judge token...");
         if let Some(token) = self.get_any_judge_token().await? {
+            self.logger.info(&format!("Found judge token: {}...", &token[..token.len().min(10)]));
+            self.logger.info("========== get_token END (judge) ==========");
             return Ok(Some(token));
         }
+        self.logger.info("No judge token found");
+
+        self.logger.error("No token found (neither admin nor judge)");
+        self.logger.info("========== get_token END (none) ==========");
         Ok(None)
     }
 
@@ -1256,38 +1298,66 @@ impl ApiClient {
 
     // Получить матчи сетки (из кэша или с локального сервера)
     pub async fn get_bracket_matches(&self, bracket_id: i32) -> Result<Vec<serde_json::Value>> {
+        self.logger.info("========== ApiClient::get_bracket_matches START ==========");
+        self.logger.info(&format!("bracket_id: {}", bracket_id));
+        self.logger.info(&format!("base_url: {}", self.base_url));
+
         let is_local_server = is_local_url(&self.base_url);
+        self.logger.info(&format!("is_local_server: {}", is_local_server));
 
         if is_local_server {
             // Делаем HTTP запрос к локальному серверу
-            println!("[ApiClient::get_bracket_matches] Requesting from local server: {}", self.base_url);
+            self.logger.info("Requesting from local server");
 
-            let token = self.get_token().await?
-                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+            self.logger.info("Getting auth token...");
+            let token = match self.get_token().await {
+                Ok(Some(t)) => {
+                    self.logger.info(&format!("Token retrieved: {}...", &t[..t.len().min(10)]));
+                    t
+                }
+                Ok(None) => {
+                    self.logger.error("ERROR: No auth token found");
+                    return Err(anyhow::anyhow!("Не авторизован"));
+                }
+                Err(e) => {
+                    self.logger.error(&format!("ERROR getting token: {}", e));
+                    return Err(e);
+                }
+            };
 
             let url = format!("{}/desktop/brackets/{}/matches", self.base_url, bracket_id);
-            println!("[ApiClient::get_bracket_matches] Full URL: {}", url);
+            self.logger.info(&format!("Full URL: {}", url));
+            self.logger.info("Sending HTTP GET request with auth token...");
 
-            let response = self.client
+            let response = match self.client
                 .get(&url)
                 .bearer_auth(&token)
                 .send()
-                .await?;
+                .await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.logger.error(&format!("HTTP request failed: {}", e));
+                        return Err(anyhow::anyhow!("HTTP request failed: {}", e));
+                    }
+                };
 
-            println!("[ApiClient::get_bracket_matches] HTTP response status: {}", response.status());
+            self.logger.info(&format!("HTTP response received, status: {}", response.status()));
 
             if !response.status().is_success() {
                 let status = response.status();
                 let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                self.logger.error(&format!("HTTP error {}: {}", status, error_text));
+                self.logger.error("========== ApiClient::get_bracket_matches END ==========");
                 return Err(anyhow::anyhow!("HTTP error {}: {}", status, error_text));
             }
 
             let matches: Vec<serde_json::Value> = response.json().await?;
-            println!("[ApiClient::get_bracket_matches] Received {} matches from local server", matches.len());
+            self.logger.info(&format!("SUCCESS: Received {} matches from local server", matches.len()));
+            self.logger.info("========== ApiClient::get_bracket_matches END ==========");
             Ok(matches)
         } else {
             // Читаем из локального кэша
-            println!("[ApiClient::get_bracket_matches] Reading from local cache");
+            self.logger.info("Reading from local cache");
             let records = sqlx::query_as::<_, (String,)>(
                 "SELECT data FROM matches_cache WHERE bracket_id = ?"
             )
@@ -1300,7 +1370,8 @@ impl ApiClient {
                 .filter_map(|r| serde_json::from_str(&r.0).ok())
                 .collect();
 
-            println!("[ApiClient::get_bracket_matches] Found {} matches in local cache", matches.len());
+            self.logger.info(&format!("Found {} matches in local cache", matches.len()));
+            self.logger.info("========== ApiClient::get_bracket_matches END ==========");
             Ok(matches)
         }
     }
