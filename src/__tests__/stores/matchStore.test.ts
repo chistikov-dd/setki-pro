@@ -502,7 +502,7 @@ describe('matchStore', () => {
         resultType: 'points',
         finalRedScore: 10,
         finalBlueScore: 5,
-      });
+      }, null);
     });
 
     it('should finish match by submission', async () => {
@@ -526,7 +526,7 @@ describe('matchStore', () => {
         resultType: 'submission',
         finalRedScore: 3,
         finalBlueScore: 2,
-      });
+      }, null);
     });
 
     it('should update match status to completed', async () => {
