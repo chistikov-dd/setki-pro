@@ -409,10 +409,17 @@ export async function updateMatchOnLocalServer(
     winnerId?: number;
   }
 ): Promise<void> {
+  // КРИТИЧНО: Получаем токен для авторизации на локальном сервере
+  const token = await invoke<string>('get_token');
+  if (!token) {
+    throw new Error('Token not found (authorization required)');
+  }
+
   const response = await fetch(`${serverUrl}/api/v1/desktop/matches/update`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({
       match_id: data.matchId,

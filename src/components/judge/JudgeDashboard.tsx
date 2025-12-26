@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
@@ -13,7 +14,7 @@ import type { Match } from '../../types';
 export const JudgeDashboard: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { currentSession, loadTournamentSession } = useSessionStore();
-  const serverMode = useServerModeStore();
+  const serverMode = useServerModeStore(useShallow((state) => ({ mode: state.mode, serverUrl: state.serverUrl })));
   const [selectedBracketId, setSelectedBracketId] = useState<number | null>(null);
   const [selectedBracketName, setSelectedBracketName] = useState<string>('');
   const [lastSelectedBracketId, setLastSelectedBracketId] = useState<number | null>(null);
@@ -24,17 +25,22 @@ export const JudgeDashboard: React.FC = () => {
   const [activeMatch, setActiveMatch] = useState<Match | null>(null);
   const [bracketSelectionReloadTrigger, setBracketSelectionReloadTrigger] = useState(0);
 
+  // Стабильные callbacks для useSyncWorker
+  const handleSyncSuccess = useCallback(() => {
+    console.log('[JudgeDashboard] Background sync успешна');
+  }, []);
+
+  const handleSyncError = useCallback((error: Error) => {
+    console.error('[JudgeDashboard] Background sync ошибка:', error);
+  }, []);
+
   // Background синхронизация при старте приложения и каждые 30 секунд
   useSyncWorker({
     enabled: true,
     interval: 30000,
     serverMode,
-    onSyncSuccess: () => {
-      console.log('[JudgeDashboard] Background sync успешна');
-    },
-    onSyncError: (error) => {
-      console.error('[JudgeDashboard] Background sync ошибка:', error);
-    },
+    onSyncSuccess: handleSyncSuccess,
+    onSyncError: handleSyncError,
   });
 
   // Загружаем сессию турнира только если её нет в localStorage

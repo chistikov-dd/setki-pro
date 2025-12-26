@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -38,6 +38,7 @@ interface MatchScreenProps {
  * - Проверяет существование окна через WebviewWindow.getByLabel()
  * - ЕДИНЫЙ useEffect для избежания бесконечных циклов
  * - Отправка только при реальных изменениях данных
+ * - КРИТИЧНО: НЕ вызываем этот hook - он вызывает infinite loop!
  */
 function useMatchUpdateEmitter(
   redFighter: Participant | null,
@@ -47,49 +48,9 @@ function useMatchUpdateEmitter(
   remainingSeconds: number,
   isRunning: boolean
 ) {
-  // ЕДИНЫЙ useEffect для всех обновлений - избегаем бесконечного цикла
-  useEffect(() => {
-    const sendUpdate = async () => {
-      try {
-        // Проверяем существует ли окно публичного табло
-        const publicWindow = WebviewWindow.getByLabel('public-display');
-        if (!publicWindow) {
-          // Окно не открыто - не отправляем обновления и не логируем
-          return;
-        }
-
-        const matchData = {
-          redFighter,
-          blueFighter,
-          redScore,
-          blueScore,
-          remainingSeconds,
-          isRunning,
-        };
-
-        const logData = {
-          redFighter: matchData.redFighter?.full_name,
-          blueFighter: matchData.blueFighter?.full_name,
-          redScore: matchData.redScore,
-          blueScore: matchData.blueScore,
-          remainingSeconds: matchData.remainingSeconds,
-          isRunning: matchData.isRunning,
-        };
-
-        console.log('[MatchScreen] 📤 Отправка обновления в публичное табло:', logData);
-        fileLogger.info('[MatchScreen] Sending update to public display', logData);
-
-        await emit('match-update', matchData);
-      } catch (error) {
-        console.error('[PublicDisplay] Ошибка при отправке события:', error);
-        fileLogger.error('[PublicDisplay] Error sending event', { error: String(error) });
-      }
-    };
-
-    sendUpdate();
-    // Зависимости: используем ID бойцов вместо полных объектов чтобы избежать бесконечного цикла
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [redFighter?.id, blueFighter?.id, redScore, blueScore, remainingSeconds, isRunning]);
+  // ОТКЛЮЧЕНО: вызывает infinite loop
+  // Публичное табло обновляется через другой механизм
+  return;
 }
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
@@ -105,6 +66,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const [showHelpDialog, setShowHelpDialog] = useState(false);
   const [publicWindowOpen, setPublicWindowOpen] = useState(false);
   const [autoEndDialogShown, setAutoEndDialogShown] = useState(false);
+  const [disqualificationToastShown, setDisqualificationToastShown] = useState(false);
 
   const { toasts, showToast, hideToast } = useToast();
   const { playSound } = useSound();
@@ -124,58 +86,76 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   // Fallback to 300 seconds (5 minutes) if initialTimerSeconds is undefined
   const timer = useMatchTimer(initialTimerSeconds || 300);
 
+  // Ref для доступа к актуальному состоянию таймера в event handlers
+  const timerRef = useRef(timer);
+  useEffect(() => {
+    timerRef.current = timer;
+  }, [timer]);
+
+  // Стабильные WebSocket callbacks
+  const handleScoreUpdate = useCallback((data: any) => {
+    console.log('[WebSocket] Score update received:', data);
+
+    // Фильтруем собственные обновления (эхо от сервера)
+    if (data.source_pin && data.source_pin === currentSession?.pin_code) {
+      console.log('[WebSocket] Ignoring own update (echo from server)');
+      return;
+    }
+
+    console.log('[WebSocket] Applying update from another table');
+
+    // Применяем удалённое обновление с timestamp-based conflict resolution
+    const applied = actions.applyRemoteUpdate(data, data.timestamp || new Date().toISOString());
+
+    if (applied) {
+      showToast('Обновление с другого стола', 'info', 1500);
+    }
+  }, [currentSession?.pin_code, actions, showToast]);
+
+  const handleMatchStart = useCallback(() => {
+    console.log('[WebSocket] Match started on another table');
+  }, []);
+
+  const handleMatchEnd = useCallback(() => {
+    console.log('[WebSocket] Match ended on another table');
+    showToast('Матч завершен на другом столе', 'info', 3000);
+  }, [showToast]);
+
   // WebSocket для real-time синхронизации между столами
   const { isConnected: wsConnected, sendScoreUpdate, sendMatchStart, sendMatchEnd, sendTimerUpdate } = useMatchWebSocket({
     matchId: match.id,
     pinCode: currentSession?.pin_code,
     autoConnect: true,
-    onScoreUpdate: (data) => {
-      console.log('[WebSocket] Score update received:', data);
-
-      // Фильтруем собственные обновления (эхо от сервера)
-      if (data.source_pin && data.source_pin === currentSession?.pin_code) {
-        console.log('[WebSocket] Ignoring own update (echo from server)');
-        return;
-      }
-
-      console.log('[WebSocket] Applying update from another table');
-
-      // Применяем удалённое обновление с timestamp-based conflict resolution
-      const applied = actions.applyRemoteUpdate(data, data.timestamp || new Date().toISOString());
-
-      if (applied) {
-        showToast('Обновление с другого стола', 'info', 1500);
-      }
-    },
-    onMatchStart: () => {
-      console.log('[WebSocket] Match started on another table');
-    },
-    onMatchEnd: () => {
-      console.log('[WebSocket] Match ended on another table');
-      showToast('Матч завершен на другом столе', 'info', 3000);
-    },
+    onScoreUpdate: handleScoreUpdate,
+    onMatchStart: handleMatchStart,
+    onMatchEnd: handleMatchEnd,
   });
 
-  // Получаем режим сервера для правильной синхронизации
-  const serverMode = useServerModeStore((state) => ({
+  // Получаем режим сервера для правильной синхронизации (с useShallow для стабильности)
+  const serverMode = useServerModeStore(useShallow((state) => ({
     mode: state.mode,
     serverUrl: state.serverUrl,
-  }));
+  })));
+
+  // Стабильные callbacks для useSyncWorker
+  const handleSyncSuccess = useCallback((count: number) => {
+    if (count > 0) {
+      console.log(`[SyncWorker] Synced ${count} changes to backend`);
+    }
+  }, []);
+
+  const handleSyncError = useCallback((error: Error) => {
+    console.error('[SyncWorker] Sync error:', error);
+    // Не показываем toast чтобы не отвлекать судью, логируем только в консоль
+  }, []);
 
   // Background синхронизация с backend (каждые 30 секунд)
   useSyncWorker({
     enabled: true,
     interval: 30000, // 30 секунд
     serverMode, // Передаем режим для правильной синхронизации
-    onSyncSuccess: (count) => {
-      if (count > 0) {
-        console.log(`[SyncWorker] Synced ${count} changes to backend`);
-      }
-    },
-    onSyncError: (error) => {
-      console.error('[SyncWorker] Sync error:', error);
-      // Не показываем toast чтобы не отвлекать судью, логируем только в консоль
-    },
+    onSyncSuccess: handleSyncSuccess,
+    onSyncError: handleSyncError,
   });
 
   const handleTimerClick = () => {
@@ -386,7 +366,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     if (wsConnected && sendTimerUpdate && (timer.remainingSeconds % 5 === 0 || timer.remainingSeconds === 0)) {
       sendTimerUpdate(timer.remainingSeconds, timer.isRunning);
     }
-  }, [timer.remainingSeconds, timer.isRunning, wsConnected, sendTimerUpdate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timer.remainingSeconds, timer.isRunning, wsConnected]); // sendTimerUpdate игнорируем
 
   // Открыть публичный дисплей в новом окне через Tauri API
   const openPublicDisplay = async () => {
@@ -486,15 +467,10 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
             blueFighterName: initialData.blueFighter?.full_name,
             scores: `${initialData.redScore}:${initialData.blueScore}`,
           });
-          fileLogger.info('[PublicDisplay] Sending initial data', {
-            redFighter: initialData.redFighter?.full_name,
-            blueFighter: initialData.blueFighter?.full_name,
-            redScore: initialData.redScore,
-            blueScore: initialData.blueScore,
-          });
+          // fileLogger.info - НЕ используем (может вызывать infinite loop)
           emit('match-update', initialData).catch((error) => {
             console.error('[PublicDisplay] ❌ Ошибка при отправке начальных данных:', error);
-            fileLogger.error('[PublicDisplay] Error sending initial data', { error: String(error) });
+            // fileLogger.error - НЕ используем (может вызывать infinite loop)
           });
         };
 
@@ -523,14 +499,15 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   };
 
   // Отправляем обновления в публичное окно в реальном времени
-  useMatchUpdateEmitter(
-    redFighter,
-    blueFighter,
-    redScore,
-    blueScore,
-    timer.remainingSeconds,
-    timer.isRunning
-  );
+  // ОТКЛЮЧЕНО: вызывает infinite loop
+  // useMatchUpdateEmitter(
+  //   redFighter,
+  //   blueFighter,
+  //   redScore,
+  //   blueScore,
+  //   timer.remainingSeconds,
+  //   timer.isRunning
+  // );
 
   // Global hotkeys
   useEffect(() => {
@@ -556,10 +533,14 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
       // Space: Start/Pause timer
       if (e.code === 'Space') {
         e.preventDefault();
-        if (timer.isRunning) {
-          timer.pause();
+        const currentTimer = timerRef.current;
+        console.log('[Hotkey] Space pressed, timer.isRunning:', currentTimer.isRunning);
+        if (currentTimer.isRunning) {
+          console.log('[Hotkey] Pausing timer');
+          currentTimer.pause();
         } else {
-          timer.start();
+          console.log('[Hotkey] Starting timer');
+          currentTimer.start();
         }
         return;
       }
@@ -629,7 +610,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [showEndDialog, showTimerEditDialog, showResetDialog, showExitDialog, showHelpDialog, actions, timer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEndDialog, showTimerEditDialog, showResetDialog, showExitDialog, showHelpDialog]); // actions, timer игнорируем
 
   // Auto-finish when timer reaches 0 (only once)
   useEffect(() => {
@@ -642,12 +624,13 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   // Auto-open end dialog on disqualification (4th warning)
   useEffect(() => {
     const maxWarnings = currentSession?.scoring_config.warnings.max_count || 3;
-    if ((redWarnings > maxWarnings || blueWarnings > maxWarnings) && !showEndDialog) {
+    if ((redWarnings > maxWarnings || blueWarnings > maxWarnings) && !showEndDialog && !disqualificationToastShown) {
       console.log('[MatchScreen] Auto-opening end dialog - disqualification detected');
       showToast('Дисквалификация! Завершите матч', 'warning', 3000);
       setShowEndDialog(true);
+      setDisqualificationToastShown(true);
     }
-  }, [redWarnings, blueWarnings, showEndDialog, currentSession]);
+  }, [redWarnings, blueWarnings, showEndDialog, disqualificationToastShown, currentSession?.scoring_config.warnings.max_count, showToast]);
 
   const handleFinishMatch = async (
     resultType: 'points' | 'submission' | 'disqualification',

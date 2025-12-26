@@ -129,14 +129,15 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
   // Add score
   addScore: async (participant: 'red' | 'blue', points: number, actionName: string) => {
-    const { match, redScore, blueScore, redWarnings, blueWarnings } = get();
+    const state = get();
+    const { match } = state;
 
     console.log('[matchStore.addScore] START:', {
       participant,
       points,
       actionName,
       matchId: match?.id,
-      currentScores: { redScore, blueScore },
+      currentScores: { redScore: state.redScore, blueScore: state.blueScore },
       hasMatch: !!match,
     });
 
@@ -145,16 +146,25 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       return;
     }
 
-    const newRedScore = participant === 'red' ? redScore + points : redScore;
-    const newBlueScore = participant === 'blue' ? blueScore + points : blueScore;
     const timestamp = new Date().toISOString(); // ISO 8601 для timestamp comparison
 
-    // FIX: OPTIMISTIC UPDATE - сразу обновляем UI для быстрого отклика
-    set({
-      redScore: newRedScore,
-      blueScore: newBlueScore,
-      lastUpdateTimestamp: timestamp,
+    // FIX: OPTIMISTIC UPDATE - используем функциональный update для предотвращения race conditions
+    let newRedScore: number;
+    let newBlueScore: number;
+
+    set((state) => {
+      newRedScore = participant === 'red' ? state.redScore + points : state.redScore;
+      newBlueScore = participant === 'blue' ? state.blueScore + points : state.blueScore;
+      return {
+        redScore: newRedScore,
+        blueScore: newBlueScore,
+        lastUpdateTimestamp: timestamp,
+      };
     });
+
+    // Получаем обновленные значения из closure
+    const redWarnings = state.redWarnings;
+    const blueWarnings = state.blueWarnings;
 
     try {
       console.log('[matchStore.addScore] Step 1: Calling batchUpdateMatch...');
@@ -223,12 +233,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
   // Add warning
   addWarning: async (participant: 'red' | 'blue') => {
-    const { match, redScore, blueScore, redWarnings, blueWarnings } = get();
+    const state = get();
+    const { match } = state;
 
     console.log('[matchStore.addWarning] START:', {
       participant,
       matchId: match?.id,
-      currentWarnings: { redWarnings, blueWarnings },
+      currentWarnings: { redWarnings: state.redWarnings, blueWarnings: state.blueWarnings },
       hasMatch: !!match,
     });
 
@@ -237,32 +248,38 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       return;
     }
 
-    const newRedWarnings = participant === 'red' ? redWarnings + 1 : redWarnings;
-    const newBlueWarnings = participant === 'blue' ? blueWarnings + 1 : blueWarnings;
     const timestamp = new Date().toISOString();
 
     // Get max warnings from config
     const { currentSession } = useSessionStore.getState();
     const maxWarnings = currentSession?.scoring_config.warnings.max_count || 3;
 
-    console.log('[matchStore.addWarning] Debug:', {
-      participant,
-      currentWarnings: participant === 'red' ? redWarnings : blueWarnings,
-      newWarnings: participant === 'red' ? newRedWarnings : newBlueWarnings,
-      maxWarnings,
-      shouldDisqualify: (participant === 'red' ? newRedWarnings : newBlueWarnings) > maxWarnings,
+    // FIX: OPTIMISTIC UPDATE - используем функциональный update для предотвращения race conditions
+    let newRedWarnings: number;
+    let newBlueWarnings: number;
+
+    set((state) => {
+      newRedWarnings = participant === 'red' ? state.redWarnings + 1 : state.redWarnings;
+      newBlueWarnings = participant === 'blue' ? state.blueWarnings + 1 : state.blueWarnings;
+
+      console.log('[matchStore.addWarning] Debug:', {
+        participant,
+        currentWarnings: participant === 'red' ? state.redWarnings : state.blueWarnings,
+        newWarnings: participant === 'red' ? newRedWarnings : newBlueWarnings,
+        maxWarnings,
+        shouldDisqualify: (participant === 'red' ? newRedWarnings : newBlueWarnings) > maxWarnings,
+      });
+
+      return {
+        redWarnings: newRedWarnings,
+        blueWarnings: newBlueWarnings,
+        lastUpdateTimestamp: timestamp,
+      };
     });
 
-    // Check for disqualification (disqualify when reaching 4th warning with max=3)
-    // При достижении максимума просто записываем предупреждение
-    // MatchScreen автоматически откроет диалог завершения матча
-
-    // FIX: OPTIMISTIC UPDATE - сразу обновляем UI
-    set({
-      redWarnings: newRedWarnings,
-      blueWarnings: newBlueWarnings,
-      lastUpdateTimestamp: timestamp,
-    });
+    // Получаем scores из closure
+    const redScore = state.redScore;
+    const blueScore = state.blueScore;
 
     try {
       console.log('[matchStore.addWarning] Step 1: Calling batchUpdateMatch...');
@@ -329,11 +346,25 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
   // Remove warning
   removeWarning: async (participant: 'red' | 'blue') => {
-    const { match, redScore, blueScore, redWarnings, blueWarnings } = get();
+    const state = get();
+    const { match } = state;
     if (!match) return;
 
-    const newRedWarnings = participant === 'red' ? Math.max(0, redWarnings - 1) : redWarnings;
-    const newBlueWarnings = participant === 'blue' ? Math.max(0, blueWarnings - 1) : blueWarnings;
+    // FIX: OPTIMISTIC UPDATE - используем функциональный update
+    let newRedWarnings: number;
+    let newBlueWarnings: number;
+
+    set((state) => {
+      newRedWarnings = participant === 'red' ? Math.max(0, state.redWarnings - 1) : state.redWarnings;
+      newBlueWarnings = participant === 'blue' ? Math.max(0, state.blueWarnings - 1) : state.blueWarnings;
+      return {
+        redWarnings: newRedWarnings,
+        blueWarnings: newBlueWarnings,
+      };
+    });
+
+    const redScore = state.redScore;
+    const blueScore = state.blueScore;
 
     try {
       // Update match
@@ -345,14 +376,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         blueWarnings: newBlueWarnings,
         status: 'in_progress',
       });
-
-      // Update local state
-      set({
-        redWarnings: newRedWarnings,
-        blueWarnings: newBlueWarnings,
-      });
     } catch (error) {
       console.error('Failed to remove warning:', error);
+      // Rollback on error
+      set({
+        redWarnings: state.redWarnings,
+        blueWarnings: state.blueWarnings,
+      });
     }
   },
 
@@ -360,6 +390,15 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   undoLastAction: async () => {
     const { match, events } = get();
     if (!match || events.length === 0) return;
+
+    // НОВАЯ АРХИТЕКТУРА: Проверяем режим работы
+    const serverMode = useServerModeStore.getState();
+    if (serverMode.mode === 'local-client') {
+      // Судья в local-client режиме: у него НЕТ локальных events
+      // Отмена недоступна (админ - единственный источник правды)
+      console.warn('[matchStore.undoLastAction] Undo not available in judge mode (admin is single source of truth)');
+      throw new Error('Отмена действия недоступна в режиме судьи');
+    }
 
     // FIX: Сохраняем старое состояние для rollback
     const oldState = {

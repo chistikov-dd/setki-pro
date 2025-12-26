@@ -594,7 +594,13 @@ async fn get_bracket_matches(
 
         match api_client.get_bracket_matches(bracket_id).await {
             Ok(matches) => {
-                state.logger.info(&format!("SUCCESS: Received {} matches", matches.len()));
+                state.logger.info(&format!("SUCCESS: Received {} matches from server", matches.len()));
+
+                // НОВАЯ АРХИТЕКТУРА: Судья НЕ кэширует матчи в своей БД
+                // Админ - единственный источник правды (single source of truth)
+                // Преимущества: нет конфликтов версий, нет синхронизации, масштабируется на 15-20 столов
+                state.logger.info("Judge mode: NOT caching matches (admin is single source of truth)");
+
                 state.logger.info("========== GET_BRACKET_MATCHES END ==========");
                 Ok(matches)
             }
@@ -925,8 +931,8 @@ async fn start_match(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Обновить локальный кэш матча
-    println!("[start_match] Обновление локального кэша для match_id={}", match_id);
+    // НОВАЯ АРХИТЕКТУРА: Обновляем локальный кэш ТОЛЬКО если матч есть в БД (админ режим)
+    // Судья в local-client режиме НЕ кэширует матчи
     let match_data = sqlx::query("SELECT bracket_id, data FROM matches_cache WHERE match_id = ?")
         .bind(match_id)
         .fetch_optional(pool.as_ref())
@@ -934,12 +940,13 @@ async fn start_match(
         .map_err(|e| e.to_string())?;
 
     if let Some(row) = match_data {
+        // Админ режим: обновляем локальный кэш
         let bracket_id: i32 = sqlx::Row::get(&row, "bracket_id");
         let data_str: String = sqlx::Row::get(&row, "data");
         let mut match_obj: serde_json::Value = serde_json::from_str(&data_str)
             .map_err(|e| e.to_string())?;
 
-        println!("[start_match] Найден матч в кэше, bracket_id={}, обновляем статус на 'in_progress'", bracket_id);
+        println!("[start_match] Admin mode: updating local cache for match {}", match_id);
 
         // Обновить статус матча на in_progress
         match_obj["status"] = serde_json::json!("in_progress");
@@ -952,12 +959,11 @@ async fn start_match(
             .await
             .map_err(|e| e.to_string())?;
 
-        println!("[start_match] Матч обновлен в кэше, вызываем update_bracket_status");
-
         // Пересчитать статус сетки
         update_bracket_status(bracket_id, pool).await?;
     } else {
-        println!("[start_match] ВНИМАНИЕ: Матч {} не найден в локальном кэше", match_id);
+        // Судья режим: матча нет в локальном кэше - это нормально
+        println!("[start_match] Judge mode: match {} not in local cache (admin is source of truth)", match_id);
     }
 
     Ok(())
@@ -981,7 +987,8 @@ async fn update_match_score(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Обновить локальный кэш матча
+    // НОВАЯ АРХИТЕКТУРА: Обновляем локальный кэш ТОЛЬКО если матч есть в БД (админ режим)
+    // Судья в local-client режиме НЕ кэширует матчи
     let match_data = sqlx::query("SELECT bracket_id, data FROM matches_cache WHERE match_id = ?")
         .bind(match_id)
         .fetch_optional(pool.as_ref())
@@ -989,6 +996,7 @@ async fn update_match_score(
         .map_err(|e| e.to_string())?;
 
     if let Some(row) = match_data {
+        // Админ режим: обновляем локальный кэш
         let bracket_id: i32 = sqlx::Row::get(&row, "bracket_id");
         let data_str: String = sqlx::Row::get(&row, "data");
         let mut match_obj: serde_json::Value = serde_json::from_str(&data_str)
@@ -1011,6 +1019,9 @@ async fn update_match_score(
 
         // Пересчитать статус сетки (если статус матча изменился)
         update_bracket_status(bracket_id, pool).await?;
+    } else {
+        // Судья режим: матча нет в локальном кэше - это нормально
+        println!("[update_match_score] Judge mode: match {} not in local cache (admin is source of truth)", match_id);
     }
 
     Ok(())
@@ -1068,29 +1079,17 @@ async fn batch_update_match(
     state.logger.info(&format!("status: {}", status));
     state.logger.info(&format!("server_url: {:?}", server_url));
 
-    // 1. Локальное сохранение в sync_queue (как обычно)
-    state.logger.info("Saving to local sync_queue...");
-    let events = state.api_client
-        .batch_update_match(
-            match_id,
-            event_type,
-            participant,
-            points,
-            action_name,
-            timestamp,
-            red_score,
-            blue_score,
-            red_warnings,
-            blue_warnings,
-            status.clone(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    state.logger.info(&format!("Saved {} events to sync_queue", events.len()));
+    // НОВАЯ АРХИТЕКТУРА: Админ = единственный источник правды
+    // Судья НЕ кэширует данные, только отправляет на сервер админа
 
-    // 2. Если local-client режим - отправить на сервер админа
     if let Some(url) = server_url {
-        state.logger.info(&format!("Sending to local server: {}", url));
+        // Судья в local-client режиме: ТОЛЬКО отправка на сервер админа
+        state.logger.info(&format!("Judge mode: Sending to admin server: {}", url));
+
+        // КРИТИЧНО: Получаем токен для авторизации
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден (требуется авторизация)".to_string())?;
 
         let client = reqwest::Client::new();
         let payload = serde_json::json!({
@@ -1108,26 +1107,28 @@ async fn batch_update_match(
         // Retry 3 раза с задержкой 500ms
         for attempt in 0..3 {
             state.logger.info(&format!("HTTP POST attempt {} of 3", attempt + 1));
-            match client.post(&endpoint).json(&payload).send().await {
+            match client.post(&endpoint)
+                .header("Authorization", format!("Bearer {}", token))
+                .json(&payload)
+                .send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    state.logger.info("Successfully sent to local server");
-                    break;
+                    state.logger.info("✅ Successfully sent to admin server");
+                    // Возвращаем пустой массив событий (у судьи нет локальных событий)
+                    state.logger.info("========== BATCH_UPDATE_MATCH END ==========");
+                    return Ok(vec![]);
                 }
                 Ok(resp) => {
-                    state.logger.error(&format!("Local server error: {}", resp.status()));
+                    let status_code = resp.status();
+                    let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    state.logger.error(&format!("Admin server error: {} - {}", status_code, error_text));
                     if attempt == 2 {
-                        // НЕ возвращаем ошибку - данные уже в sync_queue
-                        eprintln!("[batch_update_match] Данные сохранены локально, синхронизация через sync_worker");
-                        break;
+                        return Err(format!("Не удалось обновить данные на сервере админа: {}", error_text));
                     }
                 }
                 Err(e) => {
-                    eprintln!("[batch_update_match] Ошибка сети (попытка {}): {}", attempt + 1, e);
+                    state.logger.error(&format!("Network error (attempt {}): {}", attempt + 1, e));
                     if attempt == 2 {
-                        // НЕ возвращаем ошибку на последней попытке
-                        // Данные уже сохранены локально в sync_queue
-                        eprintln!("[batch_update_match] Данные сохранены локально, синхронизация через sync_worker");
-                        break;
+                        return Err(format!("Ошибка соединения с сервером админа: {}", e));
                     }
                 }
             }
@@ -1135,9 +1136,32 @@ async fn batch_update_match(
             // Задержка перед retry
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
-    }
 
-    Ok(events)
+        // Не должны сюда попасть, но на всякий случай
+        return Err("Не удалось отправить данные на сервер админа".to_string());
+    } else {
+        // Админ или online режим: сохраняем локально
+        state.logger.info("Admin/online mode: Saving to local DB...");
+        let events = state.api_client
+            .batch_update_match(
+                match_id,
+                event_type,
+                participant,
+                points,
+                action_name,
+                timestamp,
+                red_score,
+                blue_score,
+                red_warnings,
+                blue_warnings,
+                status.clone(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        state.logger.info(&format!("Saved {} events", events.len()));
+        state.logger.info("========== BATCH_UPDATE_MATCH END ==========");
+        return Ok(events);
+    }
 }
 
 #[tauri::command]

@@ -169,7 +169,7 @@ function MatchCardBase({
             }
           }}
         >
-          <div className={`flex flex-col w-full min-w-0 flex-1 ${canEdit ? 'pointer-events-none' : ''}`}>
+          <div className="flex flex-col w-full min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <span
                 className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
@@ -306,7 +306,7 @@ function MatchCardBase({
             }
           }}
         >
-          <div className={`flex flex-col w-full min-w-0 flex-1 ${canEdit ? 'pointer-events-none' : ''}`}>
+          <div className="flex flex-col w-full min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <span
                 className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight

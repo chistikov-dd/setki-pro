@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
@@ -46,17 +46,28 @@ export const AdminDashboard = () => {
   // Toast уведомления
   const { toasts, showToast, hideToast } = useToast();
 
+  // Стабильный serverMode объект для useSyncWorker
+  const serverModeConfig = useMemo(() => ({
+    mode: serverMode,
+    serverUrl: null
+  }), [serverMode]);
+
+  // Стабильные callbacks для useSyncWorker
+  const handleSyncSuccess = useCallback(() => {
+    console.log('[AdminDashboard] Background sync успешна');
+  }, []);
+
+  const handleSyncError = useCallback((error: Error) => {
+    console.error('[AdminDashboard] Background sync ошибка:', error);
+  }, []);
+
   // Background синхронизация при старте приложения и каждые 30 секунд
   useSyncWorker({
     enabled: serverMode === 'online', // Только в online режиме (в local-server данные уже на этом компьютере)
     interval: 30000,
-    serverMode: { mode: serverMode, serverUrl: null },
-    onSyncSuccess: () => {
-      console.log('[AdminDashboard] Background sync успешна');
-    },
-    onSyncError: (error) => {
-      console.error('[AdminDashboard] Background sync ошибка:', error);
-    },
+    serverMode: serverModeConfig,
+    onSyncSuccess: handleSyncSuccess,
+    onSyncError: handleSyncError,
   });
 
   // WebSocket для административных событий (подключение/отключение судей)

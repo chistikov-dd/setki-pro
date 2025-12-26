@@ -460,7 +460,21 @@ async fn get_bracket_matches_handler(
     // Парсить матчи в JSON
     let matches: Vec<serde_json::Value> = match_records
         .into_iter()
-        .filter_map(|(data,)| serde_json::from_str(&data).ok())
+        .filter_map(|(data,)| {
+            if let Ok(match_json) = serde_json::from_str::<serde_json::Value>(&data) {
+                // Логируем матчи для отладки
+                if let Some(match_id) = match_json.get("id") {
+                    println!("[LOCAL SERVER] Match {}: score_p1={:?}, score_p2={:?} (p1=blue, p2=red)",
+                        match_id,
+                        match_json.get("score_participant1"),
+                        match_json.get("score_participant2")
+                    );
+                }
+                Some(match_json)
+            } else {
+                None
+            }
+        })
         .collect();
 
     println!("[LOCAL SERVER] Returning {} matches to client", matches.len());
@@ -607,6 +621,13 @@ async fn update_match_score_handler(
     };
 
     // 2. Обновить поля
+    // КРИТИЧНО: Фронтенд ожидает score_participant1/score_participant2 (participant1=blue, participant2=red)
+    match_data["score_participant1"] = serde_json::json!(payload.blue_score);  // participant1 = blue
+    match_data["score_participant2"] = serde_json::json!(payload.red_score);   // participant2 = red
+    match_data["warnings_participant1"] = serde_json::json!(payload.blue_warnings);
+    match_data["warnings_participant2"] = serde_json::json!(payload.red_warnings);
+
+    // Сохраняем также red_/blue_ для обратной совместимости
     match_data["red_score"] = serde_json::json!(payload.red_score);
     match_data["blue_score"] = serde_json::json!(payload.blue_score);
     match_data["red_warnings"] = serde_json::json!(payload.red_warnings);
@@ -620,6 +641,9 @@ async fn update_match_score_handler(
     if let Some(winner_id) = payload.winner_id {
         match_data["winner_id"] = serde_json::json!(winner_id);
     }
+
+    println!("[LOCAL SERVER] Updated match data: red={}, blue={}, red_warnings={}, blue_warnings={}",
+        payload.red_score, payload.blue_score, payload.red_warnings, payload.blue_warnings);
 
     // 3. Сохранить в БД с optimistic locking (обновить только если version совпадает)
     let _bracket_id = match_data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -635,11 +659,15 @@ async fn update_match_score_handler(
     .await?
     .rows_affected();
 
+    println!("[LOCAL SERVER] UPDATE rows_affected: {}", rows_affected);
+
     // Если rows_affected = 0, значит версия изменилась (конкурентное обновление)
     if rows_affected == 0 {
         println!("[LOCAL SERVER] WARNING: Optimistic lock failed for match_id={}, version={}", payload.match_id, version);
         return Err(AppError::Conflict("Match was updated by another judge, please retry".to_string()));
     }
+
+    println!("[LOCAL SERVER] ✅ Match {} successfully updated in DB (version incremented)", payload.match_id);
 
     // 4. Broadcast через WebSocket всем подключенным судьям
     let channels = state.match_channels.read().await;
