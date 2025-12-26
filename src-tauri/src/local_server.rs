@@ -1673,9 +1673,14 @@ async fn update_bracket_status_from_matches(
         None => return Ok(()), // Матч не найден в кэше - ничего не делаем
     };
 
-    // 2. Получить все матчи этой сетки и их статусы
+    // 2. Получить статусы только тех матчей, где есть участники
+    // (пустые матчи не учитываются при определении статуса сетки)
     let matches: Vec<(String,)> = sqlx::query_as(
-        "SELECT json_extract(data, '$.status') FROM matches_cache WHERE bracket_id = ?"
+        "SELECT json_extract(data, '$.status')
+         FROM matches_cache
+         WHERE bracket_id = ?
+         AND (json_extract(data, '$.participant1_id') IS NOT NULL
+              OR json_extract(data, '$.participant2_id') IS NOT NULL)"
     )
     .bind(bracket_id)
     .fetch_all(db)
