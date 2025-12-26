@@ -1182,12 +1182,22 @@ async fn finish_match(
     result_type: String,
     final_red_score: i32,
     final_blue_score: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let pool = &state.db_pool;
 
+    // Создать ApiClient (временный для custom server_url или глобальный)
+    let api_client: Arc<ApiClient> = if let Some(url) = server_url.clone().filter(|s| !s.is_empty()) {
+        state.logger.info(&format!("[finish_match] Creating custom ApiClient with URL: {}", url));
+        Arc::new(ApiClient::new(url, Arc::clone(&state.db_pool), Arc::clone(&state.logger)))
+    } else {
+        state.logger.info("[finish_match] Using default API client (setki.pro)");
+        Arc::clone(&state.api_client)
+    };
+
     // Отправить на сервер (api_client.finish_match уже обновляет matches_cache)
-    state.api_client
+    api_client
         .finish_match(match_id, winner_id, result_type.clone(), final_red_score, final_blue_score)
         .await
         .map_err(|e| e.to_string())?;

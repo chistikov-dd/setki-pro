@@ -382,13 +382,14 @@ export async function finishMatch(data: {
   resultType: 'points' | 'submission' | 'disqualification';
   finalRedScore: number;
   finalBlueScore: number;
-}): Promise<void> {
+}, serverUrl?: string | null): Promise<void> {
   return await invoke('finish_match', {
     matchId: data.matchId,
     winnerId: data.winnerId,
     resultType: data.resultType,
     finalRedScore: data.finalRedScore,
     finalBlueScore: data.finalBlueScore,
+    serverUrl: serverUrl || null,
   });
 }
 

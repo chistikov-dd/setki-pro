@@ -88,6 +88,7 @@ pub struct UpdateMatchScoreRequest {
     pub status: String, // "scheduled", "in_progress", "completed", "cancelled"
     pub duration: Option<i32>, // Секунды
     pub winner_id: Option<i32>,
+    pub result_type: Option<String>, // "points", "submission", "disqualification"
 }
 
 // DEPRECATED: используется только старым handler
@@ -642,6 +643,10 @@ async fn update_match_score_handler(
         match_data["winner_id"] = serde_json::json!(winner_id);
     }
 
+    if let Some(ref result_type) = payload.result_type {
+        match_data["result_type"] = serde_json::json!(result_type);
+    }
+
     println!("[LOCAL SERVER] Updated match data: red={}, blue={}, red_warnings={}, blue_warnings={}",
         payload.red_score, payload.blue_score, payload.red_warnings, payload.blue_warnings);
 
@@ -669,6 +674,22 @@ async fn update_match_score_handler(
 
     println!("[LOCAL SERVER] ✅ Match {} successfully updated in DB (version incremented)", payload.match_id);
 
+    // 3.5. Если матч завершен - продвинуть победителя в следующий матч
+    if payload.status == "completed" {
+        println!("[LOCAL SERVER] Match completed, checking for winner advancement...");
+
+        if let Err(e) = advance_winner_to_next_match(
+            &state.db,
+            payload.match_id,
+            payload.winner_id,
+            payload.blue_score,
+            payload.red_score,
+        ).await {
+            println!("[LOCAL SERVER] WARNING: Failed to advance winner: {}", e);
+            // Не фейлим весь запрос - матч уже сохранен
+        }
+    }
+
     // 4. Broadcast через WebSocket всем подключенным судьям
     let channels = state.match_channels.read().await;
     if let Some(tx) = channels.get(&payload.match_id.to_string()) {
@@ -682,6 +703,7 @@ async fn update_match_score_handler(
             "status": payload.status,
             "duration": payload.duration,
             "winner_id": payload.winner_id,
+            "result_type": payload.result_type,
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
 
@@ -1623,4 +1645,189 @@ impl IntoResponse for AppError {
 
         (status, body).into_response()
     }
+}
+
+// Вспомогательная функция для продвижения победителя в следующий матч
+async fn advance_winner_to_next_match(
+    db: &SqlitePool,
+    match_id: i32,
+    winner_id: Option<i32>,
+    blue_score: i32,
+    red_score: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("[advance_winner] START - match: {}, winner: {:?}", match_id, winner_id);
+
+    // Получить информацию о текущем матче
+    let match_data_json: String = sqlx::query_scalar(
+        "SELECT data FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(match_id)
+    .fetch_one(db)
+    .await?;
+
+    let match_data: serde_json::Value = serde_json::from_str(&match_data_json)?;
+
+    let current_round = match_data["round_number"].as_i64().ok_or("Missing round_number")? as i32;
+    let current_match_number = match_data["match_number"].as_i64().ok_or("Missing match_number")? as i32;
+    let bracket_id = match_data["bracket_id"].as_i64().ok_or("Missing bracket_id")? as i32;
+
+    println!("[advance_winner] Current match - round: {}, number: {}, bracket: {}",
+             current_round, current_match_number, bracket_id);
+
+    // Определить победителя
+    // Приоритет 1: winner_id если передан
+    // Приоритет 2: по счету
+    let winner_participant = if let Some(winner_id) = winner_id {
+        // Найти участника по winner_id
+        let p1 = match_data.get("participant1");
+        let p2 = match_data.get("participant2");
+
+        if let Some(p1_obj) = p1 {
+            if p1_obj.get("id").and_then(|v| v.as_i64()) == Some(winner_id as i64)
+               || p1_obj.get("fighter_id").and_then(|v| v.as_i64()) == Some(winner_id as i64) {
+                Some(p1_obj.clone())
+            } else if let Some(p2_obj) = p2 {
+                if p2_obj.get("id").and_then(|v| v.as_i64()) == Some(winner_id as i64)
+                   || p2_obj.get("fighter_id").and_then(|v| v.as_i64()) == Some(winner_id as i64) {
+                    Some(p2_obj.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        // Определяем по счету
+        if blue_score > red_score {
+            match_data.get("participant1").cloned()
+        } else if red_score > blue_score {
+            match_data.get("participant2").cloned()
+        } else {
+            None // Ничья
+        }
+    };
+
+    if winner_participant.is_none() || winner_participant == Some(serde_json::Value::Null) {
+        println!("[advance_winner] No winner (draw or missing data)");
+        return Ok(());
+    }
+
+    let winner = winner_participant.unwrap();
+    println!("[advance_winner] Winner: {}", winner.get("full_name").and_then(|v| v.as_str()).unwrap_or("unknown"));
+
+    // Вычислить следующий матч
+    let next_round = current_round + 1;
+    let next_match_number = current_match_number / 2;
+    let target_slot = if current_match_number % 2 == 0 {
+        "$.participant1"
+    } else {
+        "$.participant2"
+    };
+
+    println!("[advance_winner] Next match - round: {}, number: {}, slot: {}",
+             next_round, next_match_number, target_slot);
+
+    // Проверить существование следующего матча
+    let next_match_id: Option<i32> = sqlx::query_scalar(
+        "SELECT match_id FROM matches_cache
+         WHERE CAST(json_extract(data, '$.bracket_id') AS INTEGER) = ?
+           AND CAST(json_extract(data, '$.round_number') AS INTEGER) = ?
+           AND CAST(json_extract(data, '$.match_number') AS INTEGER) = ?"
+    )
+    .bind(bracket_id)
+    .bind(next_round)
+    .bind(next_match_number)
+    .fetch_optional(db)
+    .await?;
+
+    if let Some(next_id) = next_match_id {
+        println!("[advance_winner] Found next match: {}, checking free slots...", next_id);
+
+        // Получить данные следующего матча
+        let next_match_data_json: String = sqlx::query_scalar(
+            "SELECT data FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(next_id)
+        .fetch_one(db)
+        .await?;
+
+        let next_match_data: serde_json::Value = serde_json::from_str(&next_match_data_json)?;
+
+        // Проверяем свободные слоты
+        let p1 = next_match_data.get("participant1");
+        let p2 = next_match_data.get("participant2");
+
+        let p1_empty = p1.is_none() || p1 == Some(&serde_json::Value::Null);
+        let p2_empty = p2.is_none() || p2 == Some(&serde_json::Value::Null);
+
+        // Проверяем, нет ли уже этого участника в следующем матче
+        let winner_id = winner.get("id").and_then(|v| v.as_i64());
+        let winner_fighter_id = winner.get("fighter_id").and_then(|v| v.as_i64());
+
+        let already_in_p1 = if let Some(p1_obj) = p1 {
+            if p1_obj.is_object() {
+                let p1_id = p1_obj.get("id").and_then(|v| v.as_i64());
+                let p1_fighter_id = p1_obj.get("fighter_id").and_then(|v| v.as_i64());
+                (winner_id.is_some() && p1_id == winner_id) || (winner_fighter_id.is_some() && p1_fighter_id == winner_fighter_id)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let already_in_p2 = if let Some(p2_obj) = p2 {
+            if p2_obj.is_object() {
+                let p2_id = p2_obj.get("id").and_then(|v| v.as_i64());
+                let p2_fighter_id = p2_obj.get("fighter_id").and_then(|v| v.as_i64());
+                (winner_id.is_some() && p2_id == winner_id) || (winner_fighter_id.is_some() && p2_fighter_id == winner_fighter_id)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if already_in_p1 || already_in_p2 {
+            println!("[advance_winner] ⚠️ Winner already in next match {}, skipping", next_id);
+            return Ok(());
+        }
+
+        // Выбираем первый свободный слот
+        let free_slot = if p1_empty {
+            Some("$.participant1")
+        } else if p2_empty {
+            Some("$.participant2")
+        } else {
+            None
+        };
+
+        if let Some(slot) = free_slot {
+            println!("[advance_winner] Free slot found: {}, advancing winner", slot);
+
+            let winner_json = winner.to_string();
+            sqlx::query(&format!(
+                "UPDATE matches_cache
+                 SET data = json_set(data, '{}', json(?)),
+                     updated_at = datetime('now')
+                 WHERE match_id = ?",
+                slot
+            ))
+            .bind(winner_json)
+            .bind(next_id)
+            .execute(db)
+            .await?;
+
+            println!("[advance_winner] ✅ Winner advanced successfully to match {} slot {}", next_id, slot);
+        } else {
+            println!("[advance_winner] ⚠️ Both slots occupied in match {}, cannot advance", next_id);
+        }
+    } else {
+        println!("[advance_winner] No next match found (probably final)");
+    }
+
+    Ok(())
 }

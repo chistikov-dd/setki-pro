@@ -62,6 +62,8 @@ function MatchCardBase({
   const isParticipant2Winner = match.winner_id === match.participant2?.id;
 
   // Определение проигравшего (если матч завершен и есть победитель)
+  // При дисквалификации всегда перечёркиваем проигравшего
+  const isDQ = match.result_type === 'disqualification';
   const isParticipant1Loser = isCompleted && match.winner_id && !isParticipant1Winner && match.participant1;
   const isParticipant2Loser = isCompleted && match.winner_id && !isParticipant2Winner && match.participant2;
 
@@ -110,7 +112,13 @@ function MatchCardBase({
             ${dragOverSlot === 'participant1' ? 'bg-blue-100 ring-2 ring-blue-500' : ''}
           `}
           draggable={canEdit && !!participant1Name}
-          style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+          style={{
+            userSelect: canEdit && participant1Name ? 'none' : 'auto',
+            WebkitUserSelect: canEdit && participant1Name ? 'none' : 'auto',
+            WebkitUserDrag: canEdit && participant1Name ? 'element' : 'none',
+            MozUserSelect: canEdit && participant1Name ? 'none' : 'auto',
+            touchAction: 'none' // Для тач-экранов Windows
+          } as React.CSSProperties}
           onDragStart={(e) => {
             const draggableAttr = e.currentTarget.getAttribute('draggable');
             const logData = `matchId=${match.id}, participant1Name=${participant1Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}, draggable=${draggableAttr}`;
@@ -200,18 +208,22 @@ function MatchCardBase({
             )}
           </div>
           {canEdit && (
-            <div className="flex flex-col gap-1 ml-2 pointer-events-auto">
+            <div className="flex flex-col gap-1 ml-2 flex-shrink-0">
               {!participant1Name ? (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onAddParticipant?.(match.id, 'participant1');
                   }}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault(); // Предотвращаем начало drag на кнопке
+                  }}
                   className="p-1.5 bg-green-500 hover:bg-green-600 rounded text-white shadow-sm"
                   title="Добавить"
+                  draggable={false}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
@@ -221,11 +233,15 @@ function MatchCardBase({
                     e.stopPropagation();
                     onRemoveParticipant?.(match.id, 'participant1');
                   }}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault(); // Предотвращаем начало drag на кнопке
+                  }}
                   className="p-1.5 bg-red-500 hover:bg-red-600 rounded text-white shadow-sm"
                   title="Удалить"
+                  draggable={false}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
@@ -247,7 +263,13 @@ function MatchCardBase({
             ${dragOverSlot === 'participant2' ? 'bg-red-100 ring-2 ring-red-500' : ''}
           `}
           draggable={canEdit && !!participant2Name}
-          style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+          style={{
+            userSelect: canEdit && participant2Name ? 'none' : 'auto',
+            WebkitUserSelect: canEdit && participant2Name ? 'none' : 'auto',
+            WebkitUserDrag: canEdit && participant2Name ? 'element' : 'none',
+            MozUserSelect: canEdit && participant2Name ? 'none' : 'auto',
+            touchAction: 'none' // Для тач-экранов Windows
+          } as React.CSSProperties}
           onDragStart={(e) => {
             const draggableAttr = e.currentTarget.getAttribute('draggable');
             const logData = `matchId=${match.id}, participant2Name=${participant2Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}, draggable=${draggableAttr}`;
@@ -337,18 +359,22 @@ function MatchCardBase({
             )}
           </div>
           {canEdit && (
-            <div className="flex flex-col gap-1 ml-2 pointer-events-auto">
+            <div className="flex flex-col gap-1 ml-2 flex-shrink-0">
               {!participant2Name ? (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onAddParticipant?.(match.id, 'participant2');
                   }}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault(); // Предотвращаем начало drag на кнопке
+                  }}
                   className="p-1.5 bg-green-500 hover:bg-green-600 rounded text-white shadow-sm"
                   title="Добавить"
+                  draggable={false}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
@@ -358,11 +384,15 @@ function MatchCardBase({
                     e.stopPropagation();
                     onRemoveParticipant?.(match.id, 'participant2');
                   }}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault(); // Предотвращаем начало drag на кнопке
+                  }}
                   className="p-1.5 bg-red-500 hover:bg-red-600 rounded text-white shadow-sm"
                   title="Удалить"
+                  draggable={false}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>

@@ -512,22 +512,24 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
       console.log('[matchStore.finishMatch] Step 1: Saving to local DB...', { finalWinnerId, resultType });
 
-      // 1️⃣ Локальное сохранение (резервная копия в БД судьи)
-      // Finish match
+      // Получаем режим сервера для передачи serverUrl
+      const serverMode = useServerModeStore.getState();
+      console.log('[matchStore.finishMatch] Step 1: Finishing match...', { finalWinnerId, resultType, serverMode });
+
+      // 1️⃣ Завершить матч (через локальный сервер или setki.pro)
       await apiFinishMatch({
         matchId: match.id,
         winnerId: finalWinnerId,
         resultType,
         finalRedScore: redScore,
         finalBlueScore: blueScore,
-      });
+      }, serverMode.mode === 'local-client' ? serverMode.serverUrl : null);
 
       console.log('[matchStore.finishMatch] Step 1 complete');
 
       // 2️⃣ КРИТИЧНО: Отправка финального счета на сервер админа (в LAN режиме)
       // Это гарантирует что финальные данные сохранятся в БД админа
       console.log('[matchStore.finishMatch] Step 2: Sending to admin server...');
-      const serverMode = useServerModeStore.getState();
       console.log('[matchStore.finishMatch] Server mode:', serverMode);
 
       await updateMatchScoreUniversal({

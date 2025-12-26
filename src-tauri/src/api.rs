@@ -1762,6 +1762,93 @@ impl ApiClient {
         Ok(())
     }
 
+    // Отправить завершение матча на локальный сервер админа (для режима local-client)
+    async fn finish_match_on_local_server(
+        &self,
+        server_url: &str,
+        match_id: i32,
+        winner_id: Option<i32>,
+        result_type: String,
+        final_red_score: i32,
+        final_blue_score: i32,
+    ) -> Result<()> {
+        println!("[finish_match_on_local_server] START - server: {}, match: {}", server_url, match_id);
+
+        // Получить токен авторизации
+        let token = match self.get_token().await {
+            Ok(Some(t)) => {
+                println!("[finish_match_on_local_server] Token retrieved");
+                t
+            }
+            Ok(None) => {
+                return Err(anyhow::anyhow!("No auth token found - cannot send to local server"));
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to get token: {}", e));
+            }
+        };
+
+        // FIX: server_url уже содержит /api/v1, не дублируем
+        let url = format!("{}/desktop/matches/update", server_url);
+        println!("[finish_match_on_local_server] Full URL: {}", url);
+
+        // Используем существующий endpoint update с status=completed
+        let payload = serde_json::json!({
+            "match_id": match_id,
+            "red_score": final_red_score,
+            "blue_score": final_blue_score,
+            "red_warnings": 0, // Будет игнорироваться при status=completed
+            "blue_warnings": 0,
+            "status": "completed",
+            "winner_id": winner_id,
+            "result_type": result_type,
+        });
+
+        println!("[finish_match_on_local_server] Sending payload: {}", payload);
+
+        // Retry логика: 5 попыток
+        let max_retries = 5;
+        for attempt in 0..max_retries {
+            let response = self.client
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {
+                    println!("[finish_match_on_local_server] ✅ SUCCESS on attempt {}", attempt + 1);
+                    return Ok(());
+                },
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    println!("[finish_match_on_local_server] ❌ Failed with status {} on attempt {}: {}",
+                             status, attempt + 1, body);
+
+                    if attempt < max_retries - 1 {
+                        let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        println!("[finish_match_on_local_server] Retrying after {}ms...", delay.as_millis());
+                        tokio::time::sleep(delay).await;
+                    }
+                },
+                Err(e) => {
+                    println!("[finish_match_on_local_server] ❌ Network error on attempt {}: {}",
+                             attempt + 1, e);
+
+                    if attempt < max_retries - 1 {
+                        let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("Failed to finish match on local server after {} attempts", max_retries))
+    }
+
     // Завершить матч
     pub async fn finish_match(
         &self,
@@ -1772,6 +1859,25 @@ impl ApiClient {
         final_blue_score: i32,
     ) -> Result<()> {
         println!("[finish_match] Starting - match_id: {}, winner_id: {:?}", match_id, winner_id);
+
+        // Проверяем режим работы: local-client должен отправлять на сервер админа
+        let is_local_server = is_local_url(&self.base_url);
+
+        if is_local_server {
+            println!("[finish_match] Local client mode detected - sending to admin server at {}", self.base_url);
+
+            // Отправляем запрос на локальный сервер админа
+            return self.finish_match_on_local_server(
+                &self.base_url,
+                match_id,
+                winner_id,
+                result_type,
+                final_red_score,
+                final_blue_score,
+            ).await;
+        }
+
+        println!("[finish_match] Online/local-server mode - processing locally");
 
         // 1. Получить информацию о текущем матче (раунд, номер матча, bracket_id)
         let match_info: (i32, i32, i32) = sqlx::query_as(
@@ -2003,14 +2109,6 @@ impl ApiClient {
                 println!("[finish_match] Next match calculation - current_round: {}, current_match_number: {}, next_round: {}, next_match_number: {}",
                          current_round, current_match_number, next_round, next_match_number);
 
-                // Определить слот в следующем матче (четные номера (0,2,4) → participant1, нечетные (1,3,5) → participant2)
-                let target_slot = if current_match_number % 2 == 0 {
-                    "$.participant1"
-                } else {
-                    "$.participant2"
-                };
-                println!("[finish_match] Target slot for winner: {}", target_slot);
-
                 // Проверить существует ли следующий матч
                 let next_match_exists: Option<i32> = sqlx::query_scalar(
                     "SELECT match_id FROM matches_cache
@@ -2025,15 +2123,70 @@ impl ApiClient {
                 .await?;
 
                 if let Some(next_match_id) = next_match_exists {
-                    println!("[finish_match] Found next match_id: {}, updating slot {} with winner data", next_match_id, target_slot);
+                    println!("[finish_match] Found next match_id: {}, checking free slots...", next_match_id);
 
-                    // Получаем данные следующего матча чтобы определить формат
+                    // Получаем данные следующего матча
                     let next_match_data_row = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
                         .bind(next_match_id)
                         .fetch_one(&mut *tx)
                         .await?;
                     let next_match_data_str: String = sqlx::Row::get(&next_match_data_row, "data");
                     let next_match_data: serde_json::Value = serde_json::from_str(&next_match_data_str)?;
+
+                    // Проверяем свободные слоты
+                    let p1 = next_match_data.get("participant1");
+                    let p2 = next_match_data.get("participant2");
+
+                    let p1_empty = p1.is_none() || p1 == Some(&serde_json::Value::Null);
+                    let p2_empty = p2.is_none() || p2 == Some(&serde_json::Value::Null);
+
+                    // Проверяем, нет ли уже этого участника в следующем матче
+                    let winner_id = winner_participant_json.get("id").and_then(|v| v.as_i64());
+                    let winner_fighter_id = winner_participant_json.get("fighter_id").and_then(|v| v.as_i64());
+
+                    let already_in_p1 = if let Some(p1_obj) = p1 {
+                        if p1_obj.is_object() {
+                            let p1_id = p1_obj.get("id").and_then(|v| v.as_i64());
+                            let p1_fighter_id = p1_obj.get("fighter_id").and_then(|v| v.as_i64());
+                            (winner_id.is_some() && p1_id == winner_id) || (winner_fighter_id.is_some() && p1_fighter_id == winner_fighter_id)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    let already_in_p2 = if let Some(p2_obj) = p2 {
+                        if p2_obj.is_object() {
+                            let p2_id = p2_obj.get("id").and_then(|v| v.as_i64());
+                            let p2_fighter_id = p2_obj.get("fighter_id").and_then(|v| v.as_i64());
+                            (winner_id.is_some() && p2_id == winner_id) || (winner_fighter_id.is_some() && p2_fighter_id == winner_fighter_id)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if already_in_p1 || already_in_p2 {
+                        println!("[finish_match] ⚠️ Winner already in next match {}, skipping advancement", next_match_id);
+                    } else {
+
+                    // Выбираем первый свободный слот
+                    let target_slot = if p1_empty {
+                        Some("$.participant1")
+                    } else if p2_empty {
+                        Some("$.participant2")
+                    } else {
+                        None
+                    };
+
+                    if target_slot.is_none() {
+                        println!("[finish_match] ⚠️ Both slots occupied in match {}, cannot advance winner", next_match_id);
+                    }
+
+                    if let Some(target_slot) = target_slot {
+                        println!("[finish_match] Free slot found: {}, updating with winner data", target_slot);
 
                     let next_has_participant_objects = next_match_data.get("participant1").is_some()
                         && next_match_data["participant1"].is_object();
@@ -2126,7 +2279,7 @@ impl ApiClient {
                 println!("[finish_match] Successfully advanced winner to next match_id: {}", next_match_id);
 
                 // Сохранить данные для отправки на локальный сервер после коммита транзакции
-                let participant_slot = if current_match_number % 2 == 0 { 1 } else { 2 };
+                let participant_slot = if target_slot == "$.participant1" { 1 } else { 2 };
                 let participant_id = winner_participant_json["id"].as_i64().map(|id| id as i32);
                 let participant_name = winner_participant_json["full_name"].as_str().map(String::from);
                 let club = winner_participant_json["club_name"].as_str().map(String::from);
@@ -2134,10 +2287,12 @@ impl ApiClient {
                 advancement_data = Some((next_match_id, participant_slot, participant_id, participant_name, club));
                 println!("[finish_match] Saved advancement data for local server sync: match_id={}, slot={}, participant_id={:?}",
                          next_match_id, participant_slot, participant_id);
-            } else {
-                println!("[finish_match] WARNING: No next match found for bracket_id: {}, round: {}, match_number: {} - this might be the final match or data issue",
-                         bracket_id, next_round, next_match_number);
-            }
+                    } // Закрываем if let Some(target_slot)
+                    } // Закрываем else (для if already_in_p1 || already_in_p2)
+                } else {
+                    println!("[finish_match] WARNING: No next match found for bracket_id: {}, round: {}, match_number: {} - this might be the final match or data issue",
+                             bracket_id, next_round, next_match_number);
+                }
         } else {
             println!("[finish_match] Draw or no winner determined");
         }

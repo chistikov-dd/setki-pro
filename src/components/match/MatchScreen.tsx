@@ -12,7 +12,7 @@ import { useMatchWebSocket } from '../../hooks/useMatchWebSocket';
 import { useSound } from '../../hooks/useSound';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
 // import { fileLogger } from '../../utils/fileLogger'; // Unused
-import type { Match } from '../../types';
+import type { Match, Participant } from '../../types';
 import { MatchTimer } from './MatchTimer';
 import { ParticipantPanel } from './ParticipantPanel';
 import { MatchEndDialog } from './MatchEndDialog';
@@ -32,19 +32,59 @@ interface MatchScreenProps {
 
 /**
  * Custom hook для отправки обновлений в публичное табло
- * DEPRECATED: Отключено - вызывает infinite loop
- * Публичное табло обновляется через другой механизм
+ * FIX: Используем useRef для предотвращения infinite loop
  */
-// function useMatchUpdateEmitter(
-//   redFighter: Participant | null,
-//   blueFighter: Participant | null,
-//   redScore: number,
-//   blueScore: number,
-//   remainingSeconds: number,
-//   isRunning: boolean
-// ) {
-//   return;
-// }
+function useMatchUpdateEmitter(
+  redFighter: Participant | null,
+  blueFighter: Participant | null,
+  redScore: number,
+  blueScore: number,
+  remainingSeconds: number,
+  isRunning: boolean
+) {
+  const prevDataRef = useRef({
+    redScore,
+    blueScore,
+    remainingSeconds,
+    isRunning,
+  });
+
+  useEffect(() => {
+    const prev = prevDataRef.current;
+
+    // Отправляем только если данные изменились
+    const hasChanged =
+      prev.redScore !== redScore ||
+      prev.blueScore !== blueScore ||
+      prev.remainingSeconds !== remainingSeconds ||
+      prev.isRunning !== isRunning;
+
+    if (hasChanged) {
+      const data = {
+        redFighter,
+        blueFighter,
+        redScore,
+        blueScore,
+        remainingSeconds,
+        isRunning,
+      };
+
+      console.log('[useMatchUpdateEmitter] 📤 Отправка обновления:', {
+        redScore,
+        blueScore,
+        remainingSeconds,
+        isRunning,
+      });
+
+      emit('match-update', data).catch((error) => {
+        console.error('[useMatchUpdateEmitter] ❌ Ошибка отправки:', error);
+      });
+
+      // Обновляем ref после отправки
+      prevDataRef.current = { redScore, blueScore, remainingSeconds, isRunning };
+    }
+  }, [redFighter, blueFighter, redScore, blueScore, remainingSeconds, isRunning]);
+}
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   console.log('[MatchScreen] ===== COMPONENT RENDER START =====');
@@ -492,15 +532,15 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   };
 
   // Отправляем обновления в публичное окно в реальном времени
-  // ОТКЛЮЧЕНО: вызывает infinite loop
-  // useMatchUpdateEmitter(
-  //   redFighter,
-  //   blueFighter,
-  //   redScore,
-  //   blueScore,
-  //   timer.remainingSeconds,
-  //   timer.isRunning
-  // );
+  // FIX: Теперь использует useRef для предотвращения infinite loop
+  useMatchUpdateEmitter(
+    redFighter,
+    blueFighter,
+    redScore,
+    blueScore,
+    timer.remainingSeconds,
+    timer.isRunning
+  );
 
   // Global hotkeys
   useEffect(() => {
