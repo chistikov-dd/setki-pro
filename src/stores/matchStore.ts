@@ -149,8 +149,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     const timestamp = new Date().toISOString(); // ISO 8601 для timestamp comparison
 
     // FIX: OPTIMISTIC UPDATE - используем функциональный update для предотвращения race conditions
-    let newRedScore: number;
-    let newBlueScore: number;
+    let newRedScore: number = 0;
+    let newBlueScore: number = 0;
 
     set((state) => {
       newRedScore = participant === 'red' ? state.redScore + points : state.redScore;
@@ -162,9 +162,12 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       };
     });
 
-    // Получаем обновленные значения из closure
-    const redWarnings = state.redWarnings;
-    const blueWarnings = state.blueWarnings;
+    // Получаем обновленные значения после set
+    const currentState = get();
+    const redWarnings = currentState.redWarnings;
+    const blueWarnings = currentState.blueWarnings;
+    const oldRedScore = currentState.redScore;
+    const oldBlueScore = currentState.blueScore;
 
     try {
       console.log('[matchStore.addScore] Step 1: Calling batchUpdateMatch...');
@@ -216,8 +219,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
       // FIX: ROLLBACK - восстанавливаем старое состояние при ошибке
       set({
-        redScore,
-        blueScore,
+        redScore: oldRedScore - points * (participant === 'red' ? 1 : 0),
+        blueScore: oldBlueScore - points * (participant === 'blue' ? 1 : 0),
         lastUpdateTimestamp: get().lastUpdateTimestamp, // keep current timestamp
       });
 
@@ -255,8 +258,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     const maxWarnings = currentSession?.scoring_config.warnings.max_count || 3;
 
     // FIX: OPTIMISTIC UPDATE - используем функциональный update для предотвращения race conditions
-    let newRedWarnings: number;
-    let newBlueWarnings: number;
+    let newRedWarnings: number = 0;
+    let newBlueWarnings: number = 0;
 
     set((state) => {
       newRedWarnings = participant === 'red' ? state.redWarnings + 1 : state.redWarnings;
@@ -277,9 +280,12 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       };
     });
 
-    // Получаем scores из closure
-    const redScore = state.redScore;
-    const blueScore = state.blueScore;
+    // Получаем значения после set
+    const currentState = get();
+    const redScore = currentState.redScore;
+    const blueScore = currentState.blueScore;
+    const oldRedWarnings = currentState.redWarnings;
+    const oldBlueWarnings = currentState.blueWarnings;
 
     try {
       console.log('[matchStore.addWarning] Step 1: Calling batchUpdateMatch...');
@@ -329,8 +335,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
 
       // FIX: ROLLBACK - восстанавливаем старое состояние
       set({
-        redWarnings,
-        blueWarnings,
+        redWarnings: oldRedWarnings - (participant === 'red' ? 1 : 0),
+        blueWarnings: oldBlueWarnings - (participant === 'blue' ? 1 : 0),
         lastUpdateTimestamp: get().lastUpdateTimestamp,
       });
 
@@ -351,8 +357,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     if (!match) return;
 
     // FIX: OPTIMISTIC UPDATE - используем функциональный update
-    let newRedWarnings: number;
-    let newBlueWarnings: number;
+    let newRedWarnings: number = 0;
+    let newBlueWarnings: number = 0;
 
     set((state) => {
       newRedWarnings = participant === 'red' ? Math.max(0, state.redWarnings - 1) : state.redWarnings;
@@ -363,8 +369,11 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       };
     });
 
-    const redScore = state.redScore;
-    const blueScore = state.blueScore;
+    const currentState = get();
+    const redScore = currentState.redScore;
+    const blueScore = currentState.blueScore;
+    const oldRedWarnings = currentState.redWarnings;
+    const oldBlueWarnings = currentState.blueWarnings;
 
     try {
       // Update match
@@ -380,8 +389,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       console.error('Failed to remove warning:', error);
       // Rollback on error
       set({
-        redWarnings: state.redWarnings,
-        blueWarnings: state.blueWarnings,
+        redWarnings: oldRedWarnings,
+        blueWarnings: oldBlueWarnings,
       });
     }
   },

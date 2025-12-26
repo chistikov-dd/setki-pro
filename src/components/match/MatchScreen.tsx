@@ -11,8 +11,8 @@ import { useToast } from '../../hooks/useToast';
 import { useMatchWebSocket } from '../../hooks/useMatchWebSocket';
 import { useSound } from '../../hooks/useSound';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
-import { fileLogger } from '../../utils/fileLogger';
-import type { Match, Participant } from '../../types';
+// import { fileLogger } from '../../utils/fileLogger'; // Unused
+import type { Match } from '../../types';
 import { MatchTimer } from './MatchTimer';
 import { ParticipantPanel } from './ParticipantPanel';
 import { MatchEndDialog } from './MatchEndDialog';
@@ -32,26 +32,19 @@ interface MatchScreenProps {
 
 /**
  * Custom hook для отправки обновлений в публичное табло
- * Отправляет обновления сразу при изменении данных
- *
- * Оптимизации:
- * - Проверяет существование окна через WebviewWindow.getByLabel()
- * - ЕДИНЫЙ useEffect для избежания бесконечных циклов
- * - Отправка только при реальных изменениях данных
- * - КРИТИЧНО: НЕ вызываем этот hook - он вызывает infinite loop!
+ * DEPRECATED: Отключено - вызывает infinite loop
+ * Публичное табло обновляется через другой механизм
  */
-function useMatchUpdateEmitter(
-  redFighter: Participant | null,
-  blueFighter: Participant | null,
-  redScore: number,
-  blueScore: number,
-  remainingSeconds: number,
-  isRunning: boolean
-) {
-  // ОТКЛЮЧЕНО: вызывает infinite loop
-  // Публичное табло обновляется через другой механизм
-  return;
-}
+// function useMatchUpdateEmitter(
+//   redFighter: Participant | null,
+//   blueFighter: Participant | null,
+//   redScore: number,
+//   blueScore: number,
+//   remainingSeconds: number,
+//   isRunning: boolean
+// ) {
+//   return;
+// }
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   console.log('[MatchScreen] ===== COMPONENT RENDER START =====');
