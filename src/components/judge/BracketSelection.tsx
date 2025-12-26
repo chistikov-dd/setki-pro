@@ -278,6 +278,21 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   }, [lastSelectedBracketId, filteredBrackets]);
 
   const handleSelectBracket = (bracket: BracketResponse) => {
+    // Проверка: если сетка уже занята другим столом, показать toast
+    const assignment = tableAssignments.get(bracket.id);
+    if (assignment) {
+      // Показываем уведомление что сетка занята
+      const event = new CustomEvent('show-toast', {
+        detail: {
+          message: `Сетка занята столом №${assignment.table_number}`,
+          type: 'error',
+          duration: 3000,
+        },
+      });
+      window.dispatchEvent(event);
+      return;
+    }
+
     onBracketSelect(bracket.id, bracket.category_name);
   };
 
@@ -666,21 +681,21 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
             >
               <CardHeader>
               <div className="flex items-start justify-between">
-                <CardTitle className="text-lg">{getEnhancedCategoryName(bracket)}</CardTitle>
-                <div className="flex items-center gap-2">
-                  {/* Индикатор занятого стола */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <CardTitle className="text-lg">{getEnhancedCategoryName(bracket)}</CardTitle>
+                  {/* Индикатор занятого стола рядом с названием */}
                   {tableAssignments.has(bracket.id) && (
                     <span className="text-xs font-medium px-2 py-1 rounded-full bg-blue-500/20 text-blue-600 border border-blue-500/50">
                       Стол №{tableAssignments.get(bracket.id)!.table_number}
                     </span>
                   )}
-                  {/* Статус сетки */}
-                  <span
-                    className={`text-xs font-medium px-2 py-1 rounded-full ${getStatusColor(bracket.status)}`}
-                  >
-                    {getStatusLabel(bracket.status)}
-                  </span>
                 </div>
+                {/* Статус сетки */}
+                <span
+                  className={`text-xs font-medium px-2 py-1 rounded-full ${getStatusColor(bracket.status)}`}
+                >
+                  {getStatusLabel(bracket.status)}
+                </span>
               </div>
             </CardHeader>
 
@@ -795,9 +810,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                 variant="primary"
                 size="sm"
                 className="w-full mt-4"
-                disabled={bracket.status === 'completed'}
               >
-                {bracket.status === 'completed' ? 'Завершена' : 'Выбрать сетку'}
+                {bracket.status === 'completed' ? 'Просмотр' : 'Выбрать сетку'}
               </Button>
             </CardContent>
           </Card>

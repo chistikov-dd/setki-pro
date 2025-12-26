@@ -169,6 +169,16 @@ export const useAuthStore = create<AuthState>()(
           role: user?.role,
         });
 
+        // Закрываем публичное табло при выходе судьи
+        if (user?.role === 'referee') {
+          try {
+            const { closePublicDisplay } = await import('../utils/publicDisplay');
+            await closePublicDisplay();
+          } catch (error) {
+            logger.warn(LOG_CATEGORIES.AUTH, 'Failed to close public display on logout', {}, error instanceof Error ? error : undefined);
+          }
+        }
+
         // Освободить номер стола если это судья
         if (user?.role === 'referee' && user?.tournament_id && user?.table_number) {
           let retries = 3;

@@ -105,6 +105,16 @@ function App() {
 
         console.log('[Window Close] Releasing table before close...');
 
+        // Закрываем публичное табло перед выходом
+        try {
+          const { closePublicDisplay } = await import('./utils/publicDisplay');
+          await closePublicDisplay();
+          console.log('[Window Close] Public display closed');
+        } catch (error) {
+          console.error('[Window Close] Error closing public display:', error);
+          // Продолжаем даже если не удалось закрыть
+        }
+
         // FIX: Используем Promise.race с timeout 2000ms вместо 100ms
         // logout() может занять до 1500ms (3 попытки × 500ms для release_table_number)
         try {

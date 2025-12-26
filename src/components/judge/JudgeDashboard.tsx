@@ -4,17 +4,20 @@ import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
+import { useToast } from '../../hooks/useToast';
 import { Button } from '../ui/Button';
 import { BracketSelection } from './BracketSelection';
 import { TournamentBracket } from '../brackets/TournamentBracket';
 import { MatchScreen } from '../match/MatchScreen';
 import { reserveBracket, getBracketMatches, releaseBracket } from '../../services/api';
+import { Toast, ToastContainer } from '../ui/Toast';
 import type { Match } from '../../types';
 
 export const JudgeDashboard: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { currentSession, loadTournamentSession } = useSessionStore();
   const serverMode = useServerModeStore(useShallow((state) => ({ mode: state.mode, serverUrl: state.serverUrl })));
+  const { toasts, showToast, hideToast } = useToast();
   const [selectedBracketId, setSelectedBracketId] = useState<number | null>(null);
   const [selectedBracketName, setSelectedBracketName] = useState<string>('');
   const [lastSelectedBracketId, setLastSelectedBracketId] = useState<number | null>(null);
@@ -58,6 +61,20 @@ export const JudgeDashboard: React.FC = () => {
       console.log('[JudgeDashboard] Сессия восстановлена из localStorage:', currentSession);
     }
   }, [user?.tournament_id, currentSession, loadTournamentSession]);
+
+  // Слушатель для toast уведомлений из BracketSelection
+  useEffect(() => {
+    const handleShowToast = (event: CustomEvent) => {
+      const { message, type, duration } = event.detail;
+      showToast(message, type, duration);
+    };
+
+    window.addEventListener('show-toast', handleShowToast as EventListener);
+
+    return () => {
+      window.removeEventListener('show-toast', handleShowToast as EventListener);
+    };
+  }, [showToast]);
 
   const handleLogout = async () => {
     // Освобождаем сетку перед выходом
@@ -333,6 +350,19 @@ export const JudgeDashboard: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Toast Notifications */}
+      <ToastContainer>
+        {toasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            duration={toast.duration}
+            onClose={() => hideToast(toast.id)}
+          />
+        ))}
+      </ToastContainer>
     </div>
   );
 };

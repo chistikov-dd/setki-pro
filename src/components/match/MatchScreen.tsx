@@ -11,6 +11,7 @@ import { useToast } from '../../hooks/useToast';
 import { useMatchWebSocket } from '../../hooks/useMatchWebSocket';
 import { useSound } from '../../hooks/useSound';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
+import { closePublicDisplay } from '../../utils/publicDisplay';
 // import { fileLogger } from '../../utils/fileLogger'; // Unused
 import type { Match, Participant } from '../../types';
 import { MatchTimer } from './MatchTimer';
@@ -219,8 +220,10 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     setShowExitDialog(true);
   };
 
-  const handleExitConfirm = () => {
+  const handleExitConfirm = async () => {
     setShowExitDialog(false);
+    // Закрываем публичное табло при возврате к сетке
+    await closePublicDisplay();
     onExit();
   };
 
@@ -357,20 +360,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
     return () => {
       cleanup();
-      // FIX: Безопасное закрытие публичного окна при выходе
-      if (publicWindowOpen) {
-        (async () => {
-          try {
-            const publicWindow = await WebviewWindow.getByLabel('public-display');
-            if (publicWindow) {
-              await publicWindow.close();
-            }
-          } catch (error) {
-            console.error('[MatchScreen] Failed to close public display on cleanup:', error);
-            // Не критично, продолжаем
-          }
-        })();
-      }
+      // Закрываем публичное табло при размонтировании компонента
+      closePublicDisplay();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match.id]); // Только match.id, actions игнорируем
@@ -679,6 +670,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
       }
 
       setShowEndDialog(false);
+      // Закрываем публичное табло при завершении матча
+      await closePublicDisplay();
       onExit();
     } catch (error) {
       console.error('[MatchScreen] Failed to finish match:', error);

@@ -1,16 +1,72 @@
+import { useEffect, useState } from 'react';
 import { Users, Circle } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { useJudgeMonitorStore } from '../../stores/judgeMonitorStore';
+import { getActiveJudgeSessions } from '../../services/api';
 
 interface JudgeTablesMonitorProps {
   tournamentId: number;
 }
 
 export const JudgeTablesMonitor = ({ tournamentId }: JudgeTablesMonitorProps) => {
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   // Получаем список судей из reactive store (автоматически обновляется через WebSocket)
   // ВАЖНО: Используем selector напрямую к connectedJudges, а не через getJudgesList()
   // чтобы избежать бесконечного цикла обновлений
   const connectedJudges = useJudgeMonitorStore((state) => state.connectedJudges);
+  const { addJudge, clearJudges } = useJudgeMonitorStore();
+
+  // Загрузка активных судейских сессий
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadActiveSessions = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        console.log('[JudgeTablesMonitor] Загрузка активных судей для турнира:', tournamentId);
+        const sessions = await getActiveJudgeSessions(tournamentId);
+        console.log('[JudgeTablesMonitor] Получено активных судей:', sessions.length);
+
+        if (!isMounted) return;
+
+        // Очищаем старые данные и добавляем новые
+        clearJudges();
+        sessions.forEach((session) => {
+          // Преобразуем ActiveJudgeSession в ConnectedJudge
+          // Используем user_id = 0 как placeholder, так как в ActiveJudgeSession нет user_id
+          addJudge({
+            user_id: 0, // ActiveJudgeSession не содержит user_id
+            judge_name: session.judge_name,
+            table_number: session.table_number,
+            tournament_id: session.tournament_id || tournamentId,
+            connected_at: session.logged_in_at,
+          });
+        });
+
+        setIsLoading(false);
+      } catch (err) {
+        console.error('[JudgeTablesMonitor] Ошибка загрузки активных судей:', err);
+        if (isMounted) {
+          setError(err instanceof Error ? err.message : 'Ошибка загрузки судей');
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadActiveSessions();
+
+    // Polling каждые 5 секунд для обновления списка
+    const intervalId = setInterval(loadActiveSessions, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [tournamentId, addJudge, clearJudges]);
 
   // Преобразуем Map в массив и фильтруем по tournament_id
   const tournamentJudges = Array.from(connectedJudges.values())
@@ -43,7 +99,17 @@ export const JudgeTablesMonitor = ({ tournamentId }: JudgeTablesMonitorProps) =>
         </div>
       </CardHeader>
       <CardContent>
-        {tournamentJudges.length === 0 ? (
+        {isLoading && tournamentJudges.length === 0 ? (
+          <div className="text-center py-8 text-gray-800">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-400 border-t-blue-500 mb-2"></div>
+            <p className="text-sm">Загрузка...</p>
+          </div>
+        ) : error ? (
+          <div className="text-center py-8 text-red-400">
+            <p className="font-medium mb-1">Ошибка загрузки</p>
+            <p className="text-sm">{error}</p>
+          </div>
+        ) : tournamentJudges.length === 0 ? (
           <div className="text-center py-8 text-gray-800">
             <Users className="w-12 h-12 mx-auto mb-2 text-gray-400" />
             <p>Нет подключенных судей</p>
