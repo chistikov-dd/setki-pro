@@ -150,6 +150,8 @@ export const AdminDashboard = () => {
       setIsDownloading(false);
       // Обновить статус кэша
       setIsTournamentCached(true);
+      // Перезагрузить сессию, чтобы получить обновлённый PIN-код из кэша
+      await loadTournamentSession(currentSession.tournament_id);
     } catch (error) {
       console.error('Ошибка скачивания:', error);
       setDownloadProgress('Ошибка загрузки данных');

@@ -406,6 +406,8 @@ impl ApiClient {
 
     // Получить PIN из кэша по tournament_id
     pub async fn get_cached_pin(&self, tournament_id: i32) -> Result<String> {
+        println!("[get_cached_pin] Поиск PIN для турнира {}", tournament_id);
+
         let record = sqlx::query_as::<_, (String,)>(
             "SELECT pin_code FROM cached_pins WHERE tournament_id = ?"
         )
@@ -414,8 +416,14 @@ impl ApiClient {
         .await?;
 
         match record {
-            Some((pin,)) => Ok(pin),
-            None => Err(anyhow::anyhow!("PIN не найден в кэше для турнира {}", tournament_id))
+            Some((pin,)) => {
+                println!("[get_cached_pin] ✓ Найден PIN в кэше: {}", pin);
+                Ok(pin)
+            },
+            None => {
+                println!("[get_cached_pin] ✗ PIN не найден в кэше для турнира {}", tournament_id);
+                Err(anyhow::anyhow!("PIN не найден в кэше для турнира {}", tournament_id))
+            }
         }
     }
 
@@ -611,6 +619,13 @@ impl ApiClient {
         let data: serde_json::Value = serde_json::from_str(&response_text)
             .map_err(|e| anyhow::anyhow!("Ошибка парсинга JSON: {}. Первые 500 символов: {}", e, &response_text[..response_text.len().min(500)]))?;
 
+        // DEBUG: Выводим структуру ответа для отладки
+        println!("[downloadTournament] Структура ответа (ключи верхнего уровня): {:?}",
+            data.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
+        println!("[downloadTournament] pin_code на верхнем уровне: {:?}", data.get("pin_code"));
+        println!("[downloadTournament] tournament.pin_code: {:?}",
+            data.get("tournament").and_then(|t| t.get("pin_code")));
+
         // Извлекаем сетки с матчами
         let brackets = data["brackets"].as_array()
             .ok_or_else(|| anyhow::anyhow!("Неверный формат ответа"))?;
@@ -724,10 +739,33 @@ impl ApiClient {
         }
         println!("[downloadTournament] Все сетки и матчи сохранены");
 
-        // Кэшируем PIN-код если есть
-        if let Some(pin_code) = data["pin_code"].as_str() {
-            let tournament_name = data["tournament"]["name"].as_str().unwrap_or("Unknown");
-            self.cache_pin(pin_code, tournament_id, tournament_name).await.ok();
+        // Кэшируем PIN-код (проверяем два возможных пути или генерируем локально)
+        let pin_code = data.get("pin_code")
+            .and_then(|v| v.as_str())
+            .or_else(|| data.get("tournament").and_then(|t| t.get("pin_code")).and_then(|v| v.as_str()));
+
+        let final_pin = if let Some(pin) = pin_code {
+            println!("[downloadTournament] Найден PIN-код от сервера: {}", pin);
+            pin.to_string()
+        } else {
+            // Генерируем локальный PIN-код: tournament_id + random 3 digits
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            let random_suffix: u32 = rng.gen_range(100..=999);
+            let generated_pin = format!("{:03}{:03}", tournament_id % 1000, random_suffix);
+            println!("[downloadTournament] WARNING: PIN-код не найден в ответе API");
+            println!("[downloadTournament] Генерируем локальный PIN-код: {}", generated_pin);
+            generated_pin
+        };
+
+        let tournament_name = data.get("tournament")
+            .and_then(|t| t.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("Unknown");
+
+        match self.cache_pin(&final_pin, tournament_id, tournament_name).await {
+            Ok(_) => println!("[downloadTournament] ✓ PIN-код успешно сохранён в кэш"),
+            Err(e) => println!("[downloadTournament] ✗ Ошибка сохранения PIN-кода: {}", e),
         }
 
         Ok(())
@@ -1135,15 +1173,22 @@ impl ApiClient {
         let pin_code = match pin_response {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(pin_data) = resp.json::<serde_json::Value>().await {
-                    let pin = pin_data["pin_code"].as_str().unwrap_or("000000").to_string();
-
-                    // Сохранить PIN в кэш для offline работы судей
-                    let tournament_name = tournament_data["name"].as_str().unwrap_or("Unknown");
-                    self.cache_pin(&pin, tournament_id, tournament_name).await.ok();
-
-                    pin
+                    // Проверяем, есть ли PIN в ответе и не является ли он null
+                    if let Some(pin_str) = pin_data.get("pin_code").and_then(|v| v.as_str()) {
+                        // PIN найден в API - сохраняем в кэш
+                        let tournament_name = tournament_data["name"].as_str().unwrap_or("Unknown");
+                        self.cache_pin(pin_str, tournament_id, tournament_name).await.ok();
+                        pin_str.to_string()
+                    } else {
+                        // PIN null или отсутствует - проверяем кэш
+                        println!("[get_tournament_details] PIN не найден в API, проверяем кэш");
+                        self.get_cached_pin(tournament_id).await.unwrap_or_else(|_| {
+                            println!("[get_tournament_details] PIN не найден в кэше, возвращаем 000000");
+                            "000000".to_string()
+                        })
+                    }
                 } else {
-                    // Fallback на кэшированный PIN
+                    // Ошибка парсинга - fallback на кэш
                     self.get_cached_pin(tournament_id).await.unwrap_or_else(|_| "000000".to_string())
                 }
             }
@@ -1555,8 +1600,96 @@ impl ApiClient {
         .execute(&mut *tx)
         .await?;
 
-        // Commit транзакции - либо обе операции успешны, либо обе откатятся
+        // Обновить статус сетки на основе статусов матчей
+        self.update_bracket_status_from_matches(&mut tx, match_id).await?;
+
+        // Commit транзакции - либо все операции успешны, либо все откатятся
         tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Обновляет статус сетки на основе статусов её матчей
+    async fn update_bracket_status_from_matches(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        match_id: i32,
+    ) -> Result<()> {
+        // 1. Получить bracket_id для этого матча
+        let bracket_id: Option<(i32,)> = sqlx::query_as(
+            "SELECT bracket_id FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(match_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        let bracket_id = match bracket_id {
+            Some((id,)) => id,
+            None => return Ok(()), // Матч не найден в кэше - ничего не делаем
+        };
+
+        // 2. Получить все матчи этой сетки и их статусы
+        let matches: Vec<(String,)> = sqlx::query_as(
+            "SELECT json_extract(data, '$.status') FROM matches_cache WHERE bracket_id = ?"
+        )
+        .bind(bracket_id)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        if matches.is_empty() {
+            return Ok(());
+        }
+
+        // 3. Определить статус сетки на основе статусов матчей
+        let mut has_in_progress = false;
+        let mut all_completed = true;
+
+        for (status_str,) in matches {
+            match status_str.as_str() {
+                "in_progress" => {
+                    has_in_progress = true;
+                    all_completed = false;
+                }
+                "scheduled" => {
+                    all_completed = false;
+                }
+                "completed" => {
+                    // Ничего не делаем
+                }
+                _ => {
+                    all_completed = false;
+                }
+            }
+        }
+
+        // Логика определения статуса сетки:
+        // - Если есть хотя бы один in_progress -> сетка in_progress
+        // - Иначе если все completed -> сетка completed
+        // - Иначе -> сетка not_started
+        let bracket_status = if has_in_progress {
+            "in_progress"
+        } else if all_completed {
+            "completed"
+        } else {
+            "not_started"
+        };
+
+        // 4. Обновить статус сетки в brackets_cache
+        sqlx::query(
+            "UPDATE brackets_cache
+             SET data = json_set(data, '$.status', ?),
+                 updated_at = datetime('now')
+             WHERE bracket_id = ?"
+        )
+        .bind(bracket_status)
+        .bind(bracket_id)
+        .execute(&mut **tx)
+        .await?;
+
+        println!(
+            "[update_bracket_status] Updated bracket {} status to: {}",
+            bracket_id, bracket_status
+        );
 
         Ok(())
     }

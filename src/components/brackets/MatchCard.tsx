@@ -156,6 +156,7 @@ function MatchCardBase({
               e.stopPropagation();
               e.dataTransfer.dropEffect = 'move';
               setDragOverSlot('participant1');
+              logger.info(`[MatchCard] DragOver participant1: matchId=${match.id}`);
             }
           }}
           onDragLeave={() => {
@@ -175,7 +176,7 @@ function MatchCardBase({
             }
           }}
         >
-          <div className="flex flex-col w-full min-w-0 flex-1">
+          <div className="flex flex-col w-full min-w-0 flex-1" style={{ pointerEvents: 'none' }}>
             <div className="flex items-center justify-between gap-2">
               <span
                 className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
@@ -206,7 +207,7 @@ function MatchCardBase({
             )}
           </div>
           {canEdit && (
-            <div className="flex flex-col gap-1 ml-2 flex-shrink-0">
+            <div className="flex flex-col gap-1 ml-2 flex-shrink-0" style={{ pointerEvents: 'auto' }}>
               {!participant1Name ? (
                 <button
                   onClick={(e) => {
@@ -307,6 +308,7 @@ function MatchCardBase({
               e.stopPropagation();
               e.dataTransfer.dropEffect = 'move';
               setDragOverSlot('participant2');
+              logger.info(`[MatchCard] DragOver participant2: matchId=${match.id}`);
             }
           }}
           onDragLeave={() => {
@@ -326,7 +328,7 @@ function MatchCardBase({
             }
           }}
         >
-          <div className="flex flex-col w-full min-w-0 flex-1">
+          <div className="flex flex-col w-full min-w-0 flex-1" style={{ pointerEvents: 'none' }}>
             <div className="flex items-center justify-between gap-2">
               <span
                 className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
@@ -357,7 +359,7 @@ function MatchCardBase({
             )}
           </div>
           {canEdit && (
-            <div className="flex flex-col gap-1 ml-2 flex-shrink-0">
+            <div className="flex flex-col gap-1 ml-2 flex-shrink-0" style={{ pointerEvents: 'auto' }}>
               {!participant2Name ? (
                 <button
                   onClick={(e) => {

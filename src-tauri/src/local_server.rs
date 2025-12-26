@@ -674,7 +674,13 @@ async fn update_match_score_handler(
 
     println!("[LOCAL SERVER] ✅ Match {} successfully updated in DB (version incremented)", payload.match_id);
 
-    // 3.5. Если матч завершен - продвинуть победителя в следующий матч
+    // 3.5. Обновить статус сетки на основе статусов матчей
+    if let Err(e) = update_bracket_status_from_matches(&state.db, payload.match_id).await {
+        println!("[LOCAL SERVER] WARNING: Failed to update bracket status: {:?}", e);
+        // Не фейлим весь запрос - матч уже сохранен
+    }
+
+    // 3.6. Если матч завершен - продвинуть победителя в следующий матч
     if payload.status == "completed" {
         println!("[LOCAL SERVER] Match completed, checking for winner advancement...");
 
@@ -1604,6 +1610,7 @@ async fn handle_admin_socket(socket: WebSocket, state: LocalServerState) {
 }
 
 // Error handling
+#[derive(Debug)]
 #[allow(dead_code)]
 pub enum AppError {
     Database(sqlx::Error),
@@ -1648,6 +1655,90 @@ impl IntoResponse for AppError {
 }
 
 // Вспомогательная функция для продвижения победителя в следующий матч
+/// Обновляет статус сетки на основе статусов её матчей
+async fn update_bracket_status_from_matches(
+    db: &SqlitePool,
+    match_id: i32,
+) -> Result<(), AppError> {
+    // 1. Получить bracket_id для этого матча
+    let bracket_id: Option<(i32,)> = sqlx::query_as(
+        "SELECT bracket_id FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(match_id)
+    .fetch_optional(db)
+    .await?;
+
+    let bracket_id = match bracket_id {
+        Some((id,)) => id,
+        None => return Ok(()), // Матч не найден в кэше - ничего не делаем
+    };
+
+    // 2. Получить все матчи этой сетки и их статусы
+    let matches: Vec<(String,)> = sqlx::query_as(
+        "SELECT json_extract(data, '$.status') FROM matches_cache WHERE bracket_id = ?"
+    )
+    .bind(bracket_id)
+    .fetch_all(db)
+    .await?;
+
+    if matches.is_empty() {
+        return Ok(());
+    }
+
+    // 3. Определить статус сетки на основе статусов матчей
+    let mut has_in_progress = false;
+    let mut all_completed = true;
+
+    for (status_str,) in matches {
+        match status_str.as_str() {
+            "in_progress" => {
+                has_in_progress = true;
+                all_completed = false;
+            }
+            "scheduled" => {
+                all_completed = false;
+            }
+            "completed" => {
+                // Ничего не делаем
+            }
+            _ => {
+                all_completed = false;
+            }
+        }
+    }
+
+    // Логика определения статуса сетки:
+    // - Если есть хотя бы один in_progress -> сетка in_progress
+    // - Иначе если все completed -> сетка completed
+    // - Иначе -> сетка not_started
+    let bracket_status = if has_in_progress {
+        "in_progress"
+    } else if all_completed {
+        "completed"
+    } else {
+        "not_started"
+    };
+
+    // 4. Обновить статус сетки в brackets_cache
+    sqlx::query(
+        "UPDATE brackets_cache
+         SET data = json_set(data, '$.status', ?),
+             updated_at = datetime('now')
+         WHERE bracket_id = ?"
+    )
+    .bind(bracket_status)
+    .bind(bracket_id)
+    .execute(db)
+    .await?;
+
+    println!(
+        "[LOCAL SERVER] Updated bracket {} status to: {}",
+        bracket_id, bracket_status
+    );
+
+    Ok(())
+}
+
 async fn advance_winner_to_next_match(
     db: &SqlitePool,
     match_id: i32,

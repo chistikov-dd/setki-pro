@@ -194,11 +194,21 @@ export interface BracketResponse {
   is_published: boolean;
   split_criteria?: Record<string, unknown>;
   // Данные категории для фильтрации
+  sport_id?: number;
+  sport_name?: string;
   gender?: 'male' | 'female' | 'mixed';
   min_age?: number;
   max_age?: number;
   min_weight?: number;
   max_weight?: number;
+  characteristic_filters?: Array<{ key: string; value: string }>;
+  characteristics_schema?: Array<{
+    key: string;
+    label: string;
+    type: string;
+    use_as_category_tag?: boolean;
+    options?: Array<{ value: string; label: string }>;
+  }>;
   // Опциональные вложенные матчи (возвращаются локальным сервером)
   matches?: MatchResponse[];
 }
@@ -322,6 +332,8 @@ export interface WSParticipantUpdateData {
 export interface BracketFilters {
   searchQuery: string;           // Поиск по имени участника
   gender: 'all' | 'male' | 'female' | 'mixed';  // Фильтр по полу
+  sportId: number | 'all';      // Фильтр по виду спорта
+  characteristics: Record<string, string | 'all'>;  // Динамические фильтры по характеристикам (key -> value)
 }
 
 export interface BracketSortConfig {

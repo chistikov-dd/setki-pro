@@ -5,7 +5,7 @@ import { Button } from '../ui/Button';
 import { BracketCardSkeleton, SkeletonList } from '../ui/Skeleton';
 import type { BracketResponse, BracketFilters } from '../../types';
 import { useDebounce } from '../../hooks/useDebounce';
-import { applySortAndFilter, getGenderLabel, getAgeRangeLabel, getWeightRangeLabel } from '../../utils/bracketFilters';
+import { applySortAndFilter, getGenderLabel, getAgeRangeLabel, getWeightRangeLabel, getEnhancedCategoryName } from '../../utils/bracketFilters';
 import { useServerModeStore } from '../../stores/serverModeStore';
 
 interface BracketSelectionProps {
@@ -44,7 +44,12 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     const saved = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // Убедимся, что characteristics существует (для обратной совместимости)
+        return {
+          ...parsed,
+          characteristics: parsed.characteristics || {},
+        };
       } catch (error) {
         // FIX: Логируем ошибку парсинга и очищаем поврежденные данные
         console.error('[BracketSelection] Failed to parse filters from localStorage:', error);
@@ -54,6 +59,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     return {
       searchQuery: '',
       gender: 'all' as const,
+      sportId: 'all' as const,
+      characteristics: {},
     };
   });
 
@@ -279,10 +286,96 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     setFilters({
       searchQuery: '',
       gender: 'all',
+      sportId: 'all',
+      characteristics: {},
     });
   };
 
-  const hasActiveFilters = filters.searchQuery !== '' || filters.gender !== 'all';
+  const hasActiveFilters =
+    filters.searchQuery !== '' ||
+    filters.gender !== 'all' ||
+    filters.sportId !== 'all' ||
+    (filters.characteristics && Object.keys(filters.characteristics).some(key => filters.characteristics[key] !== 'all'));
+
+  // Получить уникальные виды спорта из сеток
+  const uniqueSports = useMemo(() => {
+    const sportsMap = new Map<number, string>();
+    brackets.forEach(bracket => {
+      if (bracket.sport_id && bracket.sport_name) {
+        sportsMap.set(bracket.sport_id, bracket.sport_name);
+      }
+    });
+    return Array.from(sportsMap.entries()).map(([id, name]) => ({ id, name }));
+  }, [brackets]);
+
+  // Сбросить фильтр по виду спорта, если выбранный вид не существует
+  // Но только при первой загрузке, не при каждом обновлении
+  useEffect(() => {
+    if (brackets.length === 0) return; // Ждём загрузки данных
+
+    if (filters.sportId !== 'all') {
+      const sportExists = uniqueSports.some(sport => sport.id === filters.sportId);
+      if (!sportExists && uniqueSports.length > 0) {
+        setFilters(prev => ({ ...prev, sportId: 'all' }));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uniqueSports.length]); // Зависим только от количества видов спорта, не от filters.sportId
+
+  // Получить уникальные характеристики для фильтров из схемы турнира
+  const availableCharacteristics = useMemo(() => {
+    if (brackets.length === 0) return [];
+
+    // Берем схему из первой сетки (у всех сеток одного турнира она одинаковая)
+    const schema = brackets[0]?.characteristics_schema;
+    if (!schema) return [];
+
+    // Фильтруем только те характеристики, у которых use_as_category_tag=true
+    return schema.filter(field => field.use_as_category_tag && field.options);
+  }, [brackets]);
+
+  // Получить уникальные значения для каждой характеристики из всех сеток
+  const characteristicValues = useMemo(() => {
+    const valuesMap = new Map<string, Set<string>>();
+
+    brackets.forEach(bracket => {
+      if (!bracket.characteristic_filters) return;
+
+      bracket.characteristic_filters.forEach(filter => {
+        if (!valuesMap.has(filter.key)) {
+          valuesMap.set(filter.key, new Set());
+        }
+        valuesMap.get(filter.key)!.add(filter.value);
+      });
+    });
+
+    return valuesMap;
+  }, [brackets]);
+
+  // Сбросить фильтры по характеристикам, если выбранные значения не существуют
+  // Но только при первой загрузке, не при каждом обновлении
+  useEffect(() => {
+    if (brackets.length === 0) return; // Ждём загрузки данных
+    if (!filters.characteristics) return;
+
+    const updatedCharacteristics = { ...filters.characteristics };
+    let hasChanges = false;
+
+    Object.entries(filters.characteristics).forEach(([key, value]) => {
+      if (value === 'all') return;
+
+      const availableValues = characteristicValues.get(key);
+      if (!availableValues || !availableValues.has(value)) {
+        updatedCharacteristics[key] = 'all';
+        hasChanges = true;
+      }
+    });
+
+    if (hasChanges) {
+      setFilters(prev => ({ ...prev, characteristics: updatedCharacteristics }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [characteristicValues.size]); // Зависим только от количества характеристик
 
   const getStatusLabel = (status: string) => {
     switch (status) {
@@ -444,6 +537,94 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Фильтр по виду спорта (только если есть несколько видов спорта) */}
+        {uniqueSports.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => setFilters(prev => ({ ...prev, sportId: 'all' }))}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                  filters.sportId === 'all'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Все
+              </button>
+              {uniqueSports.map((sport) => (
+                <button
+                  key={sport.id}
+                  onClick={() => setFilters(prev => ({ ...prev, sportId: sport.id }))}
+                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                    filters.sportId === sport.id
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {sport.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Динамические фильтры по характеристикам */}
+        {availableCharacteristics.map((characteristic) => {
+          const values = characteristicValues.get(characteristic.key);
+          if (!values || values.size === 0) return null;
+
+          return (
+            <div key={characteristic.key} className="flex items-center gap-2">
+              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">
+                {characteristic.label}:
+              </span>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={() =>
+                    setFilters(prev => ({
+                      ...prev,
+                      characteristics: { ...(prev.characteristics || {}), [characteristic.key]: 'all' },
+                    }))
+                  }
+                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                    !filters.characteristics?.[characteristic.key] ||
+                    filters.characteristics[characteristic.key] === 'all'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  Все
+                </button>
+                {Array.from(values).map((value) => {
+                  // Находим label для value из options
+                  const option = characteristic.options?.find(opt => opt.value === value);
+                  const label = option?.label || value;
+
+                  return (
+                    <button
+                      key={value}
+                      onClick={() =>
+                        setFilters(prev => ({
+                          ...prev,
+                          characteristics: { ...(prev.characteristics || {}), [characteristic.key]: value },
+                        }))
+                      }
+                      className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                        filters.characteristics?.[characteristic.key] === value
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Сообщение если нет результатов */}
@@ -485,7 +666,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
             >
               <CardHeader>
               <div className="flex items-start justify-between">
-                <CardTitle className="text-lg">{bracket.category_name}</CardTitle>
+                <CardTitle className="text-lg">{getEnhancedCategoryName(bracket)}</CardTitle>
                 <div className="flex items-center gap-2">
                   {/* Индикатор занятого стола */}
                   {tableAssignments.has(bracket.id) && (

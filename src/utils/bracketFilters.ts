@@ -121,6 +121,28 @@ export function filterBrackets(
       return false;
     }
 
+    // Фильтр по виду спорта
+    if (filters.sportId !== 'all' && bracket.sport_id !== filters.sportId) {
+      return false;
+    }
+
+    // Фильтр по динамическим характеристикам
+    if (filters.characteristics) {
+      for (const [key, value] of Object.entries(filters.characteristics)) {
+        // Пропускаем фильтры со значением 'all'
+        if (value === 'all') continue;
+
+        // Проверяем, есть ли у сетки нужная характеристика с нужным значением
+        const hasCharacteristic = bracket.characteristic_filters?.some(
+          filter => filter.key === key && filter.value === value
+        );
+
+        if (!hasCharacteristic) {
+          return false;
+        }
+      }
+    }
+
     // Фильтр по имени участника (поиск)
     if (filters.searchQuery.trim() !== '') {
       const query = filters.searchQuery.toLowerCase().trim();
@@ -194,4 +216,112 @@ export function getWeightRangeLabel(minWeight?: number, maxWeight?: number): str
   if (minWeight) return `от ${minWeight} кг`;
   if (maxWeight) return `до ${maxWeight} кг`;
   return '';
+}
+
+/**
+ * Форматировать значение характеристики для отображения
+ */
+function formatCharacteristicValue(value: string): string {
+  // Проверяем, что value это строка
+  if (typeof value !== 'string') {
+    return String(value);
+  }
+
+  // Преобразуем известные значения в читаемый вид
+  const formatted = value.toLowerCase();
+
+  if (formatted === 'gi') return 'Gi';
+  if (formatted === 'no_gi' || formatted === 'nogi') return 'no Gi';
+
+  // Для уровней - преобразуем в верхний регистр
+  if (formatted.length === 1 && /[a-z]/.test(formatted)) {
+    return value.toUpperCase();
+  }
+
+  return value;
+}
+
+/**
+ * Получить характеристики из characteristic_filters для отображения
+ * Использует characteristics_schema для получения label значений
+ */
+function getCharacteristicsFromFilters(
+  characteristicFilters?: Array<{ key: string; value: string }>,
+  characteristicsSchema?: Array<{
+    key: string;
+    label: string;
+    type: string;
+    use_as_category_tag?: boolean;
+    options?: Array<{ value: string; label: string }>;
+  }>
+): string[] {
+  if (!characteristicFilters || characteristicFilters.length === 0) {
+    return [];
+  }
+
+  // Если нет схемы, просто форматируем значения
+  if (!characteristicsSchema) {
+    return characteristicFilters.map(filter => formatCharacteristicValue(filter.value));
+  }
+
+  const result: string[] = [];
+
+  for (const filter of characteristicFilters) {
+    // Находим определение поля в схеме
+    const fieldDef = characteristicsSchema.find(f => f.key === filter.key);
+
+    if (!fieldDef) {
+      // Если поле не найдено в схеме, используем форматированное значение
+      result.push(formatCharacteristicValue(filter.value));
+      continue;
+    }
+
+    // Если у поля есть options, ищем label для value
+    if (fieldDef.options && fieldDef.options.length > 0) {
+      const option = fieldDef.options.find(opt => opt.value === filter.value);
+      if (option && option.label) {
+        result.push(option.label);
+      } else {
+        // Если label не найден, используем форматированное значение
+        result.push(formatCharacteristicValue(filter.value));
+      }
+    } else {
+      // Если options нет, используем форматированное значение
+      result.push(formatCharacteristicValue(filter.value));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Получить улучшенное название категории
+ * Формат: [Вид спорта] Базовое название [Характеристики]
+ * Например: "Грэпплинг - Мужчины, 25-35 лет [Уровень A, С кимоно]"
+ */
+export function getEnhancedCategoryName(bracket: BracketResponse): string {
+  let baseName = bracket.category_name;
+
+  // 1. Вид спорта (добавляем только если его нет в начале названия категории)
+  if (bracket.sport_name && !baseName.startsWith(bracket.sport_name)) {
+    baseName = `${bracket.sport_name} - ${baseName}`;
+  }
+
+  // 2. Проверяем, есть ли уже характеристики в названии (в квадратных скобках)
+  const hasCharacteristics = baseName.includes('[') && baseName.includes(']');
+
+  // Если характеристик нет, добавляем их из characteristic_filters
+  if (!hasCharacteristics) {
+    const characteristics = getCharacteristicsFromFilters(
+      bracket.characteristic_filters,
+      bracket.characteristics_schema
+    );
+
+    if (characteristics.length > 0) {
+      // Добавляем в квадратных скобках
+      return `${baseName} [${characteristics.join(', ')}]`;
+    }
+  }
+
+  return baseName;
 }
