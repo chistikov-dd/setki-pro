@@ -62,8 +62,6 @@ function MatchCardBase({
   const isParticipant2Winner = match.winner_id === match.participant2?.id;
 
   // Определение проигравшего (если матч завершен и есть победитель)
-  // При дисквалификации всегда перечёркиваем проигравшего
-  const isDQ = match.result_type === 'disqualification';
   const isParticipant1Loser = isCompleted && match.winner_id && !isParticipant1Winner && match.participant1;
   const isParticipant2Loser = isCompleted && match.winner_id && !isParticipant2Winner && match.participant2;
 
