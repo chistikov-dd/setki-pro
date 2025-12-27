@@ -9,7 +9,8 @@ import { Button } from '../ui/Button';
 import { BracketSelection } from './BracketSelection';
 import { TournamentBracket } from '../brackets/TournamentBracket';
 import { MatchScreen } from '../match/MatchScreen';
-import { reserveBracket, getBracketMatches, releaseBracket } from '../../services/api';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { reserveBracket, getBracketMatches, releaseBracket, undoFinishedMatch } from '../../services/api';
 import { Toast, ToastContainer } from '../ui/Toast';
 import type { Match } from '../../types';
 
@@ -27,6 +28,8 @@ export const JudgeDashboard: React.FC = () => {
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [activeMatch, setActiveMatch] = useState<Match | null>(null);
   const [bracketSelectionReloadTrigger, setBracketSelectionReloadTrigger] = useState(0);
+  const [confirmUndoMatchId, setConfirmUndoMatchId] = useState<number | null>(null);
+  const [isUndoing, setIsUndoing] = useState(false);
 
   // Стабильные callbacks для useSyncWorker
   const handleSyncSuccess = useCallback(() => {
@@ -167,7 +170,7 @@ export const JudgeDashboard: React.FC = () => {
   };
 
   const handleBracketSelect = async (bracketId: number, categoryName: string) => {
-    if (!user?.judge_name || user?.user_id === undefined) {
+    if (!user?.judge_name || user?.user_id === undefined || !user?.tournament_id || !user?.table_number) {
       setReservationError('Данные судьи не найдены');
       console.error('User data:', user);
       return;
@@ -177,7 +180,7 @@ export const JudgeDashboard: React.FC = () => {
     setReservationError(null);
 
     try {
-      await reserveBracket(bracketId, user.judge_name, user.user_id);
+      await reserveBracket(bracketId, user.tournament_id, user.judge_name, user.table_number, user.user_id);
       setSelectedBracketId(bracketId);
       setLastSelectedBracketId(bracketId); // Сохраняем для прокрутки при возврате
       setSelectedBracketName(categoryName);
@@ -199,6 +202,43 @@ export const JudgeDashboard: React.FC = () => {
       setActiveMatch(match);
     } else {
       console.error('handleStartMatch: матч не найден с ID', matchId);
+    }
+  };
+
+  const handleUndoMatch = (matchId: number) => {
+    // Показать модальное окно подтверждения
+    setConfirmUndoMatchId(matchId);
+  };
+
+  const confirmUndoMatch = async () => {
+    if (!confirmUndoMatchId || !currentSession?.pin_code) {
+      return;
+    }
+
+    setIsUndoing(true);
+
+    try {
+      const { mode, serverUrl } = serverMode;
+      const url = mode === 'local-client' ? serverUrl : null;
+
+      await undoFinishedMatch(confirmUndoMatchId, currentSession.pin_code, url);
+
+      showToast('Матч успешно отменён', 'success');
+
+      // Перезагружаем матчи для обновления сетки
+      if (selectedBracketId) {
+        await loadMatches(selectedBracketId);
+      }
+
+      // Обновляем список сеток
+      handleBracketEdited();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Не удалось отменить матч';
+      showToast(errorMessage, 'error');
+      console.error('[JudgeDashboard] Ошибка отмены матча:', error);
+    } finally {
+      setIsUndoing(false);
+      setConfirmUndoMatchId(null);
     }
   };
 
@@ -288,6 +328,7 @@ export const JudgeDashboard: React.FC = () => {
               <TournamentBracket
                 matches={matches}
                 onStartMatch={handleStartMatch}
+                onUndoMatch={handleUndoMatch}
                 categoryName={selectedBracketName}
                 bracketId={selectedBracketId}
                 onMatchesReload={() => loadMatches(selectedBracketId)}
@@ -363,6 +404,18 @@ export const JudgeDashboard: React.FC = () => {
           />
         ))}
       </ToastContainer>
+
+      {/* Модальное окно подтверждения отмены матча */}
+      {confirmUndoMatchId !== null && !isUndoing && (
+        <ConfirmDialog
+          title="Отменить завершённый матч?"
+          message="Вы уверены, что хотите отменить этот матч? Будут откачены: результат, счёт, предупреждения, продвижение победителя в следующий раунд."
+          confirmText="Да, отменить"
+          cancelText="Отмена"
+          onConfirm={confirmUndoMatch}
+          onCancel={() => setConfirmUndoMatchId(null)}
+        />
+      )}
     </div>
   );
 };

@@ -224,10 +224,12 @@ export async function checkUnsyncedCount(): Promise<number> {
  */
 export async function reserveBracket(
   bracketId: number,
+  tournamentId: number,
   judgeName: string,
+  tableNumber: number,
   userId: number
 ): Promise<void> {
-  return await invoke('reserve_bracket', { bracketId, judgeName, userId });
+  return await invoke('reserve_bracket', { bracketId, tournamentId, judgeName, tableNumber, userId });
 }
 
 /**
@@ -265,6 +267,13 @@ export async function getBracketMatches(bracketId: number, serverUrl?: string | 
  */
 export async function clearAllReservations(): Promise<void> {
   return await invoke('clear_all_reservations');
+}
+
+/**
+ * Освободить все резервации конкретного судьи
+ */
+export async function releaseJudgeBrackets(judgeName: string): Promise<void> {
+  return await invoke('release_judge_brackets', { judgeName });
 }
 
 /**
@@ -429,6 +438,22 @@ export async function finishMatch(data: {
     resultType: data.resultType,
     finalRedScore: data.finalRedScore,
     finalBlueScore: data.finalBlueScore,
+    serverUrl: serverUrl || null,
+  });
+}
+
+/**
+ * Отменить завершённый матч (откатить результаты)
+ * Доступно только судье, работающему с данной сеткой
+ */
+export async function undoFinishedMatch(
+  matchId: number,
+  pinCode: string,
+  serverUrl?: string | null
+): Promise<void> {
+  return await invoke('undo_finished_match', {
+    matchId,
+    pinCode,
     serverUrl: serverUrl || null,
   });
 }

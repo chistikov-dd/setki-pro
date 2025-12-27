@@ -1302,18 +1302,37 @@ impl ApiClient {
     }
 
     // Зарезервировать сетку для судьи
-    pub async fn reserve_bracket(&self, bracket_id: i32, judge_name: &str, user_id: i32) -> Result<()> {
+    pub async fn reserve_bracket(
+        &self,
+        bracket_id: i32,
+        tournament_id: i32,
+        judge_name: &str,
+        table_number: i32,
+        user_id: i32
+    ) -> Result<()> {
+        println!("[ApiClient::reserve_bracket] START");
+        println!("[ApiClient::reserve_bracket] bracket_id={}, tournament_id={}, judge_name={}, table_number={}, user_id={}",
+            bracket_id, tournament_id, judge_name, table_number, user_id);
+        println!("[ApiClient::reserve_bracket] base_url={}", self.base_url);
+        println!("[ApiClient::reserve_bracket] is_local_server={}", self.is_local_server());
+
         // Если base_url это локальный сервер - отправить HTTP запрос
         if self.is_local_server() {
+            println!("[ApiClient::reserve_bracket] Using local server mode");
             let token = self.get_token().await?
                 .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
 
             let url = format!("{}/desktop/brackets/reserve", self.base_url);
             let payload = serde_json::json!({
                 "bracket_id": bracket_id,
+                "tournament_id": tournament_id,
                 "judge_name": judge_name,
+                "table_number": table_number,
                 "user_id": user_id,
             });
+
+            println!("[ApiClient::reserve_bracket] Sending POST to: {}", url);
+            println!("[ApiClient::reserve_bracket] Payload: {}", payload);
 
             let response = self.client
                 .post(&url)
@@ -1322,54 +1341,78 @@ impl ApiClient {
                 .send()
                 .await?;
 
+            println!("[ApiClient::reserve_bracket] Response status: {}", response.status());
+
             if !response.status().is_success() {
                 let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                println!("[ApiClient::reserve_bracket] ERROR: {}", error_text);
                 return Err(anyhow::anyhow!("Ошибка резервирования сетки: {}", error_text));
             }
 
+            println!("[ApiClient::reserve_bracket] SUCCESS (local server)");
             return Ok(());
         }
 
         // Онлайн режим или локальная БД
+        println!("[ApiClient::reserve_bracket] Using local DB mode");
+
         // Проверить, не занята ли уже сетка
-        let existing = sqlx::query_as::<_, (String, i32)>(
-            "SELECT judge_name, user_id FROM bracket_reservations WHERE bracket_id = ?"
+        let existing = sqlx::query_as::<_, (String, i32, i32)>(
+            "SELECT judge_name, table_number, user_id FROM bracket_reservations WHERE bracket_id = ?"
         )
         .bind(bracket_id)
         .fetch_optional(self.db.as_ref())
         .await?;
 
-        if let Some((existing_judge, existing_user_id)) = existing {
+        println!("[ApiClient::reserve_bracket] Existing reservation: {:?}", existing);
+
+        if let Some((existing_judge, existing_table, existing_user_id)) = existing {
             // Если сетка уже занята этим же судьей, просто обновляем время
             if existing_user_id == user_id {
+                println!("[ApiClient::reserve_bracket] Updating existing reservation for same user");
                 sqlx::query(
                     "UPDATE bracket_reservations SET reserved_at = datetime('now') WHERE bracket_id = ?"
                 )
                 .bind(bracket_id)
                 .execute(self.db.as_ref())
                 .await?;
+                println!("[ApiClient::reserve_bracket] SUCCESS (updated)");
                 return Ok(());
             }
 
             // Иначе сетка занята другим судьей
+            println!("[ApiClient::reserve_bracket] ERROR: Already reserved by another judge");
             return Err(anyhow::anyhow!(
-                "Сетка уже занята судьей: {}",
-                existing_judge
+                "Сетка уже занята: {} (стол №{})",
+                existing_judge,
+                existing_table
             ));
         }
 
         // Зарезервировать сетку
-        sqlx::query(
-            "INSERT INTO bracket_reservations (bracket_id, judge_name, user_id, reserved_at)
-             VALUES (?, ?, ?, datetime('now'))"
+        println!("[ApiClient::reserve_bracket] Inserting new reservation");
+        let result = sqlx::query(
+            "INSERT INTO bracket_reservations (bracket_id, tournament_id, judge_name, table_number, user_id, reserved_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))"
         )
         .bind(bracket_id)
+        .bind(tournament_id)
         .bind(judge_name)
+        .bind(table_number)
         .bind(user_id)
         .execute(self.db.as_ref())
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => {
+                println!("[ApiClient::reserve_bracket] SUCCESS (inserted)");
+                Ok(())
+            }
+            Err(e) => {
+                println!("[ApiClient::reserve_bracket] ERROR during insert: {}", e);
+                Err(e.into())
+            }
+        }
     }
 
     // Освободить сетку (отменить резервирование)
@@ -1429,6 +1472,48 @@ impl ApiClient {
     // Очистить все резервирования (для отладки)
     pub async fn clear_all_reservations(&self) -> Result<()> {
         sqlx::query("DELETE FROM bracket_reservations")
+            .execute(self.db.as_ref())
+            .await?;
+
+        Ok(())
+    }
+
+    // Освободить все резервации конкретного судьи
+    pub async fn release_judge_brackets(&self, judge_name: &str) -> Result<()> {
+        // Если base_url это локальный сервер - отправить HTTP запрос для каждой резервации
+        if self.is_local_server() {
+            let token = self.get_token().await?
+                .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+
+            // Получить все резервации судьи
+            let brackets = sqlx::query_scalar::<_, i32>(
+                "SELECT bracket_id FROM bracket_reservations WHERE judge_name = ?"
+            )
+            .bind(judge_name)
+            .fetch_all(self.db.as_ref())
+            .await?;
+
+            // Освободить каждую сетку через HTTP
+            for bracket_id in brackets {
+                let url = format!("{}/desktop/brackets/release", self.base_url);
+                let payload = serde_json::json!({
+                    "bracket_id": bracket_id,
+                    "judge_name": judge_name,
+                });
+
+                let _ = self.client
+                    .post(&url)
+                    .bearer_auth(&token)
+                    .json(&payload)
+                    .send()
+                    .await;
+                // Игнорируем ошибки, продолжаем освобождать остальные
+            }
+        }
+
+        // Удалить все резервации судьи из локальной БД
+        sqlx::query("DELETE FROM bracket_reservations WHERE judge_name = ?")
+            .bind(judge_name)
             .execute(self.db.as_ref())
             .await?;
 
@@ -2006,6 +2091,81 @@ impl ApiClient {
         }
 
         Err(anyhow::anyhow!("Failed to finish match on local server after {} attempts", max_retries))
+    }
+
+    // Отменить завершённый матч на локальном сервере админа (для режима local-client)
+    pub async fn undo_match_on_local_server(
+        &self,
+        server_url: &str,
+        match_id: i32,
+    ) -> Result<()> {
+        println!("[undo_match_on_local_server] START - server: {}, match: {}", server_url, match_id);
+
+        // Получить токен авторизации
+        let token = match self.get_token().await {
+            Ok(Some(t)) => {
+                println!("[undo_match_on_local_server] Token retrieved");
+                t
+            }
+            Ok(None) => {
+                return Err(anyhow::anyhow!("No auth token found - cannot send to local server"));
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to get token: {}", e));
+            }
+        };
+
+        // Формируем полный URL с /api/v1
+        let url = format!("{}/api/v1/desktop/matches/undo", server_url);
+        println!("[undo_match_on_local_server] Full URL: {}", url);
+
+        let payload = serde_json::json!({
+            "match_id": match_id,
+        });
+
+        println!("[undo_match_on_local_server] Sending payload: {}", payload);
+
+        // Retry логика: 5 попыток
+        let max_retries = 5;
+        for attempt in 0..max_retries {
+            let response = self.client
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {
+                    println!("[undo_match_on_local_server] ✅ SUCCESS on attempt {}", attempt + 1);
+                    return Ok(());
+                },
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    println!("[undo_match_on_local_server] ❌ Failed with status {} on attempt {}: {}",
+                             status, attempt + 1, body);
+
+                    if attempt < max_retries - 1 {
+                        let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        println!("[undo_match_on_local_server] Retrying after {}ms...", delay.as_millis());
+                        tokio::time::sleep(delay).await;
+                    }
+                },
+                Err(e) => {
+                    println!("[undo_match_on_local_server] ❌ Network error on attempt {}: {}",
+                             attempt + 1, e);
+
+                    if attempt < max_retries - 1 {
+                        let delay = std::time::Duration::from_millis(1000 * 2_u64.pow(attempt as u32));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("Failed to undo match on local server after {} attempts", max_retries))
     }
 
     // Завершить матч

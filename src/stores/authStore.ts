@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AuthResponse } from '../types';
-import { loginAdmin, loginByPin, logout as apiLogout, clearAllReservations, releaseTableNumber } from '../services/api';
+import { loginAdmin, loginByPin, logout as apiLogout, clearAllReservations, releaseTableNumber, releaseJudgeBrackets } from '../services/api';
 import { ErrorFactory } from '../utils/errorHandler';
 import { logger, LOG_CATEGORIES } from '../utils/logger';
 
@@ -169,113 +169,146 @@ export const useAuthStore = create<AuthState>()(
           role: user?.role,
         });
 
-        // Закрываем публичное табло при выходе судьи
-        if (user?.role === 'referee') {
-          try {
-            const { closePublicDisplay } = await import('../utils/publicDisplay');
-            await closePublicDisplay();
-          } catch (error) {
-            logger.warn(LOG_CATEGORIES.AUTH, 'Failed to close public display on logout', {}, error instanceof Error ? error : undefined);
-          }
-        }
-
-        // Освободить номер стола если это судья
-        if (user?.role === 'referee' && user?.tournament_id && user?.table_number && user?.judge_name) {
-          // Проверяем режим работы - если local-client, то отправляем запрос на локальный сервер
-          const serverModeStore = (await import('./serverModeStore')).useServerModeStore.getState();
-
-          console.log('[authStore.logout] Server mode:', serverModeStore.mode, 'Server URL:', serverModeStore.serverUrl);
-          logger.info(LOG_CATEGORIES.AUTH, 'Checking server mode for logout', {
-            mode: serverModeStore.mode,
-            serverUrl: serverModeStore.serverUrl,
-          });
-
-          if (serverModeStore.mode === 'local-client' && serverModeStore.serverUrl) {
-            console.log('[authStore.logout] Sending logout request to local server...');
-            // Отправляем запрос на локальный сервер для удаления сессии из БД админа
-            try {
-              // serverUrl уже содержит http://, поэтому не добавляем префикс
-              const logoutUrl = serverModeStore.serverUrl.startsWith('http')
-                ? `${serverModeStore.serverUrl}/api/v1/auth/logout`
-                : `http://${serverModeStore.serverUrl}/api/v1/auth/logout`;
-
-              console.log('[authStore.logout] Logout URL:', logoutUrl);
-
-              const response = await fetch(logoutUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  tournament_id: user.tournament_id,
-                  table_number: user.table_number,
-                  judge_name: user.judge_name,
-                }),
-              });
-
-              if (response.ok) {
-                logger.info(LOG_CATEGORIES.AUTH, 'Judge session removed from local server', {
-                  tableNumber: user.table_number,
-                });
-              } else {
-                logger.warn(LOG_CATEGORIES.AUTH, 'Failed to remove judge session from local server', {
-                  status: response.status,
-                });
-              }
-            } catch (error) {
-              logger.error(
-                LOG_CATEGORIES.AUTH,
-                'Error removing judge session from local server',
-                {},
-                error instanceof Error ? error : undefined
-              );
-            }
-          }
-
-          // Также освобождаем стол в локальной БД
-          let retries = 3;
-          let released = false;
-
-          while (retries > 0 && !released) {
-            try {
-              await releaseTableNumber(user.tournament_id, user.table_number);
-              logger.info(LOG_CATEGORIES.AUTH, 'Released table number', {
-                tournamentId: user.tournament_id,
-                tableNumber: user.table_number,
-              });
-              released = true;
-            } catch (err) {
-              retries--;
-              logger.warn(
-                LOG_CATEGORIES.AUTH,
-                `Failed to release table number (${3 - retries}/3 attempts)`,
-                { tableNumber: user.table_number },
-                err instanceof Error ? err : undefined
-              );
-
-              if (retries > 0) {
-                // Пауза перед следующей попыткой (500ms)
-                await new Promise(resolve => setTimeout(resolve, 500));
-              } else {
-                // Финальная ошибка после всех попыток
-                logger.error(
-                  LOG_CATEGORIES.AUTH,
-                  'Failed to release table number after 3 attempts',
-                  { tableNumber: user.table_number },
-                  err instanceof Error ? err : undefined
-                );
-              }
-            }
-          }
-        }
-
-        // НЕ очищаем credentials при выходе - для автоматического входа при следующем запуске
-        // Credentials остаются в SQLite для быстрого повторного входа
-
+        // ВАЖНО: Сначала очищаем state, чтобы пользователь сразу увидел экран входа
+        // Все cleanup операции делаем в фоне
         apiLogout();
         set({
           user: null,
           isAuthenticated: false,
           error: null,
         });
+
+        // Cleanup операции в фоне (не блокируют logout)
+        (async () => {
+          try {
+            // Закрываем публичное табло при выходе судьи
+            if (user?.role === 'referee') {
+              try {
+                const { closePublicDisplay } = await import('../utils/publicDisplay');
+                await closePublicDisplay();
+              } catch (error) {
+                logger.warn(LOG_CATEGORIES.AUTH, 'Failed to close public display on logout', {}, error instanceof Error ? error : undefined);
+              }
+            }
+
+            // Освободить номер стола если это судья
+            if (user?.role === 'referee' && user?.tournament_id && user?.table_number && user?.judge_name) {
+              // Проверяем режим работы - если local-client, то отправляем запрос на локальный сервер
+              const serverModeStore = (await import('./serverModeStore')).useServerModeStore.getState();
+
+              console.log('[authStore.logout] Server mode:', serverModeStore.mode, 'Server URL:', serverModeStore.serverUrl);
+              logger.info(LOG_CATEGORIES.AUTH, 'Checking server mode for logout', {
+                mode: serverModeStore.mode,
+                serverUrl: serverModeStore.serverUrl,
+              });
+
+              if (serverModeStore.mode === 'local-client' && serverModeStore.serverUrl) {
+                console.log('[authStore.logout] Sending logout request to local server...');
+                // Отправляем запрос на локальный сервер для удаления сессии из БД админа
+                try {
+                  // serverUrl уже содержит http://, поэтому не добавляем префикс
+                  const logoutUrl = serverModeStore.serverUrl.startsWith('http')
+                    ? `${serverModeStore.serverUrl}/api/v1/auth/logout`
+                    : `http://${serverModeStore.serverUrl}/api/v1/auth/logout`;
+
+                  console.log('[authStore.logout] Logout URL:', logoutUrl);
+
+                  // Добавляем timeout 5 секунд
+                  const controller = new AbortController();
+                  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                  const response = await fetch(logoutUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      tournament_id: user.tournament_id,
+                      table_number: user.table_number,
+                      judge_name: user.judge_name,
+                    }),
+                    signal: controller.signal,
+                  });
+
+                  clearTimeout(timeoutId);
+
+                  if (response.ok) {
+                    logger.info(LOG_CATEGORIES.AUTH, 'Judge session removed from local server', {
+                      tableNumber: user.table_number,
+                    });
+                  } else {
+                    logger.warn(LOG_CATEGORIES.AUTH, 'Failed to remove judge session from local server', {
+                      status: response.status,
+                    });
+                  }
+                } catch (error) {
+                  logger.error(
+                    LOG_CATEGORIES.AUTH,
+                    'Error removing judge session from local server',
+                    {},
+                    error instanceof Error ? error : undefined
+                  );
+                }
+              }
+
+              // Также освобождаем стол в локальной БД
+              let retries = 3;
+              let released = false;
+
+              while (retries > 0 && !released) {
+                try {
+                  await releaseTableNumber(user.tournament_id, user.table_number);
+                  logger.info(LOG_CATEGORIES.AUTH, 'Released table number', {
+                    tournamentId: user.tournament_id,
+                    tableNumber: user.table_number,
+                  });
+                  released = true;
+                } catch (err) {
+                  retries--;
+                  logger.warn(
+                    LOG_CATEGORIES.AUTH,
+                    `Failed to release table number (${3 - retries}/3 attempts)`,
+                    { tableNumber: user.table_number },
+                    err instanceof Error ? err : undefined
+                  );
+
+                  if (retries > 0) {
+                    // Пауза перед следующей попыткой (500ms)
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                  } else {
+                    // Финальная ошибка после всех попыток
+                    logger.error(
+                      LOG_CATEGORIES.AUTH,
+                      'Failed to release table number after 3 attempts',
+                      { tableNumber: user.table_number },
+                      err instanceof Error ? err : undefined
+                    );
+                  }
+                }
+              }
+
+              // Освободить все резервации сеток судьи
+              try {
+                await releaseJudgeBrackets(user.judge_name);
+                logger.info(LOG_CATEGORIES.AUTH, 'Released all bracket reservations', {
+                  judgeName: user.judge_name,
+                });
+              } catch (err) {
+                logger.warn(
+                  LOG_CATEGORIES.AUTH,
+                  'Failed to release bracket reservations',
+                  { judgeName: user.judge_name },
+                  err instanceof Error ? err : undefined
+                );
+              }
+            }
+          } catch (error) {
+            logger.error(
+              LOG_CATEGORIES.AUTH,
+              'Error during logout cleanup',
+              {},
+              error instanceof Error ? error : undefined
+            );
+          }
+        })();
       },
 
       // Clear error

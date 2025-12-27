@@ -11,6 +11,7 @@ import { useToast } from '../../hooks/useToast';
 import { useMatchWebSocket } from '../../hooks/useMatchWebSocket';
 import { useSound } from '../../hooks/useSound';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
+import { useDisplayMode } from '../../hooks/useResponsive';
 import { closePublicDisplay } from '../../utils/publicDisplay';
 // import { fileLogger } from '../../utils/fileLogger'; // Unused
 import type { Match, Participant } from '../../types';
@@ -70,15 +71,19 @@ function useMatchUpdateEmitter(
         isRunning,
       };
 
-      console.log('[useMatchUpdateEmitter] 📤 Отправка обновления:', {
-        redScore,
-        blueScore,
-        remainingSeconds,
-        isRunning,
-      });
+      if (import.meta.env.DEV) {
+        console.log('[useMatchUpdateEmitter] 📤 Отправка обновления:', {
+          redScore,
+          blueScore,
+          remainingSeconds,
+          isRunning,
+        });
+      }
 
       emit('match-update', data).catch((error) => {
-        console.error('[useMatchUpdateEmitter] ❌ Ошибка отправки:', error);
+        if (import.meta.env.DEV) {
+          console.error('[useMatchUpdateEmitter] ❌ Ошибка отправки:', error);
+        }
       });
 
       // Обновляем ref после отправки
@@ -88,10 +93,14 @@ function useMatchUpdateEmitter(
 }
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
-  console.log('[MatchScreen] ===== COMPONENT RENDER START =====');
-  console.log('[MatchScreen] Match ID:', match?.id);
-  console.log('[MatchScreen] Category:', categoryName);
-  console.log('[MatchScreen] Has onExit:', !!onExit);
+  if (import.meta.env.DEV) {
+    console.log('[MatchScreen] ===== COMPONENT RENDER START =====');
+    console.log('[MatchScreen] Match ID:', match?.id);
+    console.log('[MatchScreen] Category:', categoryName);
+    console.log('[MatchScreen] Has onExit:', !!onExit);
+  }
+
+  const mode = useDisplayMode();
 
   const [showEndDialog, setShowEndDialog] = useState(false);
   const [showTimerEditDialog, setShowTimerEditDialog] = useState(false);
@@ -109,7 +118,9 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const { playSound } = useSound();
   const { currentSession } = useSessionStore();
 
-  console.log('[MatchScreen] Hooks initialized, currentSession:', currentSession?.tournament_id);
+  if (import.meta.env.DEV) {
+    console.log('[MatchScreen] Hooks initialized, currentSession:', currentSession?.tournament_id);
+  }
 
   // Zustand селекторы с shallow comparison для оптимизации ре-рендеров
   const { redFighter, blueFighter } = useMatchStore(useShallow(matchStoreSelectors.fighters));
@@ -131,15 +142,21 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
   // Стабильные WebSocket callbacks
   const handleScoreUpdate = useCallback((data: any) => {
-    console.log('[WebSocket] Score update received:', data);
+    if (import.meta.env.DEV) {
+      console.log('[WebSocket] Score update received:', data);
+    }
 
     // Фильтруем собственные обновления (эхо от сервера)
     if (data.source_pin && data.source_pin === currentSession?.pin_code) {
-      console.log('[WebSocket] Ignoring own update (echo from server)');
+      if (import.meta.env.DEV) {
+        console.log('[WebSocket] Ignoring own update (echo from server)');
+      }
       return;
     }
 
-    console.log('[WebSocket] Applying update from another table');
+    if (import.meta.env.DEV) {
+      console.log('[WebSocket] Applying update from another table');
+    }
 
     // Применяем удалённое обновление с timestamp-based conflict resolution
     const applied = actions.applyRemoteUpdate(data, data.timestamp || new Date().toISOString());
@@ -150,11 +167,15 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   }, [currentSession?.pin_code, actions, showToast]);
 
   const handleMatchStart = useCallback(() => {
-    console.log('[WebSocket] Match started on another table');
+    if (import.meta.env.DEV) {
+      console.log('[WebSocket] Match started on another table');
+    }
   }, []);
 
   const handleMatchEnd = useCallback(() => {
-    console.log('[WebSocket] Match ended on another table');
+    if (import.meta.env.DEV) {
+      console.log('[WebSocket] Match ended on another table');
+    }
     showToast('Матч завершен на другом столе', 'info', 3000);
   }, [showToast]);
 
@@ -249,21 +270,27 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
   // Wrapper для addScore с WebSocket синхронизацией и звуком
   const handleAddScore = async (participant: 'red' | 'blue', points: number, actionName: string) => {
-    console.log('[MatchScreen.handleAddScore] Called for:', participant, {
-      points,
-      actionName,
-      matchId: match.id,
-    });
+    if (import.meta.env.DEV) {
+      console.log('[MatchScreen.handleAddScore] Called for:', participant, {
+        points,
+        actionName,
+        matchId: match.id,
+      });
+    }
 
     // Проиграть звук
     playSound('score', points);
 
-    console.log('[MatchScreen.handleAddScore] Calling matchStore.addScore...');
+    if (import.meta.env.DEV) {
+      console.log('[MatchScreen.handleAddScore] Calling matchStore.addScore...');
+    }
 
     // Обновить локальный state через matchStore
     await actions.addScore(participant, points, actionName);
 
-    console.log('[MatchScreen.handleAddScore] matchStore.addScore completed');
+    if (import.meta.env.DEV) {
+      console.log('[MatchScreen.handleAddScore] matchStore.addScore completed');
+    }
 
     // Получаем актуальные значения после обновления
     const currentState = useMatchStore.getState();
@@ -296,9 +323,11 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
   // Wrapper для addWarning с WebSocket синхронизацией и звуком
   const handleAddWarning = async (participant: 'red' | 'blue') => {
-    console.log('[MatchScreen.handleAddWarning] Called for:', participant, {
-      currentWarnings: participant === 'red' ? redWarnings : blueWarnings,
-    });
+    if (import.meta.env.DEV) {
+      console.log('[MatchScreen.handleAddWarning] Called for:', participant, {
+        currentWarnings: participant === 'red' ? redWarnings : blueWarnings,
+      });
+    }
 
     // Проиграть звук предупреждения
     playSound('warning');
@@ -306,10 +335,12 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     // Обновить локальный state через matchStore
     await actions.addWarning(participant);
 
-    console.log('[MatchScreen.handleAddWarning] After addWarning, new warnings:', {
-      redWarnings: useMatchStore.getState().redWarnings,
-      blueWarnings: useMatchStore.getState().blueWarnings,
-    });
+    if (import.meta.env.DEV) {
+      console.log('[MatchScreen.handleAddWarning] After addWarning, new warnings:', {
+        redWarnings: useMatchStore.getState().redWarnings,
+        blueWarnings: useMatchStore.getState().blueWarnings,
+      });
+    }
 
     // Отправить событие через WebSocket
     if (wsConnected && sendScoreUpdate) {
@@ -716,17 +747,51 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     );
   }
 
+  // Адаптивные размеры для header
+  const headerSizes = {
+    hd: {
+      padding: 'px-2 py-1.5 sm:px-3 sm:py-2',
+      text: 'text-[10px] sm:text-xs',
+      iconSize: 14,
+      buttonSize: 'sm' as const,
+    },
+    fullhd: {
+      padding: 'px-3 py-2 sm:px-4 sm:py-2.5 lg:px-6 lg:py-3',
+      text: 'text-xs sm:text-sm',
+      iconSize: 16,
+      buttonSize: 'sm' as const,
+    },
+  };
+
+  const header = headerSizes[mode];
+
+  // Адаптивные размеры кнопок в центральной зоне
+  const controlButtonSizes = {
+    hd: {
+      startButton: 'text-base sm:text-lg px-4 py-3',
+      resetButton: 'text-sm px-3 py-2',
+      finishButton: 'text-base sm:text-lg px-4 py-3',
+    },
+    fullhd: {
+      startButton: 'text-lg sm:text-xl px-6 py-4',
+      resetButton: 'text-base px-4 py-3',
+      finishButton: 'text-lg sm:text-xl px-6 py-4',
+    },
+  };
+
+  const controls = controlButtonSizes[mode];
+
   return (
     <div className="h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-white to-gray-100 flex flex-col select-none">
       {/* Header */}
-      <div className="bg-white/50 border-b border-gray-400 px-3 py-2 sm:px-4 sm:py-2.5 lg:px-6 lg:py-3 flex items-center justify-between">
-        <div className="text-gray-900 text-xs sm:text-sm">
+      <div className={`bg-white/50 border-b border-gray-400 ${header.padding} flex items-center justify-between`}>
+        <div className={`text-gray-900 ${header.text}`}>
           <span className="text-gray-700">Категория:</span> {categoryName || 'Не указана'}
         </div>
-        <div className="flex items-center gap-4">
+        <div className={`flex items-center ${mode === 'hd' ? 'gap-2' : 'gap-4'}`}>
           {/* WebSocket Status Indicator с детальной информацией */}
           <div
-            className="flex items-center gap-1.5 text-xs"
+            className={`flex items-center gap-1.5 ${header.text}`}
             title={
               wsConnected
                 ? 'Связь с сервером активна - изменения синхронизируются в реальном времени'
@@ -735,37 +800,39 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
           >
             {wsConnected ? (
               <>
-                <Wifi size={16} className="text-green-600" />
+                <Wifi size={header.iconSize} className="text-green-600" />
                 <span className="text-green-700 hidden sm:inline font-medium">Синхронизация</span>
               </>
             ) : (
               <>
-                <WifiOff size={16} className="text-yellow-600" />
+                <WifiOff size={header.iconSize} className="text-yellow-600" />
                 <span className="text-yellow-700 hidden sm:inline font-medium">Локально</span>
               </>
             )}
           </div>
           <Button
             variant="secondary"
-            size="sm"
+            size={header.buttonSize}
             onClick={openPublicDisplay}
             disabled={publicWindowOpen}
+            className={mode === 'hd' ? 'text-[10px] sm:text-xs px-2 py-1' : undefined}
           >
             {publicWindowOpen ? '✓ Табло открыто' : 'Открыть табло для зрителей'}
           </Button>
           <Button
             variant="ghost"
-            size="sm"
+            size={header.buttonSize}
             onClick={() => setShowHelpDialog(true)}
-            className="w-8 h-8 p-0 flex items-center justify-center"
+            className={mode === 'hd' ? 'w-6 h-6 p-0 flex items-center justify-center text-sm' : 'w-8 h-8 p-0 flex items-center justify-center'}
             title="Справка по горячим клавишам"
           >
             ?
           </Button>
           <Button
             variant="ghost"
-            size="sm"
+            size={header.buttonSize}
             onClick={handleExitClick}
+            className={mode === 'hd' ? 'text-[10px] sm:text-xs px-2 py-1' : undefined}
           >
             ← К сетке
           </Button>
@@ -808,14 +875,14 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
         <div className="flex-[1.2] min-h-0 w-full border-t border-gray-400 overflow-hidden">
           <div className="h-full w-full flex items-stretch">
             {/* Left Controls */}
-            <div className="flex flex-col justify-center gap-3 px-4 flex-shrink-0">
+            <div className={`flex flex-col justify-center ${mode === 'hd' ? 'gap-2 px-2' : 'gap-3 px-4'} flex-shrink-0`}>
               {!timer.isRunning ? (
                 <Button
                   variant="primary"
                   size="xl"
                   onClick={timer.start}
                   disabled={timer.remainingSeconds === 0}
-                  className="whitespace-nowrap"
+                  className={`whitespace-nowrap ${controls.startButton}`}
                 >
                   Старт<br />(Space)
                 </Button>
@@ -824,7 +891,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
                   variant="secondary"
                   size="xl"
                   onClick={timer.pause}
-                  className="whitespace-nowrap"
+                  className={`whitespace-nowrap ${controls.startButton}`}
                 >
                   Пауза<br />(Space)
                 </Button>
@@ -834,6 +901,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
                 variant="danger"
                 size="md"
                 onClick={handleResetClick}
+                className={controls.resetButton}
               >
                 Сброс всего
               </Button>
@@ -852,12 +920,12 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
             </div>
 
             {/* Right Controls */}
-            <div className="flex flex-col justify-center gap-4 px-4 flex-shrink-0">
+            <div className={`flex flex-col justify-center ${mode === 'hd' ? 'gap-2 px-2' : 'gap-4 px-4'} flex-shrink-0`}>
               <Button
                 variant="primary"
                 size="xl"
                 onClick={() => setShowEndDialog(true)}
-                className="whitespace-nowrap"
+                className={`whitespace-nowrap ${controls.finishButton}`}
               >
                 Завершить<br />(Enter)
               </Button>

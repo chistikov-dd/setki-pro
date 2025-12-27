@@ -7,10 +7,10 @@ pub async fn init_db(app_data_dir: PathBuf) -> Result<SqlitePool> {
     let db_path = app_data_dir.join("setki.db");
 
     // Создать pool с автоматическим созданием файла
-    // Увеличен pool с 5 до 20 для поддержки 10+ судей + polling + sync
+    // Увеличен pool с 5 до 30 для поддержки 20+ судей + polling + sync + резерв
     let pool = SqlitePoolOptions::new()
-        .max_connections(20)
-        .acquire_timeout(std::time::Duration::from_secs(5))
+        .max_connections(30)
+        .acquire_timeout(std::time::Duration::from_secs(10))
         .connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()
                 .filename(&db_path)
@@ -25,6 +25,18 @@ pub async fn init_db(app_data_dir: PathBuf) -> Result<SqlitePool> {
 
     // Оптимизация производительности (меньше fsync, но безопасно для LAN режима)
     sqlx::query("PRAGMA synchronous = NORMAL")
+        .execute(&pool)
+        .await?;
+
+    // Дополнительные оптимизации для работы на слабых компьютерах
+    // temp_store = MEMORY: временные таблицы (сортировки, GROUP BY) в RAM вместо диска
+    sqlx::query("PRAGMA temp_store = MEMORY")
+        .execute(&pool)
+        .await?;
+
+    // cache_size = -32000: увеличить кэш до 32MB (по умолчанию ~2MB)
+    // Ускоряет чтение при множественных подключениях (15-20 судей)
+    sqlx::query("PRAGMA cache_size = -32000")
         .execute(&pool)
         .await?;
 
@@ -154,13 +166,66 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS bracket_reservations (
             bracket_id INTEGER PRIMARY KEY,
+            tournament_id INTEGER NOT NULL,
             judge_name TEXT NOT NULL,
+            table_number INTEGER NOT NULL,
             user_id INTEGER,
             reserved_at TEXT NOT NULL DEFAULT (datetime('now'))
         )"
     )
     .execute(pool)
     .await?;
+
+    // Миграция: добавить tournament_id и table_number если их нет
+    let tournament_id_exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('bracket_reservations') WHERE name = 'tournament_id'"
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((count,)) = tournament_id_exists {
+        if count == 0 {
+            println!("[DB] Adding tournament_id and table_number columns to bracket_reservations");
+
+            // Добавить tournament_id
+            sqlx::query("ALTER TABLE bracket_reservations ADD COLUMN tournament_id INTEGER")
+                .execute(pool)
+                .await?;
+
+            // Добавить table_number
+            sqlx::query("ALTER TABLE bracket_reservations ADD COLUMN table_number INTEGER")
+                .execute(pool)
+                .await?;
+
+            // Попытка заполнить tournament_id и table_number из judge_sessions
+            sqlx::query(
+                "UPDATE bracket_reservations
+                 SET tournament_id = (
+                     SELECT tournament_id FROM judge_sessions
+                     WHERE judge_sessions.judge_name = bracket_reservations.judge_name
+                     LIMIT 1
+                 ),
+                 table_number = (
+                     SELECT table_number FROM judge_sessions
+                     WHERE judge_sessions.judge_name = bracket_reservations.judge_name
+                     LIMIT 1
+                 )
+                 WHERE tournament_id IS NULL"
+            )
+            .execute(pool)
+            .await?;
+
+            // Удалить резервации без tournament_id (не смогли заполнить)
+            sqlx::query("DELETE FROM bracket_reservations WHERE tournament_id IS NULL OR table_number IS NULL")
+                .execute(pool)
+                .await?;
+        }
+    }
+
+    // Добавить индекс по tournament_id для быстрого поиска
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_reservations_tournament ON bracket_reservations(tournament_id)")
+        .execute(pool)
+        .await?;
 
     // Таблица для истории событий поединка (для undo и аудита)
     sqlx::query(

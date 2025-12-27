@@ -439,13 +439,26 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'not_started':
-        return 'text-gray-800';
+        return 'bg-gray-200 text-gray-800 border-gray-300';
       case 'in_progress':
-        return 'text-yellow-400';
+        return 'bg-yellow-100 text-yellow-800 border-yellow-400';
       case 'completed':
-        return 'text-green-400';
+        return 'bg-green-100 text-green-800 border-green-400';
       default:
-        return 'text-gray-800';
+        return 'bg-gray-200 text-gray-800 border-gray-300';
+    }
+  };
+
+  const getCardBackgroundColor = (status: string) => {
+    switch (status) {
+      case 'not_started':
+        return 'bg-white/80';
+      case 'in_progress':
+        return 'bg-yellow-50/90 border-yellow-200';
+      case 'completed':
+        return 'bg-green-50/90 border-green-200';
+      default:
+        return 'bg-white/80';
     }
   };
 
@@ -727,11 +740,11 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
             <Card
               className={`hover:border-blue-500/50 transition-all duration-200 cursor-pointer ${
                 bracket.id === lastSelectedBracketId ? 'ring-2 ring-blue-500/70 border-blue-500/70' : ''
-              }`}
+              } ${getCardBackgroundColor(bracket.status)}`}
             >
               <CardHeader>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
                   <CardTitle className="text-lg">{getEnhancedCategoryName(bracket)}</CardTitle>
                   {/* Индикатор занятого стола рядом с названием */}
                   {tableAssignments.has(bracket.id) && (
@@ -740,9 +753,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                     </span>
                   )}
                 </div>
-                {/* Статус сетки */}
+                {/* Статус сетки - увеличенный badge с яркими цветами */}
                 <span
-                  className={`text-xs font-medium px-2 py-1 rounded-full ${getStatusColor(bracket.status)}`}
+                  className={`text-sm font-bold px-3 py-1.5 rounded-lg border-2 whitespace-nowrap ${getStatusColor(bracket.status)}`}
                 >
                   {getStatusLabel(bracket.status)}
                 </span>

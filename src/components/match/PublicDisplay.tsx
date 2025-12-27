@@ -50,7 +50,7 @@ export function PublicDisplay({
           </div>
           {/* Баллы */}
           <div className="flex justify-end items-end">
-            <div className="text-[90px] sm:text-[110px] md:text-[130px] lg:text-[150px] xl:text-[170px] font-bold text-blue-600 leading-none">
+            <div className="text-[150px] sm:text-[180px] md:text-[210px] lg:text-[240px] xl:text-[270px] 2xl:text-[300px] font-bold text-blue-600 leading-none">
               {blueScore}
             </div>
           </div>
@@ -71,7 +71,7 @@ export function PublicDisplay({
           </div>
           {/* Баллы */}
           <div className="flex justify-end items-end">
-            <div className="text-[90px] sm:text-[110px] md:text-[130px] lg:text-[150px] xl:text-[170px] font-bold text-red-600 leading-none">
+            <div className="text-[150px] sm:text-[180px] md:text-[210px] lg:text-[240px] xl:text-[270px] 2xl:text-[300px] font-bold text-red-600 leading-none">
               {redScore}
             </div>
           </div>

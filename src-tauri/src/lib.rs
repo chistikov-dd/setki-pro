@@ -538,14 +538,28 @@ async fn check_cached_pin(
 #[tauri::command]
 async fn reserve_bracket(
     bracket_id: i32,
+    tournament_id: i32,
     judge_name: String,
+    table_number: i32,
     user_id: i32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.api_client
-        .reserve_bracket(bracket_id, &judge_name, user_id)
+    println!("[reserve_bracket] START: bracket_id={}, tournament_id={}, judge_name={}, table_number={}, user_id={}",
+        bracket_id, tournament_id, judge_name, table_number, user_id);
+
+    let result = state.api_client
+        .reserve_bracket(bracket_id, tournament_id, &judge_name, table_number, user_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            println!("[reserve_bracket] ERROR: {}", e);
+            e.to_string()
+        });
+
+    if result.is_ok() {
+        println!("[reserve_bracket] SUCCESS");
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -713,6 +727,17 @@ async fn clear_all_reservations(
 ) -> Result<(), String> {
     state.api_client
         .clear_all_reservations()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn release_judge_brackets(
+    judge_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.api_client
+        .release_judge_brackets(&judge_name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1269,6 +1294,276 @@ async fn finish_match(
     } else {
         println!("[finish_match] ВНИМАНИЕ: Матч {} не найден в локальном кэше", match_id);
     }
+
+    Ok(())
+}
+
+// Отменить завершённый матч (откатить результаты)
+#[tauri::command]
+async fn undo_finished_match(
+    match_id: i32,
+    pin_code: String,
+    server_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let pool = &state.db_pool;
+
+    state.logger.info(&format!("[undo_finished_match] START - match_id: {}, pin_code: {}, server_url: {:?}",
+        match_id, pin_code, server_url));
+
+    // Создать ApiClient (временный для custom server_url или глобальный)
+    let api_client: Arc<ApiClient> = if let Some(url) = server_url.clone().filter(|s| !s.is_empty()) {
+        state.logger.info(&format!("[undo_finished_match] Creating custom ApiClient with URL: {}", url));
+        Arc::new(ApiClient::new(url.clone(), Arc::clone(&state.db_pool), Arc::clone(&state.logger)))
+    } else {
+        state.logger.info("[undo_finished_match] Using default API client (setki.pro)");
+        Arc::clone(&state.api_client)
+    };
+
+    // Проверяем режим работы: local-client должен отправлять на сервер админа
+    let is_local_server = server_url.as_ref()
+        .map(|url| {
+            url.contains("192.168.") || url.contains("10.0.") ||
+            url.contains("localhost") || url.contains("127.0.0.1") ||
+            url.contains("172.")
+        })
+        .unwrap_or(false);
+
+    if is_local_server {
+        state.logger.info(&format!("[undo_finished_match] Local client mode detected - sending to admin server"));
+
+        // Отправляем запрос на локальный сервер админа
+        return api_client
+            .undo_match_on_local_server(
+                server_url.as_ref().unwrap(),
+                match_id
+            )
+            .await
+            .map_err(|e| e.to_string());
+    }
+
+    state.logger.info("[undo_finished_match] Online/local-server mode - processing locally");
+
+    // 1. Проверить права: судья может отменять только матчи своей сетки
+    state.logger.info("[undo_finished_match] Checking judge permissions...");
+
+    // Получить bracket_id матча
+    let bracket_id: Option<i32> = sqlx::query_scalar(
+        "SELECT bracket_id FROM matches_cache WHERE match_id = ?"
+    )
+        .bind(match_id)
+        .fetch_optional(pool.as_ref())
+        .await
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to get bracket_id: {}", e));
+            e.to_string()
+        })?;
+
+    let bracket_id = bracket_id.ok_or_else(|| {
+        state.logger.error("[undo_finished_match] Match not found in cache");
+        "Матч не найден в локальном кэше".to_string()
+    })?;
+
+    state.logger.info(&format!("[undo_finished_match] Match belongs to bracket_id: {}", bracket_id));
+
+    // Проверить что судья с этим PIN работает с этой сеткой
+    let reservation_exists: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM bracket_reservations br
+         INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
+         WHERE br.bracket_id = ? AND js.pin_code = ?"
+    )
+        .bind(bracket_id)
+        .bind(&pin_code)
+        .fetch_one(pool.as_ref())
+        .await
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to check permissions: {}", e));
+            e.to_string()
+        })?;
+
+    if !reservation_exists {
+        state.logger.error("[undo_finished_match] Permission denied - judge not assigned to this bracket");
+        return Err("У вас нет прав для отмены этого матча. Только судья, работающий с данной сеткой, может отменить матч.".to_string());
+    }
+
+    state.logger.info("[undo_finished_match] Permissions OK, proceeding with undo...");
+
+    // 2. Получить текущие данные матча
+    let match_data_str: String = sqlx::query_scalar(
+        "SELECT data FROM matches_cache WHERE match_id = ?"
+    )
+        .bind(match_id)
+        .fetch_one(pool.as_ref())
+        .await
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to get match data: {}", e));
+            e.to_string()
+        })?;
+
+    let mut match_data: serde_json::Value = serde_json::from_str(&match_data_str)
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to parse match data: {}", e));
+            e.to_string()
+        })?;
+
+    state.logger.info(&format!("[undo_finished_match] Current match data parsed successfully"));
+
+    // Проверить что матч завершён
+    let status = match_data.get("status").and_then(|s| s.as_str()).unwrap_or("");
+    if status != "completed" {
+        state.logger.error(&format!("[undo_finished_match] Match is not completed, status: {}", status));
+        return Err("Можно отменять только завершённые матчи".to_string());
+    }
+
+    // 3. Сохранить winner_id и данные о продвижении для отката
+    let winner_id = match_data.get("winner_id").and_then(|w| w.as_i64()).map(|w| w as i32);
+    let current_round = match_data.get("round").and_then(|r| r.as_i64()).unwrap_or(1) as i32;
+    let current_match_number = match_data.get("match_number").and_then(|n| n.as_i64()).unwrap_or(1) as i32;
+
+    state.logger.info(&format!("[undo_finished_match] Match info - winner_id: {:?}, round: {}, match_number: {}",
+        winner_id, current_round, current_match_number));
+
+    // 4. Откатить данные матча (счёт, статус, winner, время)
+    match_data["status"] = serde_json::json!("scheduled");
+    match_data["score_participant1"] = serde_json::json!(0);
+    match_data["score_participant2"] = serde_json::json!(0);
+    match_data["warnings_participant1"] = serde_json::json!(0);
+    match_data["warnings_participant2"] = serde_json::json!(0);
+    match_data["winner_id"] = serde_json::json!(null);
+    match_data["result_type"] = serde_json::json!(null);
+    match_data["started_at"] = serde_json::json!(null);
+    match_data["finished_at"] = serde_json::json!(null);
+    match_data["duration_seconds"] = serde_json::json!(null);
+
+    state.logger.info("[undo_finished_match] Match data reset to initial state");
+
+    // 5. Обновить матч в БД
+    let updated_data = serde_json::to_string(&match_data).map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?"
+    )
+        .bind(&updated_data)
+        .bind(match_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to update match in cache: {}", e));
+            e.to_string()
+        })?;
+
+    state.logger.info("[undo_finished_match] Match updated in cache successfully");
+
+    // 6. Откатить продвижение в следующий раунд (если был победитель)
+    if let Some(_winner) = winner_id {
+        let next_round = current_round + 1;
+        let next_match_number = (current_match_number + 1) / 2;
+
+        state.logger.info(&format!("[undo_finished_match] Reverting winner advancement - next_round: {}, next_match_number: {}",
+            next_round, next_match_number));
+
+        // Найти следующий матч
+        let next_match: Option<(i32, String)> = sqlx::query_as(
+            "SELECT match_id, data FROM matches_cache
+             WHERE bracket_id = ? AND round = ? AND match_number = ?"
+        )
+            .bind(bracket_id)
+            .bind(next_round)
+            .bind(next_match_number)
+            .fetch_optional(pool.as_ref())
+            .await
+            .map_err(|e| {
+                state.logger.error(&format!("[undo_finished_match] Failed to find next match: {}", e));
+                e.to_string()
+            })?;
+
+        if let Some((next_match_id, next_match_data_str)) = next_match {
+            state.logger.info(&format!("[undo_finished_match] Found next match: {}", next_match_id));
+
+            let mut next_match_data: serde_json::Value = serde_json::from_str(&next_match_data_str)
+                .map_err(|e| e.to_string())?;
+
+            // Определить какой слот занял победитель (нечётные номера → participant1, чётные → participant2)
+            let target_slot = if current_match_number % 2 == 1 { "participant1" } else { "participant2" };
+
+            state.logger.info(&format!("[undo_finished_match] Removing winner from slot: {}", target_slot));
+
+            // Проверить формат данных (NEW или OLD)
+            if next_match_data.get(target_slot).and_then(|p| p.as_object()).is_some() {
+                // NEW format - объект участника
+                next_match_data[target_slot] = serde_json::json!(null);
+            } else {
+                // OLD format - отдельные поля
+                let id_field = format!("{}_id", target_slot);
+                let name_field = format!("{}_name", target_slot);
+                let club_field = format!("{}_club", target_slot);
+
+                next_match_data[id_field] = serde_json::json!(null);
+                next_match_data[name_field] = serde_json::json!(null);
+                next_match_data[club_field] = serde_json::json!(null);
+            }
+
+            // Обновить следующий матч
+            let updated_next_data = serde_json::to_string(&next_match_data).map_err(|e| e.to_string())?;
+
+            sqlx::query(
+                "UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?"
+            )
+                .bind(&updated_next_data)
+                .bind(next_match_id)
+                .execute(pool.as_ref())
+                .await
+                .map_err(|e| {
+                    state.logger.error(&format!("[undo_finished_match] Failed to update next match: {}", e));
+                    e.to_string()
+                })?;
+
+            state.logger.info(&format!("[undo_finished_match] Winner removed from next match {} successfully", next_match_id));
+        } else {
+            state.logger.info("[undo_finished_match] No next match found (possibly final match)");
+        }
+    }
+
+    // 7. Очистить историю событий матча
+    sqlx::query(
+        "DELETE FROM match_events WHERE match_id = ?"
+    )
+        .bind(match_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to delete match events: {}", e));
+            e.to_string()
+        })?;
+
+    state.logger.info("[undo_finished_match] Match events cleared successfully");
+
+    // 8. Добавить в очередь синхронизации
+    let sync_data = serde_json::json!({
+        "match_id": match_id,
+        "action": "undo",
+        "timestamp": Utc::now().to_rfc3339(),
+    });
+
+    sqlx::query(
+        "INSERT INTO sync_queue (match_id, data, synced, created_at)
+         VALUES (?, ?, 0, datetime('now'))"
+    )
+        .bind(match_id)
+        .bind(sync_data.to_string())
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| {
+            state.logger.error(&format!("[undo_finished_match] Failed to add to sync queue: {}", e));
+            e.to_string()
+        })?;
+
+    state.logger.info("[undo_finished_match] Added to sync queue");
+
+    // 9. Пересчитать статус сетки
+    update_bracket_status(bracket_id, pool).await?;
+
+    state.logger.info(&format!("[undo_finished_match] SUCCESS - match {} has been reverted", match_id));
 
     Ok(())
 }
@@ -2620,6 +2915,7 @@ pub fn run() {
             get_bracket_reservation,
             get_bracket_matches,
             clear_all_reservations,
+            release_judge_brackets,
             get_active_judge_sessions,
             get_active_matches,
             get_bracket_table_assignments,
@@ -2630,6 +2926,7 @@ pub fn run() {
             batch_update_match,
             undo_last_event,
             finish_match,
+            undo_finished_match,
             get_available_monitors,
             create_temp_participant,
             update_bracket_participant,

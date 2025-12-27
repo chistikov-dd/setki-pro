@@ -1,10 +1,12 @@
-import { useRef, useMemo, useState } from 'react';
+import { useRef, useMemo, useState, useCallback, useEffect, memo } from 'react';
 import { MatchCard } from './MatchCard';
 import { AddParticipantModal } from './AddParticipantModal';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useToast } from '../../hooks/useToast';
+import { useBracketClickEditing } from '../../hooks/useBracketClickEditing';
+import { useDisplayMode } from '../../hooks/useResponsive';
 import type { Match } from '../../types';
 
 interface Round {
@@ -15,14 +17,32 @@ interface Round {
 interface TournamentBracketProps {
   matches: Match[];
   onStartMatch: (matchId: number) => void;
+  onUndoMatch?: (matchId: number) => void;
   categoryName?: string;
   bracketId?: number;
   onMatchesReload?: () => void;
   onBracketEdited?: () => void; // Callback для уведомления о редактировании сетки
 }
 
-export function TournamentBracket({ matches, onStartMatch, categoryName, bracketId, onMatchesReload, onBracketEdited }: TournamentBracketProps) {
+// Мемоизированный компонент для названия раунда
+const RoundHeader = memo(({ name, x, cardWidth }: { name: string; x: number; cardWidth: number }) => (
+  <div
+    className="absolute text-center text-sm font-semibold text-gray-800"
+    style={{
+      left: `${x}px`,
+      top: '20px',
+      width: `${cardWidth}px`
+    }}
+  >
+    {name}
+  </div>
+));
+RoundHeader.displayName = 'RoundHeader';
+
+// Базовый компонент без мемоизации
+function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryName, bracketId, onMatchesReload, onBracketEdited }: TournamentBracketProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const mode = useDisplayMode();
   const { user } = useAuthStore();
   const { showToast } = useToast();
   const {
@@ -42,6 +62,64 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
     matchId: number;
     slot: 'participant1' | 'participant2';
   } | null>(null);
+
+  // Hook для click-to-place режима
+  const handleSwapParticipants = useCallback(async (
+    sourceMatchId: number,
+    sourceSlot: 'participant1' | 'participant2',
+    targetMatchId: number,
+    targetSlot: 'participant1' | 'participant2'
+  ) => {
+    if (!bracketId) return;
+
+    try {
+      // Сначала устанавливаем draggedParticipant в store для совместимости с существующим dropParticipant
+      startDrag({
+        matchId: sourceMatchId,
+        slot: sourceSlot,
+        fighterName: '', // Не важно для swap
+        fighterId: undefined,
+      });
+
+      // Используем существующий dropParticipant из store
+      await dropParticipant(
+        targetMatchId,
+        targetSlot,
+        bracketId,
+        user?.role === 'referee' ? user.judge_name : undefined,
+        user?.role === 'admin' ? user.user_id : undefined
+      );
+
+      showToast('Участник перемещён', 'success');
+      onMatchesReload?.();
+      onBracketEdited?.();
+    } catch (error) {
+      console.error('[TournamentBracket] Ошибка при swap:', error);
+      showToast(error instanceof Error ? error.message : 'Ошибка перемещения', 'error');
+      throw error;
+    }
+  }, [bracketId, user, showToast, onMatchesReload, onBracketEdited, startDrag, dropParticipant]);
+
+  const {
+    selectedParticipant,
+    selectParticipant,
+    placeParticipant,
+    cancelSelection,
+    isSelected,
+    isTargetSlot,
+  } = useBracketClickEditing(handleSwapParticipants);
+
+  // Обработка Escape для отмены выбора
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        cancelSelection();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [cancelSelection]);
 
   // Мемоизация группировки матчей по раундам
   // Оптимизация: O(n*m) операций → пересчет только при изменении matches
@@ -141,6 +219,35 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
     }
   };
 
+  // Обработчик клика по участнику (click-to-place режим)
+  const handleParticipantClick = useCallback((
+    match: Match,
+    slot: 'participant1' | 'participant2'
+  ) => {
+    // Только для режима редактирования
+    if (!isEditMode) return;
+    if (match.status !== 'scheduled') return;
+
+    const participant = slot === 'participant1' ? match.participant1 : match.participant2;
+
+    // Если уже есть выбранный участник - это клик для размещения
+    if (selectedParticipant) {
+      placeParticipant(match.id, slot);
+      return;
+    }
+
+    // Иначе - выбор участника (если он существует)
+    if (participant) {
+      selectParticipant({
+        matchId: match.id,
+        slot,
+        fighterName: participant.full_name,
+        fighterId: participant.id,
+        clubName: participant.club_name,
+      });
+    }
+  }, [isEditMode, selectedParticipant, placeParticipant, selectParticipant]);
+
   const rounds = useMemo(() => {
     const groupedRounds: Round[] = [];
     const maxRound = Math.max(...matches.map(m => m.round_number));
@@ -161,12 +268,25 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
     return groupedRounds;
   }, [matches]);
 
-  const CARD_WIDTH = 264;
-  const CARD_HEIGHT = 160;
-  const HORIZONTAL_GAP = 100;
-  const VERTICAL_GAP = 40;
+  // Адаптивные размеры карточек и отступов
+  const layoutSizes = useMemo(() => {
+    const scaleFactor = mode === 'hd' ? 0.85 : 1.0;
+
+    return {
+      cardWidth: Math.round(264 * scaleFactor),      // 264px → ~224px для HD
+      cardHeight: Math.round(160 * scaleFactor),     // 160px → ~136px для HD
+      horizontalGap: Math.round(100 * scaleFactor),  // 100px → ~85px для HD
+      verticalGap: Math.round(40 * scaleFactor),     // 40px → ~34px для HD
+      padding: Math.round(32 * scaleFactor),         // 32px → ~27px для HD
+    };
+  }, [mode]);
+
+  const CARD_WIDTH = layoutSizes.cardWidth;
+  const CARD_HEIGHT = layoutSizes.cardHeight;
+  const HORIZONTAL_GAP = layoutSizes.horizontalGap;
+  const VERTICAL_GAP = layoutSizes.verticalGap;
   const DIVIDER_OFFSET = Math.floor(CARD_HEIGHT * 0.53);
-  const PADDING = 32;
+  const PADDING = layoutSizes.padding;
 
   // Мемоизация размеров контейнера
   // Оптимизация: пересчет только при изменении rounds
@@ -339,16 +459,7 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
           return (
             <div key={roundIndex}>
               {/* Название раунда */}
-              <div
-                className="absolute text-center text-sm font-semibold text-gray-800"
-                style={{
-                  left: `${x}px`,
-                  top: '20px',
-                  width: `${CARD_WIDTH}px`
-                }}
-              >
-                {round.name}
-              </div>
+              <RoundHeader name={round.name} x={x} cardWidth={CARD_WIDTH} />
 
               {/* Матчи раунда */}
               {round.matches.map((match, matchIndex) => {
@@ -369,6 +480,7 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
                       match={match}
                       width={CARD_WIDTH}
                       onStartMatch={onStartMatch}
+                      onUndoMatch={onUndoMatch}
                       isEditMode={isEditMode}
                       onDragStart={handleDragStart}
                       onDragEnd={endDrag}
@@ -376,6 +488,10 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
                       isDragging={draggedParticipant?.matchId === match.id}
                       onAddParticipant={handleAddParticipant}
                       onRemoveParticipant={handleRemoveParticipant}
+                      onParticipantClick={handleParticipantClick}
+                      selectedParticipant={selectedParticipant}
+                      isSelected={isSelected}
+                      isTargetSlot={isTargetSlot}
                     />
                   </div>
                 );
@@ -388,22 +504,65 @@ export function TournamentBracket({ matches, onStartMatch, categoryName, bracket
   );
 }
 
-// Вспомогательная функция для названия раунда
+// Вспомогательная функция для названия раунда с кэшированием
+const roundNameCache = new Map<string, string>();
 function getRoundName(roundNum: number, maxRound: number): string {
+  const key = `${roundNum}-${maxRound}`;
+  const cached = roundNameCache.get(key);
+  if (cached) return cached;
+
   const roundsFromEnd = maxRound - roundNum;
+  let name: string;
 
   switch (roundsFromEnd) {
     case 0:
-      return 'Финал';
+      name = 'Финал';
+      break;
     case 1:
-      return 'Полуфинал';
+      name = 'Полуфинал';
+      break;
     case 2:
-      return '1/4 финала';
+      name = '1/4 финала';
+      break;
     case 3:
-      return '1/8 финала';
+      name = '1/8 финала';
+      break;
     case 4:
-      return '1/16 финала';
+      name = '1/16 финала';
+      break;
     default:
-      return `Раунд ${roundNum}`;
+      name = `Раунд ${roundNum}`;
   }
+
+  roundNameCache.set(key, name);
+  return name;
 }
+
+// Мемоизированный экспорт с умным сравнением для производительности
+export const TournamentBracket = memo(TournamentBracketBase, (prevProps, nextProps) => {
+  // Быстрая проверка: разное количество матчей = точно изменилось
+  if (prevProps.matches.length !== nextProps.matches.length) return false;
+
+  // Сравниваем categoryName и bracketId
+  if (prevProps.categoryName !== nextProps.categoryName) return false;
+  if (prevProps.bracketId !== nextProps.bracketId) return false;
+
+  // Оптимизация: сравниваем только первые 5 матчей для быстрой проверки
+  // Если хотя бы один изменился - нужен ре-рендер
+  const compareDepth = Math.min(5, prevProps.matches.length);
+  for (let i = 0; i < compareDepth; i++) {
+    const prev = prevProps.matches[i];
+    const next = nextProps.matches[i];
+
+    // Сравниваем критичные поля
+    if (prev.id !== next.id) return false;
+    if (prev.status !== next.status) return false;
+    if (prev.participant1?.id !== next.participant1?.id) return false;
+    if (prev.participant2?.id !== next.participant2?.id) return false;
+    if (prev.participant1?.full_name !== next.participant1?.full_name) return false;
+    if (prev.participant2?.full_name !== next.participant2?.full_name) return false;
+  }
+
+  // Callbacks стабильны через useCallback, не сравниваем
+  return true; // Пропсы равны, ре-рендер не нужен
+});

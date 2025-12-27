@@ -131,9 +131,10 @@ export function useBreakpoint(breakpoint: Breakpoint): boolean {
 }
 
 /**
- * Hook для определения текущего режима отображения (компактный/стандартный/большой)
+ * Hook для определения текущего режима отображения (hd/fullhd)
+ * Для адаптивного дизайна MatchScreen и TournamentBracket
  *
- * @returns 'compact' | 'standard' | 'large'
+ * @returns 'hd' | 'fullhd'
  *
  * @example
  * ```tsx
@@ -141,23 +142,38 @@ export function useBreakpoint(breakpoint: Breakpoint): boolean {
  *   const mode = useDisplayMode();
  *
  *   const fontSize = {
- *     compact: 'text-xl',
- *     standard: 'text-3xl',
- *     large: 'text-5xl',
+ *     hd: 'text-xl',
+ *     fullhd: 'text-3xl',
  *   }[mode];
  *
  *   return <div className={fontSize}>Имя бойца</div>;
  * }
  * ```
  */
-export function useDisplayMode(): 'compact' | 'standard' | 'large' {
+export function useDisplayMode(): 'hd' | 'fullhd' {
   const { width } = useResponsive();
 
-  if (width < BREAKPOINTS.hd) {
-    return 'compact';  // < 1366px
-  } else if (width < BREAKPOINTS.fhd) {
-    return 'standard'; // 1366-1919px
+  // Breakpoint на 1440px (между HD 1366 и Full HD 1920)
+  if (width < 1440) {
+    return 'hd';      // 1366x768 и меньше
   } else {
-    return 'large';    // >= 1920px
+    return 'fullhd';  // 1920x1080 и больше
   }
+}
+
+/**
+ * Утилита для получения масштабного коэффициента
+ * относительно Full HD (1920px = 1.0)
+ *
+ * @example
+ * ```tsx
+ * const { width } = useResponsive();
+ * const scale = getScaleFactor(width);
+ * const buttonSize = 120 * scale; // 120px на Full HD, ~85px на HD
+ * ```
+ */
+export function getScaleFactor(width: number): number {
+  // HD (1366) → 0.71, Full HD (1920) → 1.0
+  const scale = width / BREAKPOINTS.fhd;
+  return Math.max(0.7, Math.min(scale, 1.0)); // Ограничиваем 0.7-1.0
 }

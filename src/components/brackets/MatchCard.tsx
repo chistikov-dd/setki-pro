@@ -4,11 +4,14 @@ import type { Match } from '../../types';
 import { useState, memo } from 'react';
 import { removePatronymic } from '../../lib/utils';
 import { logger } from '../../lib/logger';
+import { useDisplayMode } from '../../hooks/useResponsive';
+import type { SelectedParticipant } from '../../hooks/useBracketClickEditing';
 
 interface MatchCardProps {
   match: Match;
   width?: number;
   onStartMatch?: (matchId: number) => void;
+  onUndoMatch?: (matchId: number) => void;
   isEditMode?: boolean;
   onDragStart?: (matchId: number, slot: 'participant1' | 'participant2', participantName: string, participantId?: number) => void;
   onDragEnd?: () => void;
@@ -16,23 +19,61 @@ interface MatchCardProps {
   isDragging?: boolean;
   onAddParticipant?: (matchId: number, slot: 'participant1' | 'participant2') => void;
   onRemoveParticipant?: (matchId: number, slot: 'participant1' | 'participant2') => void;
+  // Новые пропсы для click-to-place режима
+  onParticipantClick?: (match: Match, slot: 'participant1' | 'participant2') => void;
+  selectedParticipant?: SelectedParticipant | null;
+  isSelected?: (matchId: number, slot: 'participant1' | 'participant2') => boolean;
+  isTargetSlot?: (matchId: number, slot: 'participant1' | 'participant2') => boolean;
 }
 
 // Базовый компонент MatchCard
 function MatchCardBase({
   match,
-  width = 180,
+  width: propWidth = 180,
   onStartMatch,
+  onUndoMatch,
   isEditMode = false,
   onDragStart,
   onDragEnd,
   onDrop,
   isDragging: _isDragging = false,
   onAddParticipant,
-  onRemoveParticipant
+  onRemoveParticipant,
+  onParticipantClick,
+  selectedParticipant: _selectedParticipant,
+  isSelected,
+  isTargetSlot,
 }: MatchCardProps) {
+  const mode = useDisplayMode();
   const [isHovered, setIsHovered] = useState(false);
   const [dragOverSlot, setDragOverSlot] = useState<'participant1' | 'participant2' | null>(null);
+
+  // Адаптивные размеры карточки в зависимости от режима
+  const cardSizes = {
+    hd: {
+      width: Math.round(propWidth * 0.85),  // ~224px → ~190px
+      height: Math.round(160 * 0.85),       // 160px → ~136px
+      nameSize: 'text-base',                 // Уменьшено с text-lg
+      clubSize: 'text-[10px]',              // Уменьшено с text-xs
+      scoreSize: 'text-xs',                  // Уменьшено с text-sm
+      buttonSize: 'text-sm px-6 py-2',       // Уменьшено с text-base px-8 py-4
+      undoButtonSize: 'text-xs px-3 py-1.5', // Уменьшено с text-sm px-4 py-2
+      borderWidth: '4px',                    // Уменьшено с 6px
+    },
+    fullhd: {
+      width: propWidth,
+      height: 160,
+      nameSize: 'text-lg',
+      clubSize: 'text-xs',
+      scoreSize: 'text-sm',
+      buttonSize: 'text-base px-8 py-4',
+      undoButtonSize: 'text-sm px-4 py-2',
+      borderWidth: '6px',
+    },
+  };
+
+  const cardSize = cardSizes[mode];
+  const width = cardSize.width;
 
   const participant1Name = match.participant1?.full_name
     ? removePatronymic(match.participant1.full_name)
@@ -92,7 +133,7 @@ function MatchCardBase({
       `}
       style={{
         width: `${width}px`,
-        height: '160px',
+        height: `${cardSize.height}px`,
         backgroundColor: 'white'
       }}
       onMouseEnter={() => setIsHovered(true)}
@@ -112,20 +153,33 @@ function MatchCardBase({
         {/* Участник 1 (Синий) */}
         <div
           className={`
-            py-1.5 px-2 flex-1 flex items-center border-l-[6px] border-blue-700 relative select-none
+            py-1.5 px-2 flex-1 flex items-center relative select-none transition-all
             ${isParticipant1Winner ? 'bg-green-50' : ''}
             ${isParticipant1Loser ? 'bg-gray-200 opacity-60' : ''}
             ${canEdit && participant1Name ? 'cursor-move hover:bg-blue-50' : ''}
             ${dragOverSlot === 'participant1' ? 'bg-blue-100 ring-2 ring-blue-500' : ''}
+            ${isSelected?.(match.id, 'participant1') ? 'bg-blue-200 ring-4 ring-blue-600 shadow-lg' : ''}
+            ${isTargetSlot?.(match.id, 'participant1') ? 'ring-2 ring-dashed ring-green-500 hover:bg-green-50' : ''}
           `}
-          draggable={canEdit && !!participant1Name}
           style={{
+            borderLeftWidth: cardSize.borderWidth,
+            borderLeftColor: '#1d4ed8', // blue-700
             userSelect: canEdit && participant1Name ? 'none' : 'auto',
             WebkitUserSelect: canEdit && participant1Name ? 'none' : 'auto',
             WebkitUserDrag: canEdit && participant1Name ? 'element' : 'none',
             MozUserSelect: canEdit && participant1Name ? 'none' : 'auto',
             touchAction: 'none' // Для тач-экранов Windows
           } as React.CSSProperties}
+          title={
+            isTargetSlot?.(match.id, 'participant1')
+              ? 'Кликните для размещения участника'
+              : isSelected?.(match.id, 'participant1')
+              ? 'Выбран (кликните на целевой слот для размещения)'
+              : canEdit && participant1Name
+              ? 'Клик для выбора или перетащите'
+              : undefined
+          }
+          draggable={canEdit && !!participant1Name}
           onDragStart={(e) => {
             const draggableAttr = e.currentTarget.getAttribute('draggable');
             const logData = `matchId=${match.id}, participant1Name=${participant1Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}, draggable=${draggableAttr}`;
@@ -184,11 +238,16 @@ function MatchCardBase({
               logger.error(`[MatchCard] DROP ОТКЛОНЁН! ${logData}`);
             }
           }}
+          onClick={() => {
+            if (canEdit) {
+              onParticipantClick?.(match, 'participant1');
+            }
+          }}
         >
           <div className="flex flex-col w-full min-w-0 flex-1" style={{ pointerEvents: 'none' }}>
             <div className="flex items-center justify-between gap-2">
               <span
-                className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
+                className={`font-semibold flex-1 min-w-0 text-gray-900 ${cardSize.nameSize} leading-tight
                   ${isParticipant1Winner ? 'font-bold' : ''}
                   ${isParticipant1Loser ? 'line-through' : ''}
                 `}
@@ -204,13 +263,13 @@ function MatchCardBase({
                 {participant1Name}
               </span>
               {(match.score_participant1 !== undefined && match.score_participant1 >= 0) && (
-                <span className={`text-sm font-bold flex-shrink-0 ${isParticipant1Winner ? 'text-green-600' : 'text-blue-700'}`}>
+                <span className={`${cardSize.scoreSize} font-bold flex-shrink-0 ${isParticipant1Winner ? 'text-green-600' : 'text-blue-700'}`}>
                   {match.score_participant1}
                 </span>
               )}
             </div>
             {club1 && (
-              <span className="text-xs text-gray-600 truncate mt-0.5" title={club1}>
+              <span className={`${cardSize.clubSize} text-gray-600 truncate mt-0.5`} title={club1}>
                 {club1}
               </span>
             )}
@@ -264,20 +323,33 @@ function MatchCardBase({
         {/* Участник 2 (Красный) */}
         <div
           className={`
-            py-1.5 px-2 flex-1 flex items-center border-l-[6px] border-red-700 relative select-none
+            py-1.5 px-2 flex-1 flex items-center relative select-none transition-all
             ${isParticipant2Winner ? 'bg-green-50' : ''}
             ${isParticipant2Loser ? 'bg-gray-200 opacity-60' : ''}
             ${canEdit && participant2Name ? 'cursor-move hover:bg-red-50' : ''}
             ${dragOverSlot === 'participant2' ? 'bg-red-100 ring-2 ring-red-500' : ''}
+            ${isSelected?.(match.id, 'participant2') ? 'bg-red-200 ring-4 ring-red-600 shadow-lg' : ''}
+            ${isTargetSlot?.(match.id, 'participant2') ? 'ring-2 ring-dashed ring-green-500 hover:bg-green-50' : ''}
           `}
-          draggable={canEdit && !!participant2Name}
           style={{
+            borderLeftWidth: cardSize.borderWidth,
+            borderLeftColor: '#b91c1c', // red-700
             userSelect: canEdit && participant2Name ? 'none' : 'auto',
             WebkitUserSelect: canEdit && participant2Name ? 'none' : 'auto',
             WebkitUserDrag: canEdit && participant2Name ? 'element' : 'none',
             MozUserSelect: canEdit && participant2Name ? 'none' : 'auto',
             touchAction: 'none' // Для тач-экранов Windows
           } as React.CSSProperties}
+          title={
+            isTargetSlot?.(match.id, 'participant2')
+              ? 'Кликните для размещения участника'
+              : isSelected?.(match.id, 'participant2')
+              ? 'Выбран (кликните на целевой слот для размещения)'
+              : canEdit && participant2Name
+              ? 'Клик для выбора или перетащите'
+              : undefined
+          }
+          draggable={canEdit && !!participant2Name}
           onDragStart={(e) => {
             const draggableAttr = e.currentTarget.getAttribute('draggable');
             const logData = `matchId=${match.id}, participant2Name=${participant2Name}, canEdit=${canEdit}, isEditMode=${isEditMode}, matchStatus=${match.status}, draggable=${draggableAttr}`;
@@ -336,11 +408,16 @@ function MatchCardBase({
               logger.error(`[MatchCard] DROP ОТКЛОНЁН! ${logData}`);
             }
           }}
+          onClick={() => {
+            if (canEdit) {
+              onParticipantClick?.(match, 'participant2');
+            }
+          }}
         >
           <div className="flex flex-col w-full min-w-0 flex-1" style={{ pointerEvents: 'none' }}>
             <div className="flex items-center justify-between gap-2">
               <span
-                className={`font-semibold flex-1 min-w-0 text-gray-900 text-lg leading-tight
+                className={`font-semibold flex-1 min-w-0 text-gray-900 ${cardSize.nameSize} leading-tight
                   ${isParticipant2Winner ? 'font-bold' : ''}
                   ${isParticipant2Loser ? 'line-through' : ''}
                 `}
@@ -356,13 +433,13 @@ function MatchCardBase({
                 {participant2Name}
               </span>
               {(match.score_participant2 !== undefined && match.score_participant2 >= 0) && (
-                <span className={`text-sm font-bold flex-shrink-0 ${isParticipant2Winner ? 'text-green-600' : 'text-red-700'}`}>
+                <span className={`${cardSize.scoreSize} font-bold flex-shrink-0 ${isParticipant2Winner ? 'text-green-600' : 'text-red-700'}`}>
                   {match.score_participant2}
                 </span>
               )}
             </div>
             {club2 && (
-              <span className="text-xs text-gray-600 truncate mt-0.5" title={club2}>
+              <span className={`${cardSize.clubSize} text-gray-600 truncate mt-0.5`} title={club2}>
                 {club2}
               </span>
             )}
@@ -413,13 +490,28 @@ function MatchCardBase({
         {/* Кнопка при наведении (по центру карточки, ~50% высоты) */}
         {showButton && isHovered && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-            <Button
-              size="lg"
-              className={`${getButtonColor()} text-white font-bold text-base px-8 py-4 shadow-lg`}
-              onClick={() => onStartMatch(match.id)}
-            >
-              {getButtonText()}
-            </Button>
+            <div className="flex flex-col gap-2">
+              <Button
+                size="lg"
+                className={`${getButtonColor()} text-white font-bold ${cardSize.buttonSize} shadow-lg`}
+                onClick={() => onStartMatch(match.id)}
+              >
+                {getButtonText()}
+              </Button>
+              {/* Кнопка "Отменить" для завершённых матчей */}
+              {isCompleted && onUndoMatch && (
+                <Button
+                  size="sm"
+                  className={`bg-orange-500 hover:bg-orange-600 text-white font-semibold ${cardSize.undoButtonSize} shadow-md`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onUndoMatch(match.id);
+                  }}
+                >
+                  Отменить матч
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </CardContent>
@@ -455,6 +547,13 @@ export const MatchCard = memo(MatchCardBase, (prevProps, nextProps) => {
   if (prevMatch.participant2?.full_name !== nextMatch.participant2?.full_name) return false;
   if (prevMatch.participant2?.club_name !== nextMatch.participant2?.club_name) return false;
 
-  // Callback onStartMatch не сравниваем - должен быть стабильным через useCallback
+  // Сравниваем selectedParticipant для highlight выбранного участника
+  const prevSelected = prevProps.selectedParticipant;
+  const nextSelected = nextProps.selectedParticipant;
+
+  if (prevSelected?.matchId !== nextSelected?.matchId) return false;
+  if (prevSelected?.slot !== nextSelected?.slot) return false;
+
+  // Callback onStartMatch и другие не сравниваем - должны быть стабильными через useCallback
   return true; // Пропсы равны, ре-рендер не нужен
 });

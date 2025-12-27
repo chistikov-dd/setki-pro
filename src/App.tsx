@@ -47,8 +47,16 @@ function App() {
   // Автоосвобождение стола при закрытии приложения (если судья)
   useEffect(() => {
     // Не устанавливать обработчик для публичного табло
-    if (isPublicDisplayWindow) return;
-    if (!user || user.role !== 'referee') return;
+    if (isPublicDisplayWindow) {
+      console.log('[Window Close] Skipping handler - public display window');
+      return;
+    }
+    if (!user || user.role !== 'referee') {
+      console.log('[Window Close] Skipping handler - not a referee', { hasUser: !!user, role: user?.role });
+      return;
+    }
+
+    console.log('[Window Close] Setting up close handler for referee');
 
     const currentWindow = getCurrentWebviewWindow();
     let unlistenClose: (() => void) | null = null;
@@ -76,13 +84,15 @@ function App() {
       unlistenClose = await currentWindow.onCloseRequested(async (event) => {
         if (isClosing) return;
 
-        event.preventDefault();
-
         // Проверяем наличие несинхронизированных данных
+        let shouldPreventClose = false;
         try {
           const unsyncedCount = await checkUnsyncedCount();
 
           if (unsyncedCount > 0) {
+            event.preventDefault();
+            shouldPreventClose = true;
+
             const shouldClose = window.confirm(
               `У вас есть ${unsyncedCount} несинхронизированных записей.\n\n` +
               `Если вы закроете приложение сейчас, эти данные останутся на этом компьютере ` +
@@ -95,12 +105,22 @@ function App() {
               console.log('[Window Close] Закрытие отменено пользователем - есть несинхронизированные данные');
               return; // НЕ закрываем окно
             }
+            // Пользователь подтвердил - продолжаем закрытие
+            shouldPreventClose = false;
           }
         } catch (error) {
           console.error('[Window Close] Ошибка проверки несинхронизированных данных:', error);
           // Продолжаем закрытие даже при ошибке проверки
         }
 
+        // Если нужно предотвратить закрытие, но пользователь не подтвердил - выходим
+        if (shouldPreventClose) {
+          event.preventDefault();
+          return;
+        }
+
+        // Предотвращаем закрытие, чтобы выполнить cleanup
+        event.preventDefault();
         isClosing = true;
 
         console.log('[Window Close] Releasing table before close...');
@@ -147,12 +167,14 @@ function App() {
     setupCloseHandler();
 
     return () => {
+      console.log('[Window Close] Cleanup - removing close handler');
       if (unlistenClose) {
         unlistenClose();
+        unlistenClose = null;
       }
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [user, logout, isPublicDisplayWindow]);
+  }, [user?.role, user?.tournament_id, user?.table_number, logout, isPublicDisplayWindow]);
 
   // Инициализация завершена
   useEffect(() => {
