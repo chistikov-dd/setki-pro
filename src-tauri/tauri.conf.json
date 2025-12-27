@@ -37,10 +37,7 @@
       "icons/icon.ico"
     ],
     "android": {
-      "minSdkVersion": 24,
-      "targetSdkVersion": 34,
-      "compileSdkVersion": 34,
-      "buildToolsVersion": "34.0.0"
+      "minSdkVersion": 24
     }
   }
 }
