@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SETKI.PRO KEEPER</string>
+    <string name="title_activity_main">SETKI.PRO KEEPER</string>
+    <string name="package_name">pro.setki.keeper</string>
+    <string name="custom_url_scheme">setki</string>
+</resources>

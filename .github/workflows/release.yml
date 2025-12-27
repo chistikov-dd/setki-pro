@@ -17,6 +17,9 @@ jobs:
             args: ''
           - platform: 'windows-latest'
             args: ''
+          - platform: 'ubuntu-22.04'
+            args: '--target aarch64-linux-android'
+            target: 'android'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -31,9 +34,28 @@ jobs:
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target == 'android' && 'aarch64-linux-android' || '' }}
+
+      - name: Setup Java 17 (Android only)
+        if: matrix.target == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK (Android only)
+        if: matrix.target == 'android'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK (Android only)
+        if: matrix.target == 'android'
+        run: |
+          sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-22.04' && matrix.target != 'android'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -61,6 +83,12 @@ jobs:
             - Скачайте `setki-keeper_x.x.x_amd64.AppImage`
             - Сделайте исполняемым: `chmod +x setki-keeper*.AppImage`
             - Запустите: `./setki-keeper*.AppImage`
+
+            **Android (arm64-v8a):**
+            - Скачайте `setki-keeper_x.x.x_arm64-v8a.apk`
+            - Включите установку из неизвестных источников в настройках Android
+            - Откройте APK файл для установки
+            - Минимальные требования: Android 7.0 (API 24)
 
             ### Что нового
             См. [CHANGELOG.md](https://github.com/YOUR_USERNAME/desktop_setki/blob/main/CHANGELOG.md)
