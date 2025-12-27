@@ -74,7 +74,7 @@ function ParticipantPanelBase({
 
           {/* Warnings */}
           <div className="flex items-center gap-3 mt-2">
-            <span className="text-xs text-gray-700">Предупреждения:</span>
+            <span className="text-base sm:text-lg md:text-xl font-semibold text-gray-900">Предупреждения:</span>
             <div className="flex gap-2">
               {Array.from({ length: maxWarnings }).map((_, i) => (
                 <div
@@ -150,7 +150,7 @@ function ParticipantPanelBase({
             className="flex flex-col items-center justify-center py-1 sm:py-2 px-1 h-10 sm:h-12 md:h-14 lg:h-16 min-w-0"
           >
             <span className="text-lg sm:text-xl md:text-2xl font-bold leading-none">{points}</span>
-            <span className="text-[9px] sm:text-[10px] text-gray-900 mt-0.5">({hotkeys[index]})</span>
+            <span className="text-xs sm:text-sm md:text-base text-white font-semibold mt-0.5">({hotkeys[index]})</span>
           </Button>
         ))}
       </div>

@@ -101,6 +101,9 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const [publicWindowOpen, setPublicWindowOpen] = useState(false);
   const [autoEndDialogShown, setAutoEndDialogShown] = useState(false);
   const [disqualificationToastShown, setDisqualificationToastShown] = useState(false);
+  // State для передачи предзаполненных данных в диалог завершения
+  const [autoSelectedWinner, setAutoSelectedWinner] = useState<'red' | 'blue' | null>(null);
+  const [autoResultType, setAutoResultType] = useState<'points' | 'submission' | 'disqualification' | null>(null);
 
   const { toasts, showToast, hideToast } = useToast();
   const { playSound } = useSound();
@@ -650,11 +653,30 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     const maxWarnings = currentSession?.scoring_config.warnings.max_count || 3;
     if ((redWarnings > maxWarnings || blueWarnings > maxWarnings) && !showEndDialog && !disqualificationToastShown) {
       console.log('[MatchScreen] Auto-opening end dialog - disqualification detected');
+
+      // 1. Остановить таймер
+      timer.pause();
+      console.log('[MatchScreen] Timer paused due to disqualification');
+
+      // 2. Определить победителя (противоположный участник)
+      let winner: 'red' | 'blue' | null = null;
+      if (redWarnings > maxWarnings) {
+        winner = 'blue'; // Красный дисквалифицирован → побеждает синий
+        console.log('[MatchScreen] Red disqualified, blue wins');
+      } else if (blueWarnings > maxWarnings) {
+        winner = 'red'; // Синий дисквалифицирован → побеждает красный
+        console.log('[MatchScreen] Blue disqualified, red wins');
+      }
+
+      // 3. Предзаполнить данные для диалога
+      setAutoResultType('disqualification');
+      setAutoSelectedWinner(winner);
+
       showToast('Дисквалификация! Завершите матч', 'warning', 3000);
       setShowEndDialog(true);
       setDisqualificationToastShown(true);
     }
-  }, [redWarnings, blueWarnings, showEndDialog, disqualificationToastShown, currentSession?.scoring_config.warnings.max_count, showToast]);
+  }, [redWarnings, blueWarnings, showEndDialog, disqualificationToastShown, currentSession?.scoring_config.warnings.max_count, showToast, timer]);
 
   const handleFinishMatch = async (
     resultType: 'points' | 'submission' | 'disqualification',
@@ -853,6 +875,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
           blueScore={blueScore}
           onFinish={handleFinishMatch}
           onCancel={() => setShowEndDialog(false)}
+          initialResultType={autoResultType || undefined}
+          initialSelectedWinner={autoSelectedWinner}
         />
       )}
 

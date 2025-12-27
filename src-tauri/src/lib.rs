@@ -7,6 +7,7 @@ use api::{ApiClient, AuthResponse, TournamentBrief, TournamentSession};
 use std::sync::Arc;
 use tauri::{Manager, State, AppHandle};
 use serde::{Deserialize, Serialize};
+use chrono::Utc;
 
 use tokio::sync::{RwLock, Mutex};
 use std::sync::Mutex as StdMutex;
@@ -2241,6 +2242,162 @@ async fn get_bracket_edit_history(
 }
 
 // ============================================
+// СОЗДАНИЕ ПУСТОЙ СЕТКИ
+// ============================================
+
+#[tauri::command]
+async fn create_empty_bracket(
+    tournament_id: i32,
+    bracket_name: String,
+    participant_count: i32,
+    sport_id: i32,
+    gender: String,
+    characteristic_values: String,
+    server_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<i32, String> {
+    state.logger.info("========== CREATE_EMPTY_BRACKET START ==========");
+    state.logger.info(&format!("tournament_id: {}", tournament_id));
+    state.logger.info(&format!("bracket_name: {}", bracket_name));
+    state.logger.info(&format!("participant_count: {}", participant_count));
+    state.logger.info(&format!("sport_id: {}", sport_id));
+    state.logger.info(&format!("gender: {}", gender));
+    state.logger.info(&format!("characteristic_values: {}", characteristic_values));
+    state.logger.info(&format!("server_url: {:?}", server_url));
+
+    // Валидация: participant_count должен быть степенью 2
+    if participant_count < 2 || (participant_count & (participant_count - 1)) != 0 {
+        return Err("Количество участников должно быть степенью 2 (2, 4, 8, 16, 32, 64)".to_string());
+    }
+
+    // Если передан server_url, отправляем запрос на локальный сервер
+    if let Some(ref url) = server_url {
+        if !url.is_empty() {
+            state.logger.info("Creating bracket on local server...");
+
+            let token = state.api_client.get_token().await.map_err(|e| e.to_string())?
+                .ok_or_else(|| "Не авторизован".to_string())?;
+
+            let request_body = serde_json::json!({
+                "tournament_id": tournament_id,
+                "bracket_name": bracket_name,
+                "participant_count": participant_count,
+                "sport_id": sport_id,
+                "gender": gender,
+                "characteristic_values": characteristic_values,
+            });
+
+            let client = reqwest::Client::new();
+            let response = client
+                .post(format!("{}/api/v1/desktop/brackets/create", url))
+                .bearer_auth(&token)
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+            if response.status().is_success() {
+                let result: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+                let bracket_id = result["bracket_id"].as_i64()
+                    .ok_or_else(|| "Invalid response format".to_string())? as i32;
+
+                state.logger.info(&format!("Bracket created on server with ID: {}", bracket_id));
+                state.logger.info("========== CREATE_EMPTY_BRACKET END ==========");
+                return Ok(bracket_id);
+            } else {
+                let error = response.text().await.unwrap_or_default();
+                state.logger.error(&format!("Server error: {}", error));
+                return Err(format!("Ошибка сервера: {}", error));
+            }
+        }
+    }
+
+    // Offline режим - создаем локально
+    state.logger.info("Creating bracket locally (offline mode)...");
+    let pool = &state.db_pool;
+
+    // Генерация уникального ID для сетки (отрицательный ID для локальных сеток)
+    let bracket_id = -(Utc::now().timestamp_millis() as i32);
+
+    // Создать JSON для bracket
+    let bracket_data = serde_json::json!({
+        "id": bracket_id,
+        "category_id": null,
+        "category_name": bracket_name,
+        "bracket_type": "single_elimination",
+        "total_rounds": (participant_count as f64).log2() as i32,
+        "current_round": 1,
+        "status": "not_started",
+        "is_published": true,
+    });
+
+    // Сохранить сетку в brackets_cache
+    sqlx::query(
+        "INSERT INTO brackets_cache (bracket_id, tournament_id, data, updated_at)
+         VALUES (?, ?, ?, datetime('now'))"
+    )
+    .bind(bracket_id)
+    .bind(tournament_id)
+    .bind(serde_json::to_string(&bracket_data).unwrap())
+    .execute(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    state.logger.info(&format!("Bracket created with ID: {}", bracket_id));
+
+    // Генерация пустых матчей для турнирной сетки
+    let total_rounds = (participant_count as f64).log2() as i32;
+    let mut match_id_counter = -(Utc::now().timestamp_millis() as i32);
+
+    for round in 1..=total_rounds {
+        let matches_in_round = participant_count / (2_i32.pow(round as u32));
+
+        for match_num in 1..=matches_in_round {
+            match_id_counter -= 1;
+
+            let match_data = serde_json::json!({
+                "id": match_id_counter,
+                "bracket_id": bracket_id,
+                "round_number": round,
+                "match_number": match_num,
+                "participant1": null,
+                "participant2": null,
+                "participant1_id": null,
+                "participant2_id": null,
+                "fighter1_name": null,
+                "fighter2_name": null,
+                "fighter1_club": null,
+                "fighter2_club": null,
+                "winner_id": null,
+                "status": "scheduled",
+                "score_participant1": 0,
+                "score_participant2": 0,
+                "warnings_participant1": 0,
+                "warnings_participant2": 0,
+                "result_type": null,
+            });
+
+            // Сохранить матч в matches_cache
+            sqlx::query(
+                "INSERT INTO matches_cache (match_id, bracket_id, data, updated_at, version)
+                 VALUES (?, ?, ?, datetime('now'), 1)"
+            )
+            .bind(match_id_counter)
+            .bind(bracket_id)
+            .bind(serde_json::to_string(&match_data).unwrap())
+            .execute(pool.as_ref())
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        state.logger.info(&format!("Round {} created with {} matches", round, matches_in_round));
+    }
+
+    state.logger.info("========== CREATE_EMPTY_BRACKET END ==========");
+    Ok(bracket_id)
+}
+
+// ============================================
 // КЭШИРОВАНИЕ
 // ============================================
 
@@ -2478,6 +2635,7 @@ pub fn run() {
             update_bracket_participant,
             swap_bracket_participants,
             get_bracket_edit_history,
+            create_empty_bracket,
             clear_tournament_cache,
             cleanup_sync_queue,
             check_unsynced_count,

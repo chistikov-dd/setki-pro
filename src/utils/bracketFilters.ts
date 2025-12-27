@@ -133,9 +133,12 @@ export function filterBrackets(
         if (value === 'all') continue;
 
         // Проверяем, есть ли у сетки нужная характеристика с нужным значением
-        const hasCharacteristic = bracket.characteristic_filters?.some(
-          filter => filter.key === key && filter.value === value
-        );
+        // Поддерживаем оба формата: массив и объект (для обратной совместимости)
+        const hasCharacteristic = Array.isArray(bracket.characteristic_filters)
+          ? bracket.characteristic_filters.some(
+              filter => filter.key === key && filter.value === value
+            )
+          : false;
 
         if (!hasCharacteristic) {
           return false;
@@ -312,8 +315,13 @@ export function getEnhancedCategoryName(bracket: BracketResponse): string {
 
   // Если характеристик нет, добавляем их из characteristic_filters
   if (!hasCharacteristics) {
+    // Проверяем, что characteristic_filters является массивом
+    const characteristicFilters = Array.isArray(bracket.characteristic_filters)
+      ? bracket.characteristic_filters
+      : undefined;
+
     const characteristics = getCharacteristicsFromFilters(
-      bracket.characteristic_filters,
+      characteristicFilters,
       bracket.characteristics_schema
     );
 

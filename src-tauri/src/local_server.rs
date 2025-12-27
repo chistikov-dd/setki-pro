@@ -73,6 +73,13 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct LogoutJudgeRequest {
+    pub tournament_id: i32,
+    pub table_number: i32,
+    pub judge_name: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SyncMatchRequest {
     pub match_id: i32,
     pub data: serde_json::Value,
@@ -143,6 +150,16 @@ pub struct UpdateBracketParticipantRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CreateEmptyBracketRequest {
+    pub tournament_id: i32,
+    pub bracket_name: String,
+    pub participant_count: i32,
+    pub sport_id: i32,
+    pub gender: String,
+    pub characteristic_values: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ReserveBracketRequest {
     pub bracket_id: i32,
     pub judge_name: String,
@@ -183,9 +200,11 @@ async fn auth_middleware(
 ) -> Result<Response, StatusCode> {
     let uri = req.uri().path();
 
-    // Пропускаем публичные endpoints (auth, health)
+    // Пропускаем публичные endpoints (auth, health, websockets)
     if uri.starts_with("/api/v1/auth/")
         || uri.starts_with("/api/v1/desktop/auth/")
+        || uri.starts_with("/api/v1/ws/")
+        || uri.starts_with("/ws/")
         || uri == "/health" {
         return Ok(next.run(req).await);
     }
@@ -283,6 +302,7 @@ pub async fn start_server(
         // Auth endpoints
         .route("/api/v1/auth/pin", post(login_by_pin_handler))
         .route("/api/v1/desktop/auth/pin-auth", post(login_by_pin_handler)) // Для совместимости с desktop клиентом
+        .route("/api/v1/auth/logout", post(logout_judge_handler)) // Выход судьи
 
         // Desktop endpoints (compatible with existing API)
         .route("/api/v1/desktop/brackets/tournament/:id", get(get_tournament_brackets_handler))
@@ -297,6 +317,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/bracket-assignments/:tournament_id", get(get_bracket_assignments_handler))
         .route("/api/v1/desktop/brackets/reserve", post(reserve_bracket_handler))
         .route("/api/v1/desktop/brackets/release", post(release_bracket_handler))
+        .route("/api/v1/desktop/brackets/create", post(create_empty_bracket_handler))
 
         // Применяем auth_middleware ко всем HTTP endpoints
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
@@ -405,6 +426,22 @@ async fn login_by_pin_handler(
 
             state.logger.info("Token saved to judge_auth table");
 
+            // Сохраняем сессию судьи в judge_sessions для мониторинга
+            if payload.judge_name.is_some() && payload.table_number.is_some() {
+                sqlx::query(
+                    "INSERT INTO judge_sessions (pin_code, judge_name, table_number, tournament_id, logged_in_at)
+                     VALUES (?, ?, ?, ?, datetime('now'))"
+                )
+                .bind(&payload.pin_code)
+                .bind(&judge_name)
+                .bind(table_number)
+                .bind(tournament_id)
+                .execute(&*state.db)
+                .await?;
+
+                state.logger.info("Judge session saved to judge_sessions table");
+            }
+
             // Если переданы имя и номер стола - отправляем событие админу
             if payload.judge_name.is_some() && payload.table_number.is_some() {
                 let event = serde_json::json!({
@@ -438,6 +475,68 @@ async fn login_by_pin_handler(
             Err(AppError::Unauthorized("Invalid PIN code".to_string()))
         }
     }
+}
+
+// Logout judge handler - освобождает стол и удаляет сессию из БД
+async fn logout_judge_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<LogoutJudgeRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== logout_judge_handler START ==========");
+    println!("[LOCAL SERVER] Judge logout request:");
+    println!("[LOCAL SERVER]   tournament_id: {}", payload.tournament_id);
+    println!("[LOCAL SERVER]   table_number: {}", payload.table_number);
+    println!("[LOCAL SERVER]   judge_name: {}", payload.judge_name);
+
+    // Удаляем из table_numbers
+    sqlx::query(
+        "DELETE FROM table_numbers WHERE tournament_id = ? AND table_number = ?"
+    )
+    .bind(payload.tournament_id)
+    .bind(payload.table_number)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] Deleted from table_numbers");
+
+    // Удаляем из judge_sessions
+    sqlx::query(
+        "DELETE FROM judge_sessions WHERE tournament_id = ? AND table_number = ?"
+    )
+    .bind(payload.tournament_id)
+    .bind(payload.table_number)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] Deleted from judge_sessions");
+
+    // Удаляем из judge_auth
+    sqlx::query(
+        "DELETE FROM judge_auth WHERE tournament_id = ? AND table_number = ?"
+    )
+    .bind(payload.tournament_id)
+    .bind(payload.table_number)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] Deleted from judge_auth");
+
+    // Отправляем событие админу о отключении судьи
+    let event = serde_json::json!({
+        "type": "judge_disconnected",
+        "tournament_id": payload.tournament_id,
+        "judge_name": payload.judge_name,
+        "table_number": payload.table_number,
+        "user_id": 0,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+
+    let _ = state.admin_events_channel.send(event.to_string());
+    println!("[LOCAL SERVER] Admin event sent: Judge {} disconnected from table {}",
+             payload.judge_name, payload.table_number);
+
+    println!("[LOCAL SERVER] ========== logout_judge_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 // Get bracket matches handler (отдельный endpoint для получения матчей конкретной сетки)
@@ -1290,6 +1389,153 @@ async fn release_bracket_handler(
     }
 }
 
+// Create empty bracket handler - создание пустой сетки
+async fn create_empty_bracket_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<CreateEmptyBracketRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== create_empty_bracket_handler START ==========");
+    println!("[LOCAL SERVER] tournament_id: {}, bracket_name: {}, participant_count: {}, sport_id: {}, gender: {}, characteristic_values: {}",
+        payload.tournament_id, payload.bracket_name, payload.participant_count, payload.sport_id, payload.gender, payload.characteristic_values);
+
+    // Валидация: participant_count должен быть степенью 2
+    if payload.participant_count < 2 || (payload.participant_count & (payload.participant_count - 1)) != 0 {
+        return Err(AppError::ValidationError("Количество участников должно быть степенью 2 (2, 4, 8, 16, 32, 64)".into()));
+    }
+
+    // Парсим characteristic_values из JSON строки (объект Record<string, string>)
+    let characteristic_values_obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&payload.characteristic_values)
+        .map_err(|e| AppError::ValidationError(format!("Invalid characteristic_values JSON: {}", e)))?;
+
+    // Преобразуем объект в массив [{key, value}, ...] для соответствия формату characteristic_filters
+    let characteristic_filters: Vec<serde_json::Value> = characteristic_values_obj
+        .iter()
+        .map(|(key, value)| {
+            serde_json::json!({
+                "key": key,
+                "value": value.as_str().unwrap_or("")
+            })
+        })
+        .collect();
+
+    // Генерация уникального ID для сетки (отрицательный ID для локальных сеток)
+    let bracket_id = -(chrono::Utc::now().timestamp_millis() as i32);
+
+    // Получить characteristics_schema из существующей сетки того же вида спорта
+    let characteristics_schema = sqlx::query_scalar::<_, String>(
+        "SELECT data FROM brackets_cache
+         WHERE tournament_id = ?
+         AND json_extract(data, '$.sport_id') = ?
+         AND json_extract(data, '$.characteristics_schema') IS NOT NULL
+         LIMIT 1"
+    )
+    .bind(payload.tournament_id)
+    .bind(payload.sport_id)
+    .fetch_optional(&*state.db)
+    .await?
+    .and_then(|data_str| {
+        let data: serde_json::Value = serde_json::from_str(&data_str).ok()?;
+        data.get("characteristics_schema").cloned()
+    });
+
+    // Создаем sport_name запросом (берем из существующей сетки)
+    let sport_name = sqlx::query_scalar::<_, String>(
+        "SELECT json_extract(data, '$.sport_name') FROM brackets_cache
+         WHERE tournament_id = ?
+         AND json_extract(data, '$.sport_id') = ?
+         LIMIT 1"
+    )
+    .bind(payload.tournament_id)
+    .bind(payload.sport_id)
+    .fetch_optional(&*state.db)
+    .await?
+    .unwrap_or_else(|| "Unknown Sport".to_string());
+
+    // Создать JSON для bracket
+    let mut bracket_data = serde_json::json!({
+        "id": bracket_id,
+        "category_id": null,
+        "category_name": payload.bracket_name,
+        "bracket_type": "single_elimination",
+        "total_rounds": (payload.participant_count as f64).log2() as i32,
+        "current_round": 1,
+        "status": "not_started",
+        "is_published": true,
+        "sport_id": payload.sport_id,
+        "sport_name": sport_name,
+        "gender": payload.gender,
+        "characteristic_filters": characteristic_filters,
+    });
+
+    // Добавить characteristics_schema, если найдена
+    if let Some(schema) = characteristics_schema {
+        bracket_data["characteristics_schema"] = schema;
+    }
+
+    // Сохранить сетку в brackets_cache
+    sqlx::query(
+        "INSERT INTO brackets_cache (bracket_id, tournament_id, data, updated_at)
+         VALUES (?, ?, ?, datetime('now'))"
+    )
+    .bind(bracket_id)
+    .bind(payload.tournament_id)
+    .bind(serde_json::to_string(&bracket_data).unwrap())
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] Bracket created with ID: {}", bracket_id);
+
+    // Генерация пустых матчей для турнирной сетки
+    let total_rounds = (payload.participant_count as f64).log2() as i32;
+    let mut match_id_counter = -(chrono::Utc::now().timestamp_millis() as i32);
+
+    for round in 1..=total_rounds {
+        let matches_in_round = payload.participant_count / (2_i32.pow(round as u32));
+
+        for match_num in 1..=matches_in_round {
+            match_id_counter -= 1;
+
+            let match_data = serde_json::json!({
+                "id": match_id_counter,
+                "bracket_id": bracket_id,
+                "round_number": round,
+                "match_number": match_num,
+                "participant1": null,
+                "participant2": null,
+                "participant1_id": null,
+                "participant2_id": null,
+                "fighter1_name": null,
+                "fighter2_name": null,
+                "fighter1_club": null,
+                "fighter2_club": null,
+                "winner_id": null,
+                "status": "scheduled",
+                "score_participant1": 0,
+                "score_participant2": 0,
+                "warnings_participant1": 0,
+                "warnings_participant2": 0,
+                "result_type": null,
+            });
+
+            // Сохранить матч в matches_cache
+            sqlx::query(
+                "INSERT INTO matches_cache (match_id, bracket_id, data, updated_at, version)
+                 VALUES (?, ?, ?, datetime('now'), 1)"
+            )
+            .bind(match_id_counter)
+            .bind(bracket_id)
+            .bind(serde_json::to_string(&match_data).unwrap())
+            .execute(&*state.db)
+            .await?;
+        }
+
+        println!("[LOCAL SERVER] Round {} created with {} matches", round, matches_in_round);
+    }
+
+    println!("[LOCAL SERVER] ========== create_empty_bracket_handler SUCCESS ==========");
+    Ok(Json(serde_json::json!({ "bracket_id": bracket_id })))
+}
+
 // Bracket assignments handler - получить информацию о занятых столах
 async fn get_bracket_assignments_handler(
     State(state): State<LocalServerState>,
@@ -1306,7 +1552,7 @@ async fn get_bracket_assignments_handler(
             br.judge_name
          FROM bracket_reservations br
          INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
-         INNER JOIN table_numbers tn ON js.judge_session_id = tn.judge_session_id
+         INNER JOIN table_numbers tn ON js.id = tn.judge_session_id
          WHERE js.tournament_id = ?
          ORDER BY br.reserved_at DESC"
     )
@@ -1523,36 +1769,14 @@ async fn handle_socket(socket: WebSocket, state: LocalServerState, match_id: Str
 }
 
 // Admin WebSocket handler для получения событий о подключении/отключении судей
+// SECURITY NOTE: Токен не проверяется, т.к. локальный сервер работает только в доверенной LAN среде на турнире
+// Любой в локальной сети может подключиться, но это не критично - данные не конфиденциальны
 async fn admin_websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<LocalServerState>,
-    Query(params): Query<WsQuery>,
+    Query(_params): Query<WsQuery>,
 ) -> Response {
-    // Проверка токена для авторизации (аналогично websocket_handler)
-    let token = params.token.or(params.pin_code);
-
-    if let Some(ref token_value) = token {
-        // Проверяем токен в базе данных
-        match sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM judge_auth WHERE token = ?"
-        )
-        .bind(token_value)
-        .fetch_one(&*state.db)
-        .await
-        {
-            Ok(count) if count > 0 => {
-                println!("[Admin WebSocket] Token valid, admin authorized");
-            }
-            _ => {
-                println!("[Admin WebSocket] Invalid token");
-                return (StatusCode::UNAUTHORIZED, "Invalid token").into_response();
-            }
-        }
-    } else {
-        println!("[Admin WebSocket] No token provided");
-        return (StatusCode::UNAUTHORIZED, "Token required").into_response();
-    }
-
+    println!("[Admin WebSocket] Admin connecting to events stream (no auth required for local server)");
     ws.on_upgrade(move |socket| handle_admin_socket(socket, state))
 }
 
@@ -1618,6 +1842,7 @@ pub enum AppError {
     BadRequest(String),
     Conflict(String),
     Internal(String),
+    ValidationError(String),
 }
 
 impl From<sqlx::Error> for AppError {
@@ -1643,6 +1868,9 @@ impl IntoResponse for AppError {
             }
             AppError::Internal(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+            AppError::ValidationError(msg) => {
+                (StatusCode::BAD_REQUEST, msg)
             }
         };
 

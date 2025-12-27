@@ -7,6 +7,7 @@ import type { BracketResponse, BracketFilters } from '../../types';
 import { useDebounce } from '../../hooks/useDebounce';
 import { applySortAndFilter, getGenderLabel, getAgeRangeLabel, getWeightRangeLabel, getEnhancedCategoryName } from '../../utils/bracketFilters';
 import { useServerModeStore } from '../../stores/serverModeStore';
+import { CreateBracketDialog } from './CreateBracketDialog';
 
 interface BracketSelectionProps {
   tournamentId: number;
@@ -29,6 +30,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const bracketRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   // Информация о занятых столах (bracket_id → table assignment)
   const [tableAssignments, setTableAssignments] = useState<Map<number, BracketTableAssignment>>(new Map());
@@ -249,8 +251,13 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   // Применить фильтры и сортировку
   const filteredBrackets = useMemo(() => {
     const sorted = applySortAndFilter(brackets, filters, participantsByBracket);
-    // Отфильтровать сетки без участников
+    // Отфильтровать сетки без участников, НО показывать локально созданные (ID < 0)
     return sorted.filter(bracket => {
+      // Локально созданные сетки (отрицательный ID) показываем всегда
+      if (bracket.id < 0) {
+        return true;
+      }
+      // Остальные сетки показываем только если есть участники
       const participants = participantsByBracket[bracket.id];
       return participants && participants.length > 0;
     });
@@ -364,8 +371,19 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   const characteristicValues = useMemo(() => {
     const valuesMap = new Map<string, Set<string>>();
 
+    console.log('[BracketSelection] Пересчет characteristicValues для', brackets.length, 'сеток');
+
     brackets.forEach(bracket => {
-      if (!bracket.characteristic_filters) return;
+      if (!bracket.characteristic_filters) {
+        console.log(`[BracketSelection] Сетка ${bracket.id} не имеет characteristic_filters`);
+        return;
+      }
+
+      // Проверяем, является ли characteristic_filters массивом
+      if (!Array.isArray(bracket.characteristic_filters)) {
+        console.log(`[BracketSelection] Сетка ${bracket.id} имеет characteristic_filters не в виде массива, пропускаем`);
+        return;
+      }
 
       bracket.characteristic_filters.forEach(filter => {
         if (!valuesMap.has(filter.key)) {
@@ -374,6 +392,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         valuesMap.get(filter.key)!.add(filter.value);
       });
     });
+
+    console.log('[BracketSelection] characteristicValues:', Array.from(valuesMap.entries()).map(([key, values]) => ({key, values: Array.from(values)})));
 
     return valuesMap;
   }, [brackets]);
@@ -495,8 +515,27 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
   return (
     <div className="space-y-4">
+      {showCreateDialog && (
+        <CreateBracketDialog
+          tournamentId={tournamentId}
+          onClose={() => setShowCreateDialog(false)}
+          onSuccess={() => loadBrackets()}
+        />
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-900">Выберите сетку</h2>
+        <Button
+          onClick={() => setShowCreateDialog(true)}
+          variant="primary"
+          size="sm"
+        >
+          + Создать сетку
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex-1"></div>
         <span className="text-sm text-gray-700">
           Показано: <span className="text-gray-900 font-medium">{filteredBrackets.length}</span> из{' '}
           <span className="text-gray-900 font-medium">{brackets.length}</span>

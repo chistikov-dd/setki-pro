@@ -180,7 +180,57 @@ export const useAuthStore = create<AuthState>()(
         }
 
         // Освободить номер стола если это судья
-        if (user?.role === 'referee' && user?.tournament_id && user?.table_number) {
+        if (user?.role === 'referee' && user?.tournament_id && user?.table_number && user?.judge_name) {
+          // Проверяем режим работы - если local-client, то отправляем запрос на локальный сервер
+          const serverModeStore = (await import('./serverModeStore')).useServerModeStore.getState();
+
+          console.log('[authStore.logout] Server mode:', serverModeStore.mode, 'Server URL:', serverModeStore.serverUrl);
+          logger.info(LOG_CATEGORIES.AUTH, 'Checking server mode for logout', {
+            mode: serverModeStore.mode,
+            serverUrl: serverModeStore.serverUrl,
+          });
+
+          if (serverModeStore.mode === 'local-client' && serverModeStore.serverUrl) {
+            console.log('[authStore.logout] Sending logout request to local server...');
+            // Отправляем запрос на локальный сервер для удаления сессии из БД админа
+            try {
+              // serverUrl уже содержит http://, поэтому не добавляем префикс
+              const logoutUrl = serverModeStore.serverUrl.startsWith('http')
+                ? `${serverModeStore.serverUrl}/api/v1/auth/logout`
+                : `http://${serverModeStore.serverUrl}/api/v1/auth/logout`;
+
+              console.log('[authStore.logout] Logout URL:', logoutUrl);
+
+              const response = await fetch(logoutUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  tournament_id: user.tournament_id,
+                  table_number: user.table_number,
+                  judge_name: user.judge_name,
+                }),
+              });
+
+              if (response.ok) {
+                logger.info(LOG_CATEGORIES.AUTH, 'Judge session removed from local server', {
+                  tableNumber: user.table_number,
+                });
+              } else {
+                logger.warn(LOG_CATEGORIES.AUTH, 'Failed to remove judge session from local server', {
+                  status: response.status,
+                });
+              }
+            } catch (error) {
+              logger.error(
+                LOG_CATEGORIES.AUTH,
+                'Error removing judge session from local server',
+                {},
+                error instanceof Error ? error : undefined
+              );
+            }
+          }
+
+          // Также освобождаем стол в локальной БД
           let retries = 3;
           let released = false;
 

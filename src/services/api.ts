@@ -267,6 +267,37 @@ export async function clearAllReservations(): Promise<void> {
   return await invoke('clear_all_reservations');
 }
 
+/**
+ * Создать пустую сетку
+ */
+export async function createEmptyBracket(
+  data: {
+    tournamentId: number;
+    bracketName: string;
+    participantCount: number;
+    sportId: number;
+    gender: 'male' | 'female' | 'mixed';
+    characteristicValues: Record<string, string>;
+  },
+  serverUrl?: string | null
+): Promise<number> {
+  console.log('[api.ts] createEmptyBracket called with:', data);
+
+  // Tauri автоматически конвертирует camelCase -> snake_case
+  const result = await invoke<number>('create_empty_bracket', {
+    tournamentId: data.tournamentId,
+    bracketName: data.bracketName,
+    participantCount: data.participantCount,
+    sportId: data.sportId,
+    gender: data.gender,
+    characteristicValues: JSON.stringify(data.characteristicValues),
+    serverUrl: serverUrl || null,
+  });
+
+  console.log('[api.ts] create_empty_bracket returned:', result);
+  return result;
+}
+
 // ====== Функции для работы с поединками ======
 
 /**

@@ -100,6 +100,15 @@ function MatchCardBase({
       title={isEditMode && !canEdit ? 'Редактирование недоступно: матч уже начат или завершён' : ''}
     >
       <CardContent className="p-0 h-full flex flex-col relative">
+        {/* Match ID badge - показывается только при наведении */}
+        {isHovered && (
+          <div className="absolute top-1 right-1 z-10">
+            <span className="bg-gray-200 text-gray-500 text-[9px] font-mono px-1 py-0.5 rounded opacity-60">
+              #{match.id}
+            </span>
+          </div>
+        )}
+
         {/* Участник 1 (Синий) */}
         <div
           className={`

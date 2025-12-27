@@ -366,8 +366,18 @@ impl ApiClient {
 
     // Освободить номер стола при выходе судьи
     pub async fn release_table_number(&self, tournament_id: i32, table_number: i32) -> Result<()> {
+        // Удаляем из table_numbers
         sqlx::query(
             "DELETE FROM table_numbers WHERE tournament_id = ? AND table_number = ?"
+        )
+        .bind(tournament_id)
+        .bind(table_number)
+        .execute(self.db.as_ref())
+        .await?;
+
+        // Удаляем из judge_sessions (для мониторинга)
+        sqlx::query(
+            "DELETE FROM judge_sessions WHERE tournament_id = ? AND table_number = ?"
         )
         .bind(tournament_id)
         .bind(table_number)

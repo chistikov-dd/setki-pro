@@ -20,6 +20,9 @@ interface MatchEndDialogProps {
     winnerId?: number
   ) => void;
   onCancel: () => void;
+  // Опциональные параметры для автоматического предзаполнения (при дисквалификации)
+  initialResultType?: 'points' | 'submission' | 'disqualification';
+  initialSelectedWinner?: 'red' | 'blue' | null;
 }
 
 export function MatchEndDialog({
@@ -29,9 +32,11 @@ export function MatchEndDialog({
   blueScore,
   onFinish,
   onCancel,
+  initialResultType = 'points',
+  initialSelectedWinner = null,
 }: MatchEndDialogProps) {
-  const [resultType, setResultType] = useState<'points' | 'submission' | 'disqualification'>('points');
-  const [selectedWinner, setSelectedWinner] = useState<'red' | 'blue' | null>(null);
+  const [resultType, setResultType] = useState<'points' | 'submission' | 'disqualification'>(initialResultType);
+  const [selectedWinner, setSelectedWinner] = useState<'red' | 'blue' | null>(initialSelectedWinner);
 
   const handleConfirm = () => {
     if (resultType === 'points') {

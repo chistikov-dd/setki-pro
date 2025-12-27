@@ -68,7 +68,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build the app
+      - name: Initialize Tauri Android (Android only)
+        if: matrix.target == 'android'
+        run: npm run tauri android init
+
+      - name: Build Android APK (Android only)
+        if: matrix.target == 'android'
+        run: npm run tauri android build -- --apk
+
+      - name: Build Desktop App (Non-Android)
+        if: matrix.target != 'android'
         uses: tauri-apps/tauri-action@v0.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -100,3 +109,11 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Upload Android APK to Release (Android only)
+        if: matrix.target == 'android'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+          tag_name: ${{ github.ref_name }}
+          draft: true

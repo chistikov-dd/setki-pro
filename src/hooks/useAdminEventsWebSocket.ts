@@ -97,7 +97,7 @@ export function useAdminEventsWebSocket({
         }
 
         // Формируем WebSocket URL (ws:// вместо http://)
-        let wsUrl = localServerUrl.replace('http://', 'ws://') + '/ws/admin/events';
+        let wsUrl = localServerUrl.replace('http://', 'ws://') + '/api/v1/ws/admin/events';
 
         // Добавляем токен в query параметр
         if (token) {
