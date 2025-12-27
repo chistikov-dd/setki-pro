@@ -392,7 +392,7 @@ async fn login_by_pin_handler(
             let table_number = payload.table_number.unwrap_or(0);
 
             sqlx::query(
-                "INSERT OR REPLACE INTO judge_auth (pin_code, token, judge_name, table_number, tournament_id, created_at)
+                "INSERT INTO judge_auth (pin_code, token, judge_name, table_number, tournament_id, created_at)
                  VALUES (?, ?, ?, ?, ?, datetime('now'))"
             )
             .bind(&payload.pin_code)

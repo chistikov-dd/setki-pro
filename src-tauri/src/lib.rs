@@ -265,6 +265,56 @@ async fn get_cached_brackets(
     }
 }
 
+// Новая команда для админа - возвращает сетки с матчами
+#[tauri::command]
+async fn get_cached_brackets_with_matches(
+    tournament_id: i32,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state.logger.info("========== GET_CACHED_BRACKETS_WITH_MATCHES START ==========");
+    state.logger.info(&format!("tournament_id: {}", tournament_id));
+
+    // Читаем из локального кэша с матчами
+    let bracket_records = sqlx::query_as::<_, (i32, String)>(
+        "SELECT bracket_id, data FROM brackets_cache WHERE tournament_id = ?"
+    )
+    .bind(tournament_id)
+    .fetch_all(&*state.db_pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut brackets: Vec<serde_json::Value> = Vec::new();
+
+    for (bracket_id, bracket_data) in bracket_records {
+        if let Ok(mut bracket) = serde_json::from_str::<serde_json::Value>(&bracket_data) {
+            // Загружаем матчи для этой сетки
+            let match_records = sqlx::query_as::<_, (String,)>(
+                "SELECT data FROM matches_cache WHERE bracket_id = ?"
+            )
+            .bind(bracket_id)
+            .fetch_all(&*state.db_pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let matches: Vec<serde_json::Value> = match_records
+                .into_iter()
+                .filter_map(|r| serde_json::from_str(&r.0).ok())
+                .collect();
+
+            // Добавляем matches в bracket
+            if let Some(obj) = bracket.as_object_mut() {
+                obj.insert("matches".to_string(), serde_json::json!(matches));
+            }
+
+            brackets.push(bracket);
+        }
+    }
+
+    state.logger.info(&format!("SUCCESS: Received {} brackets with matches", brackets.len()));
+    state.logger.info("========== GET_CACHED_BRACKETS_WITH_MATCHES END ==========");
+    Ok(brackets)
+}
+
 #[tauri::command]
 async fn is_tournament_downloaded(
     tournament_id: i32,
@@ -2393,6 +2443,7 @@ pub fn run() {
             clear_all_table_reservations,
             download_tournament,
             get_cached_brackets,
+            get_cached_brackets_with_matches,
             is_tournament_downloaded,
             sync_changes,
             sync_to_local_server,

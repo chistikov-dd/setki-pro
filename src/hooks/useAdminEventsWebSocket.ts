@@ -52,7 +52,7 @@ export function useAdminEventsWebSocket({
   onError,
 }: UseAdminEventsWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
-  const { serverUrl, mode } = useServerModeStore();
+  const { mode } = useServerModeStore();
   const { addJudge, removeJudge } = useJudgeMonitorStore();
 
   // FIX: Используем useRef для WebSocket вместо let переменной
@@ -73,11 +73,10 @@ export function useAdminEventsWebSocket({
 
   useEffect(() => {
     // Подключаемся только если enabled и режим local-server
-    if (!enabled || mode !== 'local-server' || !serverUrl) {
+    if (!enabled || mode !== 'local-server') {
       logger.debug(LOG_CATEGORIES.WEBSOCKET, 'Admin events WebSocket disabled', {
         enabled,
         mode,
-        serverUrl,
       });
       return;
     }
@@ -85,12 +84,20 @@ export function useAdminEventsWebSocket({
     // Получаем токен и подключаемся к WebSocket
     const connectWebSocket = async () => {
       try {
-        // Получаем токен из базы данных через Tauri API
+        // Получаем информацию о локальном сервере через Tauri API
         const { invoke } = await import('@tauri-apps/api/core');
         const token = await invoke<string | null>('get_token');
 
+        // Получаем URL локального сервера (админ запускает сервер локально)
+        const localServerUrl = await invoke<string | null>('get_local_server_url');
+
+        if (!localServerUrl) {
+          logger.warn(LOG_CATEGORIES.WEBSOCKET, 'Local server not running', {});
+          return null;
+        }
+
         // Формируем WebSocket URL (ws:// вместо http://)
-        let wsUrl = serverUrl.replace('http://', 'ws://') + '/ws/admin/events';
+        let wsUrl = localServerUrl.replace('http://', 'ws://') + '/ws/admin/events';
 
         // Добавляем токен в query параметр
         if (token) {
@@ -196,7 +203,7 @@ export function useAdminEventsWebSocket({
       }
       wsRef.current = null;
     };
-  }, [enabled, mode, serverUrl, addJudge, removeJudge]); // Убрали callbacks из deps
+  }, [enabled, mode, addJudge, removeJudge]); // Убрали callbacks и serverUrl из deps
 
   return {
     isConnected,

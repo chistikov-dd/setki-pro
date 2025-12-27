@@ -292,8 +292,8 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                 onDrop={(e) => handleDrop(e, match.id, 'participant1')}
                 onMouseDown={() => console.log('[DragDrop] mouseDown на participant1')}
               >
-                <div className="flex items-center justify-between pointer-events-none">
-                  <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 select-none">
                     {match.fighter1_name ? (
                       <div>
                         <p className="font-medium text-gray-900">{match.fighter1_name}</p>
@@ -305,10 +305,14 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                       <p className="text-gray-400 italic">Пусто</p>
                     )}
                   </div>
-                  <div className="flex gap-2 pointer-events-auto">
+                  <div className="flex gap-2">
                     {match.fighter1_name ? (
                       <button
-                        onClick={() => handleRemoveParticipant(match.id, 'participant1')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveParticipant(match.id, 'participant1');
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
                         className="p-1 hover:bg-red-500/20 rounded text-red-500"
                         title="Удалить"
                       >
@@ -318,7 +322,11 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleAddParticipant(match, 'participant1')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddParticipant(match, 'participant1');
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
                         className="p-1 hover:bg-green-500/20 rounded text-green-500"
                         title="Добавить"
                       >
@@ -357,8 +365,8 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                 onDrop={(e) => handleDrop(e, match.id, 'participant2')}
                 onMouseDown={() => console.log('[DragDrop] mouseDown на participant2')}
               >
-                <div className="flex items-center justify-between pointer-events-none">
-                  <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 select-none">
                     {match.fighter2_name ? (
                       <div>
                         <p className="font-medium text-gray-900">{match.fighter2_name}</p>
@@ -370,10 +378,14 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                       <p className="text-gray-400 italic">Пусто</p>
                     )}
                   </div>
-                  <div className="flex gap-2 pointer-events-auto">
+                  <div className="flex gap-2">
                     {match.fighter2_name ? (
                       <button
-                        onClick={() => handleRemoveParticipant(match.id, 'participant2')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveParticipant(match.id, 'participant2');
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
                         className="p-1 hover:bg-red-500/20 rounded text-red-500"
                         title="Удалить"
                       >
@@ -383,7 +395,11 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleAddParticipant(match, 'participant2')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddParticipant(match, 'participant2');
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
                         className="p-1 hover:bg-green-500/20 rounded text-green-500"
                         title="Добавить"
                       >

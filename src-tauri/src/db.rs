@@ -220,8 +220,9 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
     // Таблица для хранения токенов судей (отдельная запись для каждого судьи)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS judge_auth (
-            pin_code TEXT PRIMARY KEY,
-            token TEXT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pin_code TEXT NOT NULL,
+            token TEXT NOT NULL UNIQUE,
             judge_name TEXT NOT NULL,
             table_number INTEGER NOT NULL,
             tournament_id INTEGER,
@@ -232,6 +233,10 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_judge_auth_tournament ON judge_auth(tournament_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_judge_auth_pin ON judge_auth(pin_code)")
         .execute(pool)
         .await?;
 

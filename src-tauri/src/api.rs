@@ -448,8 +448,19 @@ impl ApiClient {
         self.logger.info(&format!("table_number: {}", table_number));
         self.logger.info(&format!("tournament_id: {:?}", tournament_id));
 
+        // Удаляем старый токен судьи если он есть (по pin_code + judge_name + table_number)
         sqlx::query(
-            "INSERT OR REPLACE INTO judge_auth (pin_code, token, judge_name, table_number, tournament_id, created_at)
+            "DELETE FROM judge_auth WHERE pin_code = ? AND judge_name = ? AND table_number = ?"
+        )
+        .bind(pin_code)
+        .bind(judge_name)
+        .bind(table_number)
+        .execute(self.db.as_ref())
+        .await?;
+
+        // Вставляем новый токен
+        sqlx::query(
+            "INSERT INTO judge_auth (pin_code, token, judge_name, table_number, tournament_id, created_at)
              VALUES (?, ?, ?, ?, ?, datetime('now'))"
         )
         .bind(pin_code)

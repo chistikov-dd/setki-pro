@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { getCachedBrackets, getBracketTableAssignments, type BracketTableAssignment } from '../../services/api';
+import { getCachedBrackets, getCachedBracketsWithMatches, getBracketTableAssignments, type BracketTableAssignment } from '../../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { BracketCardSkeleton, SkeletonList } from '../ui/Skeleton';
@@ -13,6 +13,7 @@ interface BracketSelectionProps {
   onBracketSelect: (bracketId: number, categoryName: string) => void;
   lastSelectedBracketId?: number | null;
   reloadTrigger?: number; // Триггер для принудительной перезагрузки
+  useDirectDbAccess?: boolean; // Для админа - прямой доступ к БД с matches
 }
 
 const FILTERS_STORAGE_KEY = 'bracket_filters';
@@ -22,6 +23,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   onBracketSelect,
   lastSelectedBracketId,
   reloadTrigger,
+  useDirectDbAccess = false,
 }) => {
   const [brackets, setBrackets] = useState<BracketResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -157,17 +159,26 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     setError(null);
 
     try {
-      // Получаем serverUrl из store для локального сервера
-      const { mode, serverUrl } = useServerModeStore.getState();
-      const url = mode === 'local-client' ? serverUrl : null;
-
       const loadStartTime = performance.now();
       console.log('[BracketSelection] ===== НАЧАЛО ЗАГРУЗКИ СЕТОК =====');
       console.log('[BracketSelection] tournamentId:', tournamentId);
-      console.log('[BracketSelection] mode:', mode);
-      console.log('[BracketSelection] serverUrl:', url);
+      console.log('[BracketSelection] useDirectDbAccess:', useDirectDbAccess);
 
-      const data = await getCachedBrackets(tournamentId, url);
+      let data: BracketResponse[];
+      let serverUrl: string | null = null;
+
+      if (useDirectDbAccess) {
+        // Админ - прямой доступ к БД с matches
+        console.log('[BracketSelection] Using direct DB access with matches');
+        data = await getCachedBracketsWithMatches(tournamentId);
+      } else {
+        // Судья - обычный режим
+        const { mode, serverUrl: url } = useServerModeStore.getState();
+        serverUrl = mode === 'local-client' ? url : null;
+        console.log('[BracketSelection] mode:', mode);
+        console.log('[BracketSelection] serverUrl:', serverUrl);
+        data = await getCachedBrackets(tournamentId, serverUrl);
+      }
 
       const fetchTime = performance.now() - loadStartTime;
       console.log(`[BracketSelection] getCachedBrackets завершен за ${fetchTime.toFixed(0)}ms`);
@@ -177,7 +188,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       // Загрузить информацию о занятых столах
       try {
-        const assignments = await getBracketTableAssignments(tournamentId, url);
+        const assignments = await getBracketTableAssignments(tournamentId, serverUrl);
         const assignmentsMap = new Map<number, BracketTableAssignment>();
         assignments.forEach((assignment) => {
           assignmentsMap.set(assignment.bracket_id, assignment);

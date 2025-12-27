@@ -2,8 +2,9 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
+import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
-import { downloadTournament, isTournamentDownloaded, clearTournamentCache } from '../../services/api';
+import { downloadTournament, isTournamentDownloaded, clearTournamentCache, getBracketMatches } from '../../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/Dialog';
@@ -13,6 +14,9 @@ import { JudgeTablesMonitor } from './JudgeTablesMonitor';
 import { ActiveMatchesMonitor } from './ActiveMatchesMonitor';
 import { ActiveSessionsPanel } from './ActiveSessionsPanel';
 import { SyncProgress } from './SyncProgress';
+import { TournamentBracket } from '../brackets/TournamentBracket';
+import { BracketSelection } from '../judge/BracketSelection';
+import type { Match } from '../../types';
 import { TournamentCardSkeleton, SkeletonList } from '../ui/Skeleton';
 import { ToastContainer, Toast } from '../ui/Toast';
 import { useToast } from '../../hooks/useToast';
@@ -42,6 +46,10 @@ export const AdminDashboard = () => {
   const [showServerModeDialog, setShowServerModeDialog] = useState(false);
   const [isTournamentCached, setIsTournamentCached] = useState(false);
   const [showClearCacheDialog, setShowClearCacheDialog] = useState(false);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'bracket-editor'>('dashboard');
+  const [selectedBracketForEdit, setSelectedBracketForEdit] = useState<{ id: number; name: string } | null>(null);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [isLoadingMatches, setIsLoadingMatches] = useState(false);
 
   // Toast уведомления
   const { toasts, showToast, hideToast } = useToast();
@@ -201,6 +209,82 @@ export const AdminDashboard = () => {
     setShowSuccessDialog(true);
   };
 
+  const loadMatches = async (bracketId: number) => {
+    setIsLoadingMatches(true);
+    try {
+      console.log('[AdminDashboard] Загрузка матчей, bracket_id:', bracketId);
+      const data = await getBracketMatches(bracketId, null);
+
+      // Преобразуем MatchResponse в Match
+      const mappedMatches: Match[] = data.map((matchResponse: any) => {
+        return {
+          id: matchResponse.id,
+          bracket_id: matchResponse.bracket_id,
+          round_number: matchResponse.round_number,
+          match_number: matchResponse.match_number,
+          winner_id: matchResponse.winner_id,
+          status: matchResponse.status,
+          score_participant1: matchResponse.score_participant1 ?? 0,
+          score_participant2: matchResponse.score_participant2 ?? 0,
+          warnings_participant1: 0,
+          warnings_participant2: 0,
+          result_type: matchResponse.result_type,
+          participant1: matchResponse.participant1 || (matchResponse.participant1_id ? {
+            id: matchResponse.participant1_id,
+            fighter_id: matchResponse.participant1_id,
+            full_name: matchResponse.fighter1_name || '',
+            club_name: matchResponse.fighter1_club || matchResponse.participant1?.club_name,
+          } : {
+            id: 0,
+            fighter_id: 0,
+            full_name: '',
+            club_name: undefined,
+          }),
+          participant2: matchResponse.participant2 || (matchResponse.participant2_id ? {
+            id: matchResponse.participant2_id,
+            fighter_id: matchResponse.participant2_id,
+            full_name: matchResponse.fighter2_name || '',
+            club_name: matchResponse.fighter2_club || matchResponse.participant2?.club_name,
+          } : {
+            id: 0,
+            fighter_id: 0,
+            full_name: '',
+            club_name: undefined,
+          }),
+        };
+      });
+
+      setMatches(mappedMatches);
+    } catch (error) {
+      console.error('Ошибка загрузки матчей:', error);
+      showToast('Не удалось загрузить матчи сетки', 'error', 3000);
+    } finally {
+      setIsLoadingMatches(false);
+    }
+  };
+
+  const handleOpenBracketEditor = (bracketId: number, bracketName: string) => {
+    setSelectedBracketForEdit({ id: bracketId, name: bracketName });
+    setActiveTab('bracket-editor');
+    loadMatches(bracketId);
+    // Автоматически включить режим редактирования для администратора
+    useBracketEditorStore.getState().setEditMode(true, bracketId);
+  };
+
+  const handleCloseBracketEditor = () => {
+    setSelectedBracketForEdit(null);
+    // НЕ меняем вкладку - остаемся на bracket-editor для выбора другой сетки
+    setMatches([]);
+    // Выключить режим редактирования
+    useBracketEditorStore.getState().setEditMode(false);
+  };
+
+  const handleBracketEdited = () => {
+    if (selectedBracketForEdit) {
+      loadMatches(selectedBracketForEdit.id);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 p-6">
       <div className="max-w-7xl mx-auto">
@@ -224,19 +308,62 @@ export const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Error Display */}
-        {error && (
-          <Card variant="bordered" className="mb-6 bg-red-50 border-red-300">
-            <CardContent>
-              <div className="flex justify-between items-center">
-                <p className="text-red-700">{error}</p>
-                <Button variant="ghost" size="sm" onClick={clearError}>
-                  Закрыть
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Tabs - показываем только если турнир загружен */}
+        {currentSession && (
+          <div className="mb-6">
+            <div className="border-b border-gray-200">
+              <nav className="-mb-px flex space-x-8">
+                <button
+                  onClick={() => setActiveTab('dashboard')}
+                  className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                    activeTab === 'dashboard'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-600 hover:text-gray-800 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                    </svg>
+                    Панель управления
+                  </div>
+                </button>
+                <button
+                  onClick={() => setActiveTab('bracket-editor')}
+                  className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                    activeTab === 'bracket-editor'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-600 hover:text-gray-800 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    Редактирование сеток
+                  </div>
+                </button>
+              </nav>
+            </div>
+          </div>
         )}
+
+        {/* Dashboard Tab Content */}
+        {activeTab === 'dashboard' && (
+          <>
+            {/* Error Display */}
+            {error && (
+              <Card variant="bordered" className="mb-6 bg-red-50 border-red-300">
+                <CardContent>
+                  <div className="flex justify-between items-center">
+                    <p className="text-red-700">{error}</p>
+                    <Button variant="ghost" size="sm" onClick={clearError}>
+                      Закрыть
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
         {/* Current Tournament Display */}
         {currentSession ? (
@@ -394,11 +521,63 @@ export const AdminDashboard = () => {
           </div>
         )}
 
-        {/* Sync Section */}
-        {currentSession && (
-          <div className="mb-8">
-            <SyncProgress tournamentId={currentSession.tournament_id} />
-          </div>
+            {/* Sync Section */}
+            {currentSession && (
+              <div className="mb-8">
+                <SyncProgress tournamentId={currentSession.tournament_id} />
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Bracket Editor Tab Content */}
+        {activeTab === 'bracket-editor' && currentSession && (
+          <>
+            {selectedBracketForEdit ? (
+              <div className="bg-white rounded-lg shadow-sm p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <button
+                      onClick={handleCloseBracketEditor}
+                      className="text-blue-600 hover:text-blue-700 font-medium mb-2 flex items-center gap-2"
+                    >
+                      ← Выбрать другую сетку
+                    </button>
+                    <h2 className="text-2xl font-bold text-gray-900">
+                      {selectedBracketForEdit.name}
+                    </h2>
+                  </div>
+                </div>
+                {isLoadingMatches ? (
+                  <div className="flex items-center justify-center py-12">
+                    <div className="text-center">
+                      <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-400 border-t-blue-500 mb-4"></div>
+                      <p className="text-gray-800">Загрузка матчей...</p>
+                    </div>
+                  </div>
+                ) : matches.length > 0 ? (
+                  <TournamentBracket
+                    matches={matches}
+                    onStartMatch={() => {}}
+                    categoryName={selectedBracketForEdit.name}
+                    bracketId={selectedBracketForEdit.id}
+                    onMatchesReload={() => loadMatches(selectedBracketForEdit.id)}
+                    onBracketEdited={handleBracketEdited}
+                  />
+                ) : (
+                  <div className="bg-white/30 border border-gray-400/50 rounded-lg p-8 text-center">
+                    <p className="text-gray-800">Нет матчей в этой сетке</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <BracketSelection
+                tournamentId={currentSession.tournament_id}
+                onBracketSelect={handleOpenBracketEditor}
+                useDirectDbAccess={true}
+              />
+            )}
+          </>
         )}
       </div>
 

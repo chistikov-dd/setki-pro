@@ -153,6 +153,15 @@ export async function getCachedBrackets(tournamentId: number, serverUrl?: string
 }
 
 /**
+ * Получить сетки из кэша с матчами (для админа)
+ */
+export async function getCachedBracketsWithMatches(tournamentId: number): Promise<BracketResponse[]> {
+  return await invoke<BracketResponse[]>('get_cached_brackets_with_matches', {
+    tournamentId
+  });
+}
+
+/**
  * Синхронизировать изменения с сервером (setki.pro)
  */
 export async function syncChanges(): Promise<void> {
