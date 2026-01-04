@@ -364,7 +364,17 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     if (!schema) return [];
 
     // Фильтруем только те характеристики, у которых use_as_category_tag=true
-    return schema.filter(field => field.use_as_category_tag && field.options);
+    const filtered = schema.filter(field => field.use_as_category_tag && field.options);
+
+    // Дедупликация по ключу (на случай если в схеме есть дубли)
+    const uniqueByKey = new Map();
+    filtered.forEach(field => {
+      if (!uniqueByKey.has(field.key)) {
+        uniqueByKey.set(field.key, field);
+      }
+    });
+
+    return Array.from(uniqueByKey.values());
   }, [brackets]);
 
   // Получить уникальные значения для каждой характеристики из всех сеток
@@ -389,7 +399,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         if (!valuesMap.has(filter.key)) {
           valuesMap.set(filter.key, new Set());
         }
-        valuesMap.get(filter.key)!.add(filter.value);
+        // Нормализуем значение (trim, lowercase) для правильной дедупликации
+        const normalizedValue = String(filter.value).trim();
+        valuesMap.get(filter.key)!.add(normalizedValue);
       });
     });
 
