@@ -161,8 +161,12 @@ export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
 
       console.log('[CreateBracketDialog] Bracket created with ID:', bracketId);
       showToast(`Сетка создана (ID: ${bracketId})`, 'success');
-      onSuccess();
-      onClose();
+
+      // Даём время на сохранение данных в БД перед перезагрузкой списка
+      setTimeout(() => {
+        onSuccess();
+        onClose();
+      }, 300);
     } catch (error) {
       console.error('[CreateBracketDialog] Error creating bracket:', error);
       handleError(error);

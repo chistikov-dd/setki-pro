@@ -118,11 +118,13 @@ export function filterBrackets(
   return enriched.filter((bracket) => {
     // Фильтр по полу
     if (filters.gender !== 'all' && bracket.gender !== filters.gender) {
+      console.log(`[bracketFilters] Сетка ${bracket.id} отфильтрована: пол ${bracket.gender} не соответствует фильтру ${filters.gender}`);
       return false;
     }
 
     // Фильтр по виду спорта
     if (filters.sportId !== 'all' && bracket.sport_id !== filters.sportId) {
+      console.log(`[bracketFilters] Сетка ${bracket.id} отфильтрована: вид спорта ${bracket.sport_id} не соответствует фильтру ${filters.sportId}`);
       return false;
     }
 
@@ -134,9 +136,11 @@ export function filterBrackets(
 
         // Проверяем, есть ли у сетки нужная характеристика с нужным значением
         // Поддерживаем оба формата: массив и объект (для обратной совместимости)
+        // Нормализуем значения для корректного сравнения (trim)
+        const normalizedFilterValue = String(value).trim();
         const hasCharacteristic = Array.isArray(bracket.characteristic_filters)
           ? bracket.characteristic_filters.some(
-              filter => filter.key === key && filter.value === value
+              filter => filter.key === key && String(filter.value).trim() === normalizedFilterValue
             )
           : false;
 

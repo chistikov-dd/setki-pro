@@ -18,6 +18,7 @@ interface BracketSelectionProps {
 }
 
 const FILTERS_STORAGE_KEY = 'bracket_filters';
+const SHOW_FILTERS_STORAGE_KEY = 'bracket_show_filters';
 
 export const BracketSelection: React.FC<BracketSelectionProps> = ({
   tournamentId,
@@ -71,6 +72,19 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   const [searchInput, setSearchInput] = useState(filters.searchQuery);
   const debouncedSearch = useDebounce(searchInput, 300);
 
+  // Загружаем состояние показа фильтров из localStorage
+  const [showFilters, setShowFilters] = useState(() => {
+    const saved = localStorage.getItem(SHOW_FILTERS_STORAGE_KEY);
+    if (saved !== null) {
+      try {
+        return JSON.parse(saved);
+      } catch (error) {
+        console.error('[BracketSelection] Failed to parse showFilters from localStorage:', error);
+      }
+    }
+    return true; // По умолчанию показываем фильтры
+  });
+
   // Обновить фильтры при изменении debounced search
   useEffect(() => {
     setFilters(prev => ({ ...prev, searchQuery: debouncedSearch }));
@@ -80,6 +94,11 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   useEffect(() => {
     localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
   }, [filters]);
+
+  // Сохранить состояние показа фильтров в localStorage при изменении
+  useEffect(() => {
+    localStorage.setItem(SHOW_FILTERS_STORAGE_KEY, JSON.stringify(showFilters));
+  }, [showFilters]);
 
   useEffect(() => {
     console.log('[BracketSelection] Перезагрузка сеток, reloadTrigger:', reloadTrigger);
@@ -186,6 +205,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       console.log(`[BracketSelection] getCachedBrackets завершен за ${fetchTime.toFixed(0)}ms`);
       console.log(`[BracketSelection] Получено ${data.length} сеток`);
 
+      // Логируем ID всех сеток для отладки
+      console.log(`[BracketSelection] IDs сеток:`, data.map(b => `${b.id} (${b.category_name})`));
+
       setBrackets(data);
 
       // Загрузить информацию о занятых столах
@@ -250,17 +272,28 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
   // Применить фильтры и сортировку
   const filteredBrackets = useMemo(() => {
+    console.log(`[BracketSelection] Фильтрация: всего сеток до фильтрации: ${brackets.length}`);
     const sorted = applySortAndFilter(brackets, filters, participantsByBracket);
+    console.log(`[BracketSelection] После applySortAndFilter: ${sorted.length} сеток`);
+
     // Отфильтровать сетки без участников, НО показывать локально созданные (ID < 0)
-    return sorted.filter(bracket => {
-      // Локально созданные сетки (отрицательный ID) показываем всегда
+    const result = sorted.filter(bracket => {
+      // Локально созданные сетки (отрицательный ID) показываем всегда, даже без участников
       if (bracket.id < 0) {
+        console.log(`[BracketSelection] ✅ Показываем локально созданную сетку: ${bracket.category_name} (ID: ${bracket.id})`);
         return true;
       }
       // Остальные сетки показываем только если есть участники
       const participants = participantsByBracket[bracket.id];
-      return participants && participants.length > 0;
+      const hasParticipants = participants && participants.length > 0;
+      if (!hasParticipants) {
+        console.log(`[BracketSelection] ❌ Скрываем сетку без участников: ${bracket.category_name} (ID: ${bracket.id})`);
+      }
+      return hasParticipants;
     });
+
+    console.log(`[BracketSelection] После фильтрации участников: ${result.length} сеток`);
+    return result;
   }, [brackets, filters, participantsByBracket]);
 
   // Отслеживаем изменение lastSelectedBracketId для определения момента возврата
@@ -593,6 +626,22 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
               className="w-full pl-10 pr-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+          <Button
+            onClick={() => setShowFilters(!showFilters)}
+            variant="secondary"
+            size="sm"
+            className="whitespace-nowrap"
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+              />
+            </svg>
+            {showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
+          </Button>
           {hasActiveFilters && (
             <Button onClick={handleResetFilters} variant="secondary" size="sm">
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -608,113 +657,118 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
           )}
         </div>
 
-        {/* Фильтр по полу */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Пол:</span>
-          <div className="flex gap-2 flex-wrap">
-            {(['all', 'male', 'female'] as const).map((gender) => (
-              <button
-                key={gender}
-                onClick={() => setFilters(prev => ({ ...prev, gender }))}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                  filters.gender === gender
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {gender === 'all' ? 'Все' : getGenderLabel(gender)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Фильтр по виду спорта (только если есть несколько видов спорта) */}
-        {uniqueSports.length > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
-            <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => setFilters(prev => ({ ...prev, sportId: 'all' }))}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                  filters.sportId === 'all'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Все
-              </button>
-              {uniqueSports.map((sport) => (
-                <button
-                  key={sport.id}
-                  onClick={() => setFilters(prev => ({ ...prev, sportId: sport.id }))}
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                    filters.sportId === sport.id
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {sport.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Динамические фильтры по характеристикам */}
-        {availableCharacteristics.map((characteristic) => {
-          const values = characteristicValues.get(characteristic.key);
-          if (!values || values.size === 0) return null;
-
-          return (
-            <div key={characteristic.key} className="flex items-center gap-2">
-              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">
-                {characteristic.label}:
-              </span>
+        {/* Фильтры (скрываемые) */}
+        {showFilters && (
+          <>
+            {/* Фильтр по полу */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Пол:</span>
               <div className="flex gap-2 flex-wrap">
-                <button
-                  onClick={() =>
-                    setFilters(prev => ({
-                      ...prev,
-                      characteristics: { ...(prev.characteristics || {}), [characteristic.key]: 'all' },
-                    }))
-                  }
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                    !filters.characteristics?.[characteristic.key] ||
-                    filters.characteristics[characteristic.key] === 'all'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Все
-                </button>
-                {Array.from(values).map((value) => {
-                  // Находим label для value из options
-                  const option = characteristic.options?.find(opt => opt.value === value);
-                  const label = option?.label || value;
+                {(['all', 'male', 'female'] as const).map((gender) => (
+                  <button
+                    key={gender}
+                    onClick={() => setFilters(prev => ({ ...prev, gender }))}
+                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      filters.gender === gender
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {gender === 'all' ? 'Все' : getGenderLabel(gender)}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-                  return (
+            {/* Фильтр по виду спорта (только если есть несколько видов спорта) */}
+            {uniqueSports.length > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={() => setFilters(prev => ({ ...prev, sportId: 'all' }))}
+                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      filters.sportId === 'all'
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Все
+                  </button>
+                  {uniqueSports.map((sport) => (
                     <button
-                      key={value}
-                      onClick={() =>
-                        setFilters(prev => ({
-                          ...prev,
-                          characteristics: { ...(prev.characteristics || {}), [characteristic.key]: value },
-                        }))
-                      }
+                      key={sport.id}
+                      onClick={() => setFilters(prev => ({ ...prev, sportId: sport.id }))}
                       className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                        filters.characteristics?.[characteristic.key] === value
+                        filters.sportId === sport.id
                           ? 'bg-blue-500 text-white'
                           : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                       }`}
                     >
-                      {label}
+                      {sport.name}
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            )}
+
+            {/* Динамические фильтры по характеристикам */}
+            {availableCharacteristics.map((characteristic) => {
+              const values = characteristicValues.get(characteristic.key);
+              if (!values || values.size === 0) return null;
+
+              return (
+                <div key={characteristic.key} className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700 font-medium whitespace-nowrap">
+                    {characteristic.label}:
+                  </span>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() =>
+                        setFilters(prev => ({
+                          ...prev,
+                          characteristics: { ...(prev.characteristics || {}), [characteristic.key]: 'all' },
+                        }))
+                      }
+                      className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                        !filters.characteristics?.[characteristic.key] ||
+                        filters.characteristics[characteristic.key] === 'all'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Все
+                    </button>
+                    {Array.from(values).map((value) => {
+                      // Находим label для value из options
+                      const option = characteristic.options?.find(opt => opt.value === value);
+                      const label = option?.label || value;
+
+                      return (
+                        <button
+                          key={value}
+                          onClick={() =>
+                            setFilters(prev => ({
+                              ...prev,
+                              characteristics: { ...(prev.characteristics || {}), [characteristic.key]: value },
+                            }))
+                          }
+                          className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                            filters.characteristics?.[characteristic.key] === value
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
       </div>
 
       {/* Сообщение если нет результатов */}

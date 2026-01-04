@@ -10,7 +10,8 @@ import { BracketSelection } from './BracketSelection';
 import { TournamentBracket } from '../brackets/TournamentBracket';
 import { MatchScreen } from '../match/MatchScreen';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
-import { reserveBracket, getBracketMatches, releaseBracket, undoFinishedMatch } from '../../services/api';
+import { LogoutChoiceDialog } from './LogoutChoiceDialog';
+import { reserveBracket, getBracketMatches, releaseBracket, undoFinishedMatch, clearSavedCredentials } from '../../services/api';
 import { Toast, ToastContainer } from '../ui/Toast';
 import type { Match } from '../../types';
 
@@ -30,6 +31,7 @@ export const JudgeDashboard: React.FC = () => {
   const [bracketSelectionReloadTrigger, setBracketSelectionReloadTrigger] = useState(0);
   const [confirmUndoMatchId, setConfirmUndoMatchId] = useState<number | null>(null);
   const [isUndoing, setIsUndoing] = useState(false);
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false);
 
   // Стабильные callbacks для useSyncWorker
   const handleSyncSuccess = useCallback(() => {
@@ -79,7 +81,14 @@ export const JudgeDashboard: React.FC = () => {
     };
   }, [showToast]);
 
-  const handleLogout = async () => {
+  const handleLogoutClick = () => {
+    setShowLogoutDialog(true);
+  };
+
+  const handleQuickLogout = async () => {
+    // Быстрый выход - сохраняем credentials для автовхода
+    setShowLogoutDialog(false);
+
     // Освобождаем сетку перед выходом
     if (selectedBracketId) {
       try {
@@ -88,6 +97,33 @@ export const JudgeDashboard: React.FC = () => {
         console.error('Ошибка освобождения сетки при выходе:', error);
       }
     }
+
+    // Выходим без очистки credentials
+    logout();
+  };
+
+  const handleFullLogout = async () => {
+    // Полный выход - очищаем все credentials
+    setShowLogoutDialog(false);
+
+    // Освобождаем сетку перед выходом
+    if (selectedBracketId) {
+      try {
+        await releaseBracket(selectedBracketId);
+      } catch (error) {
+        console.error('Ошибка освобождения сетки при выходе:', error);
+      }
+    }
+
+    // Очищаем сохраненные credentials
+    try {
+      await clearSavedCredentials();
+      console.log('[JudgeDashboard] Credentials cleared');
+    } catch (error) {
+      console.error('Ошибка очистки credentials:', error);
+    }
+
+    // Выходим
     logout();
   };
 
@@ -294,7 +330,7 @@ export const JudgeDashboard: React.FC = () => {
           </div>
           <Button
             variant="ghost"
-            onClick={handleLogout}
+            onClick={handleLogoutClick}
             className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
           >
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -383,7 +419,7 @@ export const JudgeDashboard: React.FC = () => {
                 <p className="text-gray-800 mb-8 max-w-md mx-auto">
                   Не найден ID турнира в вашей сессии. Попробуйте выйти и войти снова.
                 </p>
-                <Button onClick={handleLogout} variant="secondary">
+                <Button onClick={handleLogoutClick} variant="secondary">
                   Выйти
                 </Button>
               </div>
@@ -414,6 +450,16 @@ export const JudgeDashboard: React.FC = () => {
           cancelText="Отмена"
           onConfirm={confirmUndoMatch}
           onCancel={() => setConfirmUndoMatchId(null)}
+        />
+      )}
+
+      {/* Диалог выбора типа выхода */}
+      {showLogoutDialog && (
+        <LogoutChoiceDialog
+          onQuickLogout={handleQuickLogout}
+          onFullLogout={handleFullLogout}
+          onCancel={() => setShowLogoutDialog(false)}
+          judgeName={user?.judge_name}
         />
       )}
     </div>
