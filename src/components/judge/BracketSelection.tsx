@@ -577,7 +577,26 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         <CreateBracketDialog
           tournamentId={tournamentId}
           onClose={() => setShowCreateDialog(false)}
-          onSuccess={() => loadBrackets()}
+          onSuccess={() => {
+            // Сбросить фильтры, чтобы новая сетка была видна
+            const hadActiveFilters = hasActiveFilters;
+            handleResetFilters();
+
+            // Перезагрузить список сеток
+            loadBrackets();
+
+            // Показать уведомление если фильтры были активны
+            if (hadActiveFilters) {
+              const event = new CustomEvent('show-toast', {
+                detail: {
+                  message: 'Фильтры сброшены для отображения новой сетки',
+                  type: 'info',
+                  duration: 3000,
+                },
+              });
+              window.dispatchEvent(event);
+            }
+          }}
         />
       )}
 
