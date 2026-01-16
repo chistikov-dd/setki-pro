@@ -3,6 +3,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { invoke } from '@tauri-apps/api/core';
 import { LoginChoice } from "./components/auth/LoginChoice";
 import { useAuthStore } from "./stores/authStore";
+import { useServerModeStore } from "./stores/serverModeStore";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { ConnectionStatusBanner } from "./components/ui/ConnectionStatusBanner";
 import { getSavedCredentials, getSavedJudgeCredentials, checkUnsyncedCount } from "./services/api";
@@ -14,9 +15,8 @@ const JudgeLogin = lazy(() => import("./components/auth/JudgeLogin").then(m => (
 const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard").then(m => ({ default: m.AdminDashboard })));
 const JudgeDashboard = lazy(() => import("./components/judge/JudgeDashboard").then(m => ({ default: m.JudgeDashboard })));
 const PublicDisplayPage = lazy(() => import("./pages/PublicDisplayPage").then(m => ({ default: m.PublicDisplayPage })));
-const ServerModeSelector = lazy(() => import("./components/admin/ServerModeSelector").then(m => ({ default: m.ServerModeSelector })));
 
-type AuthScreen = 'choice' | 'admin' | 'judge' | 'server-mode';
+type AuthScreen = 'choice' | 'admin' | 'judge';
 
 // Loading компонент для Suspense fallback
 function LoadingSpinner() {
@@ -41,6 +41,7 @@ function App() {
   const [isAutoLoginInProgress, setIsAutoLoginInProgress] = useState(false);
   const [autoLoginRole, setAutoLoginRole] = useState<'admin' | 'judge' | null>(null);
   const { isAuthenticated, user, loginAsAdmin, loginAsAdminOffline, loginAsJudge, logout } = useAuthStore();
+  const { setMode, setServerUrl } = useServerModeStore();
 
   console.log('[App] Window label:', currentWindow.label, 'isPublicDisplay:', isPublicDisplayWindow);
 
@@ -218,6 +219,18 @@ function App() {
               // Сначала пробуем online вход
               await loginAsAdmin(login, password);
               console.log('[Auto-login Admin] Online success');
+
+              // Запускаем локальный сервер после успешного online входа
+              try {
+                console.log('[Auto-login Admin] Starting local server...');
+                const url = await invoke<string>('start_local_server', { port: 8081, tournamentName: null });
+                console.log('[Auto-login Admin] Local server started:', url);
+                setMode('local-server');
+                setServerUrl(null);
+              } catch (serverError) {
+                console.error('[Auto-login Admin] Failed to start local server:', serverError);
+              }
+
               return; // Успешный вход, не показываем форму
             } catch (error) {
               console.error('[Auto-login Admin] Online failed, trying offline:', error);
@@ -226,6 +239,18 @@ function App() {
               try {
                 loginAsAdminOffline(login, userId);
                 console.log('[Auto-login Admin] Offline success');
+
+                // Запускаем локальный сервер для offline режима
+                try {
+                  console.log('[Auto-login Admin] Starting local server...');
+                  const url = await invoke<string>('start_local_server', { port: 8081, tournamentName: null });
+                  console.log('[Auto-login Admin] Local server started:', url);
+                  setMode('local-server');
+                  setServerUrl(null);
+                } catch (serverError) {
+                  console.error('[Auto-login Admin] Failed to start local server:', serverError);
+                }
+
                 return; // Успешный offline вход
               } catch (offlineError) {
                 console.error('[Auto-login Admin] Offline failed:', offlineError);
@@ -281,10 +306,6 @@ function App() {
     }
   };
 
-  const handleOpenServerMode = () => {
-    setAuthScreen('server-mode');
-  };
-
   const handleLoginSuccess = () => {
     // Успешный вход - ничего не делаем, компонент перерисуется автоматически
   };
@@ -304,7 +325,7 @@ function App() {
     if (user.role === 'organizer' || user.role === 'admin') {
       return (
         <ErrorBoundary>
-          <ConnectionStatusBanner alwaysShow />
+          <ConnectionStatusBanner />
           <Suspense fallback={<LoadingSpinner />}>
             <AdminDashboard />
           </Suspense>
@@ -315,7 +336,7 @@ function App() {
     // Судейская панель
     return (
       <ErrorBoundary>
-        <ConnectionStatusBanner alwaysShow />
+        <ConnectionStatusBanner />
         <Suspense fallback={<LoadingSpinner />}>
           <JudgeDashboard />
         </Suspense>
@@ -329,7 +350,6 @@ function App() {
       {authScreen === 'choice' && (
         <LoginChoice
           onSelectRole={handleSelectRole}
-          onOpenServerMode={handleOpenServerMode}
           isAutoLoginInProgress={isAutoLoginInProgress}
           autoLoginRole={autoLoginRole}
         />
@@ -347,16 +367,6 @@ function App() {
           <JudgeLogin
             onBack={handleBack}
             onSuccess={handleLoginSuccess}
-          />
-        </Suspense>
-      )}
-      {authScreen === 'server-mode' && (
-        <Suspense fallback={<LoadingSpinner />}>
-          <ServerModeSelector
-            currentMode="online"
-            onModeChange={handleBack}
-            onBack={handleBack}
-            isJudgeMode={true}
           />
         </Suspense>
       )}

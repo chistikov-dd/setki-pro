@@ -377,5 +377,33 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Таблица для назначения сеток за судейскими столами
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bracket_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bracket_id INTEGER NOT NULL,
+            tournament_id INTEGER NOT NULL,
+            table_number INTEGER NOT NULL,
+            judge_name TEXT NOT NULL,
+            reserved_at TEXT NOT NULL DEFAULT (datetime('now')),
+            status TEXT NOT NULL DEFAULT 'active',
+            UNIQUE(bracket_id, tournament_id)
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_assignments_tournament ON bracket_assignments(tournament_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_assignments_table ON bracket_assignments(table_number)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_bracket_assignments_status ON bracket_assignments(status)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }

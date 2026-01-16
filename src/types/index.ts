@@ -55,6 +55,12 @@ export interface Match {
   result_type?: 'points' | 'submission' | 'disqualification';
 }
 
+// Информация о следующем матче для судьи
+export interface NextMatch {
+  match: Match;
+  roundName: string; // Название раунда (например, "1/4 финала")
+}
+
 // Конфигурация начисления баллов
 export interface ScoringAction {
   name: string;
@@ -249,6 +255,23 @@ export interface TournamentTableResponse {
   assigned_user_id?: number;
   assigned_user_name?: string;
   assigned_at?: string;
+}
+
+// Bracket Assignment API
+export interface BracketAssignment {
+  id: number;
+  bracket_id: number;
+  tournament_id: number;
+  table_number: number;
+  judge_name: string;
+  reserved_at: string;
+  status: 'active' | 'released';
+}
+
+export interface BracketTableAssignment {
+  bracket_id: number;
+  table_number: number;
+  judge_name: string;
 }
 
 // Sync API

@@ -294,10 +294,14 @@ export const useBracketEditorStore = create<BracketEditorState>((set, get) => ({
       // Обновить историю
       await get().loadEditHistory(bracketId);
     } catch (error) {
+      console.error('[bracketEditorStore] Ошибка в addParticipant:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Ошибка при добавлении участника';
       set({
-        error: error instanceof Error ? error.message : 'Ошибка при добавлении участника',
+        error: errorMessage,
         isLoading: false,
       });
+      // Пробросить ошибку дальше, чтобы компонент мог показать toast
+      throw error;
     }
   },
 

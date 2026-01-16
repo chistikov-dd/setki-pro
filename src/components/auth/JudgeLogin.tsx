@@ -3,7 +3,9 @@ import { Button } from '../ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
 import { checkCachedPin } from '../../services/api';
+import { invoke } from '@tauri-apps/api/core';
 
 interface JudgeLoginProps {
   onBack: () => void;
@@ -17,11 +19,13 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
   const [pin, setPin] = useState(['', '', '', '', '', '']);
   const [judgeName, setJudgeName] = useState('');
   const [tableNumber, setTableNumber] = useState('');
+  const [serverIp, setServerIp] = useState('192.168.1.10');
   const [isOfflineAvailable, setIsOfflineAvailable] = useState(false);
   const [isCheckingPin, setIsCheckingPin] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const { loginAsJudge, isLoading, error } = useAuthStore();
+  const { setMode, setServerUrl } = useServerModeStore();
 
   useEffect(() => {
     // Фокус на первом поле при загрузке
@@ -89,8 +93,16 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
     e.preventDefault();
     const pinString = pin.join('');
     const tableNum = parseInt(tableNumber);
-    if (pinString.length === 6 && judgeName.trim() && !isNaN(tableNum) && tableNum > 0) {
+    if (pinString.length === 6 && judgeName.trim() && !isNaN(tableNum) && tableNum > 0 && serverIp.trim()) {
       try {
+        // Устанавливаем режим local-client и URL сервера
+        const fullUrl = `http://${serverIp.trim()}:8081/api/v1`;
+        await invoke('set_api_base_url', { url: fullUrl });
+
+        setMode('local-client');
+        setServerUrl(fullUrl);
+
+        // Логин судьи
         await loginAsJudge(pinString, judgeName.trim(), tableNum);
         onSuccess?.();
       } catch (err) {
@@ -101,6 +113,7 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
 
   const isPinComplete = pin.every(digit => digit !== '');
   const isTableNumberValid = tableNumber && !isNaN(parseInt(tableNumber)) && parseInt(tableNumber) > 0;
+  const isServerIpValid = serverIp.trim().length > 0;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-50 to-gray-100 p-6">
@@ -191,6 +204,16 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
                 )}
               </div>
 
+              {/* IP адрес сервера */}
+              <Input
+                label="IP адрес локального сервера"
+                type="text"
+                placeholder="192.168.1.10"
+                value={serverIp}
+                onChange={(e) => setServerIp(e.target.value)}
+                disabled={isLoading}
+              />
+
               {/* Номер стола */}
               <Input
                 label="Номер стола"
@@ -216,7 +239,7 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
                 type="submit"
                 variant="primary"
                 fullWidth
-                disabled={isLoading || !isPinComplete || !judgeName.trim() || !isTableNumberValid}
+                disabled={isLoading || !isPinComplete || !judgeName.trim() || !isTableNumberValid || !isServerIpValid}
                 className="!mt-8"
               >
                 {isLoading ? (
@@ -233,17 +256,11 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
               </Button>
             </form>
 
-            <div className="mt-8 p-4 rounded-lg bg-emerald-50 border border-emerald-200">
+            <div className="mt-8 p-4 rounded-lg bg-blue-50 border border-blue-200">
               <p className="text-gray-900 text-sm text-center leading-relaxed">
-                {isOfflineAvailable && isPinComplete ? (
-                  <>
-                    <span className="text-emerald-600 font-semibold">Offline режим активен</span>
-                    <br />
-                    Вы можете войти без подключения к интернету
-                  </>
-                ) : (
-                  <>PIN-код можно получить у администратора столов</>
-                )}
+                <span className="font-semibold">Подключение к локальному серверу администратора</span>
+                <br />
+                IP-адрес и PIN-код можно получить у администратора столов
               </p>
             </div>
           </CardContent>

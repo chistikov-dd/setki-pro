@@ -263,6 +263,25 @@ export async function getBracketMatches(bracketId: number, serverUrl?: string | 
 }
 
 /**
+ * Получить следующий незавершенный матч в сетке
+ * @param bracketId - ID сетки
+ * @param currentMatchId - ID текущего матча
+ * @param serverUrl - опциональный URL локального сервера
+ * @returns следующий матч или null если не найден
+ */
+export async function getNextMatchInBracket(
+  bracketId: number,
+  currentMatchId: number,
+  serverUrl?: string | null
+): Promise<any | null> {
+  return await invoke<any | null>('get_next_match_in_bracket', {
+    bracketId,
+    currentMatchId,
+    serverUrl: serverUrl || null
+  });
+}
+
+/**
  * Очистить все резервирования (для отладки)
  */
 export async function clearAllReservations(): Promise<void> {
@@ -287,6 +306,10 @@ export async function createEmptyBracket(
     sportId: number;
     gender: 'male' | 'female' | 'mixed';
     characteristicValues: Record<string, string>;
+    minAge?: number;
+    maxAge?: number;
+    minWeight?: number;
+    maxWeight?: number;
   },
   serverUrl?: string | null
 ): Promise<number> {
@@ -300,6 +323,10 @@ export async function createEmptyBracket(
     sportId: data.sportId,
     gender: data.gender,
     characteristicValues: JSON.stringify(data.characteristicValues),
+    minAge: data.minAge,
+    maxAge: data.maxAge,
+    minWeight: data.minWeight,
+    maxWeight: data.maxWeight,
     serverUrl: serverUrl || null,
   });
 
@@ -414,12 +441,20 @@ export async function createTempParticipant(data: {
   fullName: string;
   clubName?: string;
 }, serverUrl?: string | null): Promise<number> {
-  return await invoke('create_temp_participant', {
-    bracketId: data.bracketId,
-    fullName: data.fullName,
-    clubName: data.clubName,
-    serverUrl: serverUrl || null,
-  });
+  console.log('[API] createTempParticipant вызван:', { ...data, serverUrl });
+  try {
+    const result = await invoke('create_temp_participant', {
+      bracketId: data.bracketId,
+      fullName: data.fullName,
+      clubName: data.clubName,
+      serverUrl: serverUrl || null,
+    });
+    console.log('[API] createTempParticipant успешно, temp_id:', result);
+    return result as number;
+  } catch (error) {
+    console.error('[API] createTempParticipant ошибка:', error);
+    throw error;
+  }
 }
 
 /**
@@ -631,6 +666,21 @@ export async function getBracketTableAssignments(
   });
 }
 
+/**
+ * Получить сетки, зарезервированные за судейским столом
+ */
+export async function getMyBracketAssignments(
+  tournamentId: number,
+  tableNumber: number,
+  serverUrl?: string | null
+): Promise<BracketResponse[]> {
+  return await invoke<BracketResponse[]>('get_my_bracket_assignments', {
+    tournamentId,
+    tableNumber,
+    serverUrl: serverUrl || null,
+  });
+}
+
 // ============================================
 // BRACKET EDITING API (через Tauri Commands)
 // ============================================
@@ -655,12 +705,19 @@ export async function updateBracketParticipant(
   adminId?: number,
   serverUrl?: string | null
 ): Promise<void> {
-  await invoke('update_bracket_participant', {
-    request,
-    judgeName,
-    adminId,
-    serverUrl: serverUrl || null,
-  });
+  console.log('[API] updateBracketParticipant вызван:', { request, judgeName, adminId, serverUrl });
+  try {
+    await invoke('update_bracket_participant', {
+      request,
+      judgeName,
+      adminId,
+      serverUrl: serverUrl || null,
+    });
+    console.log('[API] updateBracketParticipant успешно');
+  } catch (error) {
+    console.error('[API] updateBracketParticipant ошибка:', error);
+    throw error;
+  }
 }
 
 export interface SwapParticipantsRequest {

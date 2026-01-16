@@ -3,7 +3,9 @@ import { Button } from '../ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
 import { hasSavedAuth, getSavedCredentials } from '../../services/api';
+import { invoke } from '@tauri-apps/api/core';
 
 interface AdminLoginProps {
   onBack: () => void;
@@ -17,8 +19,10 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [hasOfflineAccess, setHasOfflineAccess] = useState(false);
+  const [isStartingServer, setIsStartingServer] = useState(false);
 
   const { loginAsAdmin, isLoading, error } = useAuthStore();
+  const { setMode, setServerUrl } = useServerModeStore();
 
   // Проверка offline-доступности при монтировании
   useEffect(() => {
@@ -41,6 +45,23 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     if (login.trim() && password.trim()) {
       try {
         await loginAsAdmin(login, password);
+
+        // Автоматически запускаем локальный сервер после успешного входа
+        console.log('[AdminLogin] Starting local server...');
+        setIsStartingServer(true);
+        try {
+          const url = await invoke<string>('start_local_server', { port: 8081, tournamentName: null });
+          console.log('[AdminLogin] Local server started successfully:', url);
+          setMode('local-server');
+          setServerUrl(null); // Локальный сервер не нуждается в serverUrl
+        } catch (err) {
+          console.error('[AdminLogin] Failed to start local server:', err);
+          // Не блокируем вход, если не удалось запустить сервер
+        } finally {
+          setIsStartingServer(false);
+          console.log('[AdminLogin] Server startup process completed');
+        }
+
         onSuccess?.();
       } catch (err) {
         // Ошибка уже обработана в store
@@ -121,16 +142,16 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                 type="submit"
                 variant="primary"
                 fullWidth
-                disabled={isLoading || !login.trim() || !password.trim()}
+                disabled={isLoading || isStartingServer || !login.trim() || !password.trim()}
                 className="!mt-8"
               >
-                {isLoading ? (
+                {isLoading || isStartingServer ? (
                   <span className="flex items-center gap-2">
                     <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Вход...
+                    {isStartingServer ? 'Запуск сервера...' : 'Вход...'}
                   </span>
                 ) : (
                   'Войти в систему'
@@ -140,7 +161,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
             <div className="mt-8 p-4 rounded-lg bg-blue-500/5 border border-blue-500/20">
               <p className="text-gray-800 text-sm text-center leading-relaxed">
-                После входа вы сможете создать сессию турнира и управлять столами
+                После входа автоматически запустится локальный сервер для подключения судейских столов
               </p>
             </div>
           </CardContent>

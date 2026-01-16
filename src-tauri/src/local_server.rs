@@ -70,6 +70,10 @@ pub struct AuthResponse {
     pub user_id: i32,
     pub role: String,
     pub tournament_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table_number: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +166,10 @@ pub struct CreateEmptyBracketRequest {
     pub sport_id: i32,
     pub gender: String,
     pub characteristic_values: String,
+    pub min_age: Option<i32>,
+    pub max_age: Option<i32>,
+    pub min_weight: Option<i32>,
+    pub max_weight: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,6 +341,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/matches/swap", post(swap_bracket_participants_handler))
         .route("/api/v1/desktop/temp-participants", post(create_temp_participant_handler))
         .route("/api/v1/desktop/bracket-assignments/:tournament_id", get(get_bracket_assignments_handler))
+        .route("/api/v1/desktop/my-bracket-assignments/:tournament_id/:table_number", get(get_my_bracket_assignments_handler))
         .route("/api/v1/desktop/brackets/reserve", post(reserve_bracket_handler))
         .route("/api/v1/desktop/brackets/release", post(release_bracket_handler))
         .route("/api/v1/desktop/brackets/create", post(create_empty_bracket_handler))
@@ -502,6 +511,8 @@ async fn login_by_pin_handler(
                 user_id: 0, // Временный ID для offline судьи
                 role: "referee".to_string(),
                 tournament_id: Some(tournament_id),
+                judge_name: payload.judge_name,
+                table_number: payload.table_number,
             }))
         }
         None => {
@@ -1527,7 +1538,7 @@ async fn reserve_bracket_handler(
 
     // Проверить, что сетка свободна
     let existing = sqlx::query_as::<_, (String, i32)>(
-        "SELECT judge_name, table_number FROM bracket_reservations WHERE bracket_id = ?"
+        "SELECT judge_name, table_number FROM bracket_assignments WHERE bracket_id = ? AND status = 'active'"
     )
     .bind(payload.bracket_id)
     .fetch_optional(&*state.db)
@@ -1549,14 +1560,18 @@ async fn reserve_bracket_handler(
 
     // Зарезервировать сетку
     sqlx::query(
-        "INSERT INTO bracket_reservations (bracket_id, tournament_id, judge_name, table_number, user_id, reserved_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))"
+        "INSERT INTO bracket_assignments (bracket_id, tournament_id, judge_name, table_number, reserved_at, status)
+         VALUES (?, ?, ?, ?, datetime('now'), 'active')
+         ON CONFLICT(bracket_id, tournament_id) DO UPDATE SET
+            judge_name = excluded.judge_name,
+            table_number = excluded.table_number,
+            reserved_at = datetime('now'),
+            status = 'active'"
     )
     .bind(payload.bracket_id)
     .bind(payload.tournament_id)
     .bind(&payload.judge_name)
     .bind(payload.table_number)
-    .bind(payload.user_id)
     .execute(&*state.db)
     .await?;
 
@@ -1588,14 +1603,10 @@ async fn release_bracket_handler(
     println!("[LOCAL SERVER] bracket_id: {}, judge_name: {}",
         payload.bracket_id, payload.judge_name);
 
-    // Получить номер стола перед удалением
+    // Получить номер стола перед освобождением
     let table_number = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT tn.table_number FROM bracket_reservations br
-         INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
-         INNER JOIN table_numbers tn ON js.judge_session_id = tn.judge_session_id
-         WHERE br.bracket_id = ? AND br.judge_name = ?
-         ORDER BY js.logged_in_at DESC
-         LIMIT 1"
+        "SELECT table_number FROM bracket_assignments
+         WHERE bracket_id = ? AND judge_name = ? AND status = 'active'"
     )
     .bind(payload.bracket_id)
     .bind(&payload.judge_name)
@@ -1603,9 +1614,9 @@ async fn release_bracket_handler(
     .await?
     .flatten();
 
-    // Удалить резервирование
+    // Обновить статус на 'released' вместо удаления
     let result = sqlx::query(
-        "DELETE FROM bracket_reservations WHERE bracket_id = ? AND judge_name = ?"
+        "UPDATE bracket_assignments SET status = 'released' WHERE bracket_id = ? AND judge_name = ? AND status = 'active'"
     )
     .bind(payload.bracket_id)
     .bind(&payload.judge_name)
@@ -1642,6 +1653,8 @@ async fn create_empty_bracket_handler(
     println!("[LOCAL SERVER] ========== create_empty_bracket_handler START ==========");
     println!("[LOCAL SERVER] tournament_id: {}, bracket_name: {}, participant_count: {}, sport_id: {}, gender: {}, characteristic_values: {}",
         payload.tournament_id, payload.bracket_name, payload.participant_count, payload.sport_id, payload.gender, payload.characteristic_values);
+    println!("[LOCAL SERVER] min_age: {:?}, max_age: {:?}, min_weight: {:?}, max_weight: {:?}",
+        payload.min_age, payload.max_age, payload.min_weight, payload.max_weight);
 
     // Валидация: participant_count должен быть степенью 2
     if payload.participant_count < 2 || (payload.participant_count & (payload.participant_count - 1)) != 0 {
@@ -1664,7 +1677,9 @@ async fn create_empty_bracket_handler(
         .collect();
 
     // Генерация уникального ID для сетки (отрицательный ID для локальных сеток)
-    let bracket_id = -(chrono::Utc::now().timestamp_millis() as i32);
+    // Используем только младшие 31 бит timestamp для избежания переполнения i32
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let bracket_id = -((timestamp & 0x7FFFFFFF) as i32);
 
     // Получить characteristics_schema из существующей сетки того же вида спорта
     let characteristics_schema = sqlx::query_scalar::<_, String>(
@@ -1710,6 +1725,10 @@ async fn create_empty_bracket_handler(
         "sport_name": sport_name,
         "gender": payload.gender,
         "characteristic_filters": characteristic_filters,
+        "min_age": payload.min_age,
+        "max_age": payload.max_age,
+        "min_weight": payload.min_weight,
+        "max_weight": payload.max_weight,
     });
 
     // Добавить characteristics_schema, если найдена
@@ -1732,7 +1751,8 @@ async fn create_empty_bracket_handler(
 
     // Генерация пустых матчей для турнирной сетки
     let total_rounds = (payload.participant_count as f64).log2() as i32;
-    let mut match_id_counter = -(chrono::Utc::now().timestamp_millis() as i32);
+    let timestamp_for_matches = chrono::Utc::now().timestamp_millis();
+    let mut match_id_counter = -((timestamp_for_matches & 0x7FFFFFFF) as i32);
 
     for round in 1..=total_rounds {
         let matches_in_round = payload.participant_count / (2_i32.pow(round as u32));
@@ -1792,14 +1812,12 @@ async fn get_bracket_assignments_handler(
     // Получаем все резервирования с информацией о столах
     let assignments = sqlx::query_as::<_, (i32, i32, String)>(
         "SELECT
-            br.bracket_id,
-            tn.table_number,
-            br.judge_name
-         FROM bracket_reservations br
-         INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
-         INNER JOIN table_numbers tn ON js.id = tn.judge_session_id
-         WHERE js.tournament_id = ?
-         ORDER BY br.reserved_at DESC"
+            ba.bracket_id,
+            ba.table_number,
+            ba.judge_name
+         FROM bracket_assignments ba
+         WHERE ba.tournament_id = ? AND ba.status = 'active'
+         ORDER BY ba.reserved_at DESC"
     )
     .bind(tournament_id)
     .fetch_all(&*state.db)
@@ -1819,6 +1837,59 @@ async fn get_bracket_assignments_handler(
     println!("[LOCAL SERVER] Returning {} bracket assignments", result.len());
     println!("[LOCAL SERVER] ========== get_bracket_assignments_handler END ==========");
     Ok(Json(result))
+}
+
+// Получить сетки, зарезервированные за конкретным судейским столом
+async fn get_my_bracket_assignments_handler(
+    State(state): State<LocalServerState>,
+    Path((tournament_id, table_number)): Path<(i32, i32)>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    println!("[LOCAL SERVER] ========== get_my_bracket_assignments_handler START ==========");
+    println!("[LOCAL SERVER] Tournament ID: {}, Table Number: {}", tournament_id, table_number);
+
+    // Получить список bracket_id зарезервированных за этим столом
+    let bracket_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT bracket_id
+         FROM bracket_assignments
+         WHERE tournament_id = ? AND table_number = ? AND status = 'active'
+         ORDER BY reserved_at DESC"
+    )
+    .bind(tournament_id)
+    .bind(table_number)
+    .fetch_all(&*state.db)
+    .await?;
+
+    if bracket_ids.is_empty() {
+        println!("[LOCAL SERVER] No brackets assigned to table {}", table_number);
+        return Ok(Json(vec![]));
+    }
+
+    println!("[LOCAL SERVER] Found {} assigned brackets", bracket_ids.len());
+
+    // Получить полные данные сеток из кэша
+    let mut brackets = Vec::new();
+    for bracket_id in bracket_ids {
+        let bracket_data: Option<String> = sqlx::query_scalar(
+            "SELECT data FROM brackets_cache WHERE bracket_id = ?"
+        )
+        .bind(bracket_id)
+        .fetch_optional(&*state.db)
+        .await?;
+
+        if let Some(data_str) = bracket_data {
+            if let Ok(bracket) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                brackets.push(bracket);
+            } else {
+                eprintln!("[LOCAL SERVER] Failed to parse bracket data for bracket_id {}", bracket_id);
+            }
+        } else {
+            eprintln!("[LOCAL SERVER] Bracket {} not found in cache", bracket_id);
+        }
+    }
+
+    println!("[LOCAL SERVER] Returning {} brackets with full data", brackets.len());
+    println!("[LOCAL SERVER] ========== get_my_bracket_assignments_handler END ==========");
+    Ok(Json(brackets))
 }
 
 // WebSocket query params

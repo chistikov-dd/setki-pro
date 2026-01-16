@@ -34,23 +34,28 @@ export const AddParticipantModal: React.FC<AddParticipantModalProps> = ({ bracke
       return;
     }
 
-    await addParticipant(
-      bracketId,
-      selectedMatch.id,
-      selectedSlot,
-      {
-        fighter_name: fighterName.trim(),
-        club_name: clubName.trim() || undefined,
-      },
-      user?.role === 'referee' ? user.judge_name : undefined,
-      user?.role === 'admin' ? user.user_id : undefined
-    );
+    try {
+      await addParticipant(
+        bracketId,
+        selectedMatch.id,
+        selectedSlot,
+        {
+          fighter_name: fighterName.trim(),
+          club_name: clubName.trim() || undefined,
+        },
+        user?.role === 'referee' ? user.judge_name : undefined,
+        user?.role === 'admin' ? user.user_id : undefined
+      );
 
-    // Очистить форму
-    setFighterName('');
-    setClubName('');
+      // Очистить форму
+      setFighterName('');
+      setClubName('');
 
-    onParticipantAdded();
+      onParticipantAdded();
+    } catch (error) {
+      console.error('[AddParticipantModal] Ошибка при добавлении участника:', error);
+      // Ошибка уже отображается через error из store
+    }
   };
 
   const handleClose = () => {

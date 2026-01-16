@@ -20,8 +20,8 @@ import { ParticipantPanel } from './ParticipantPanel';
 import { MatchEndDialog } from './MatchEndDialog';
 import { TimerEditDialog } from './TimerEditDialog';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
-import { ExitConfirmDialog } from './ExitConfirmDialog';
 import { HelpDialog } from './HelpDialog';
+// import { NextMatchCard } from './NextMatchCard'; // Unused - temporarily commented
 import { Toast, ToastContainer } from '../ui/Toast';
 import { Button } from '../ui/Button';
 import { Wifi, WifiOff } from 'lucide-react';
@@ -105,7 +105,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const [showEndDialog, setShowEndDialog] = useState(false);
   const [showTimerEditDialog, setShowTimerEditDialog] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
-  const [showExitDialog, setShowExitDialog] = useState(false);
   const [showHelpDialog, setShowHelpDialog] = useState(false);
   const [publicWindowOpen, setPublicWindowOpen] = useState(false);
   const [autoEndDialogShown, setAutoEndDialogShown] = useState(false);
@@ -128,6 +127,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const { redWarnings, blueWarnings } = useMatchStore(useShallow(matchStoreSelectors.warnings));
   const actions = useMatchStore(useShallow(matchStoreSelectors.actions)); // ВАЖНО: useShallow для избежания re-render
   const initialTimerSeconds = useMatchStore(matchStoreSelectors.initialTimerSeconds);
+  const { nextMatch } = useMatchStore(useShallow(matchStoreSelectors.nextMatch));
   // match уже есть в пропсах - не нужен из store
 
   // Timer managed locally with useMatchTimer hook (not in store)
@@ -227,6 +227,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const handleTimerEditConfirm = (minutes: number, seconds: number) => {
     const totalSeconds = minutes * 60 + seconds;
     timer.setDuration(totalSeconds);
+    // Сохраняем время таймера для использования во всех последующих матчах
+    actions.setTimerDuration(totalSeconds);
     setShowTimerEditDialog(false);
   };
 
@@ -240,12 +242,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     setShowResetDialog(false);
   };
 
-  const handleExitClick = () => {
-    setShowExitDialog(true);
-  };
-
-  const handleExitConfirm = async () => {
-    setShowExitDialog(false);
+  const handleExitClick = async () => {
     // Закрываем публичное табло при возврате к сетке
     await closePublicDisplay();
     onExit();
@@ -376,6 +373,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     // Get cleanup function reference once
     const cleanup = useMatchStore.getState().cleanup;
     const initMatch = useMatchStore.getState().initMatch;
+    const loadNextMatch = useMatchStore.getState().loadNextMatch;
 
     initMatch(match, matchDuration)
       .then(() => {
@@ -384,6 +382,10 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
           sendMatchStart();
           console.log('[WebSocket] Sent match_start event');
         }
+        // Загружаем следующий матч
+        loadNextMatch().catch((error) => {
+          console.error('MatchScreen: Failed to load next match:', error);
+        });
       })
       .catch((error) => {
         console.error('MatchScreen: Failed to initialize match:', error);
@@ -576,7 +578,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
       console.log('[Hotkey] Key pressed:', e.code, e.key);
 
       // Ignore if any dialog open
-      if (showEndDialog || showTimerEditDialog || showResetDialog || showExitDialog || showHelpDialog) {
+      if (showEndDialog || showTimerEditDialog || showResetDialog || showHelpDialog) {
         console.log('[Hotkey] Ignored - dialog open');
         return;
       }
@@ -669,7 +671,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showEndDialog, showTimerEditDialog, showResetDialog, showExitDialog, showHelpDialog]); // actions, timer игнорируем
+  }, [showEndDialog, showTimerEditDialog, showResetDialog, showHelpDialog]); // actions, timer игнорируем
 
   // Auto-finish when timer reaches 0 (only once)
   useEffect(() => {
@@ -720,6 +722,15 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
       if (wsConnected && sendMatchEnd) {
         sendMatchEnd(winnerId, resultType);
         console.log('[WebSocket] Sent match_end event');
+      }
+
+      // Показываем информацию о следующем матче, если он есть
+      if (nextMatch && nextMatch.participant1 && nextMatch.participant2) {
+        showToast(
+          `Следующий бой: ${nextMatch.participant1.full_name} vs ${nextMatch.participant2.full_name}`,
+          'info',
+          4000
+        );
       }
 
       setShowEndDialog(false);
@@ -969,20 +980,20 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
         />
       )}
 
-      {/* Exit Confirm Dialog */}
-      {showExitDialog && (
-        <ExitConfirmDialog
-          onConfirm={handleExitConfirm}
-          onCancel={() => setShowExitDialog(false)}
-        />
-      )}
-
       {/* Help Dialog */}
       {showHelpDialog && (
         <HelpDialog
           onClose={() => setShowHelpDialog(false)}
         />
       )}
+
+      {/* Next Match Card - плавающая карточка */}
+      {/* Временно закомментирован */}
+      {/* <NextMatchCard
+        nextMatch={nextMatch}
+        bracketName={categoryName}
+        isLoading={isLoadingNextMatch}
+      /> */}
 
       {/* Toast Notifications */}
       <ToastContainer>

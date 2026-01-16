@@ -969,13 +969,12 @@ async fn get_bracket_table_assignments(
     println!("[get_bracket_table_assignments] Чтение из локальной БД");
     let assignments = sqlx::query_as::<_, (i32, i32, String)>(
         "SELECT
-            br.bracket_id,
-            js.table_number,
-            br.judge_name
-         FROM bracket_reservations br
-         INNER JOIN judge_sessions js ON br.judge_name = js.judge_name
-         WHERE js.tournament_id = ?
-         ORDER BY br.reserved_at DESC"
+            ba.bracket_id,
+            ba.table_number,
+            ba.judge_name
+         FROM bracket_assignments ba
+         WHERE ba.tournament_id = ? AND ba.status = 'active'
+         ORDER BY ba.reserved_at DESC"
     )
     .bind(tournament_id)
     .fetch_all(&*state.db_pool)
@@ -992,6 +991,92 @@ async fn get_bracket_table_assignments(
         .collect();
 
     Ok(result)
+}
+
+// Получить сетки, зарезервированные за судьей (для таба "Мои сетки")
+#[tauri::command]
+async fn get_my_bracket_assignments(
+    tournament_id: i32,
+    table_number: i32,
+    server_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    println!("[get_my_bracket_assignments] tournament_id={}, table_number={}, server_url={:?}",
+        tournament_id, table_number, server_url);
+
+    // Если есть server_url (local-client режим) - запросить с локального сервера
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[get_my_bracket_assignments] Запрос к локальному серверу: {}", url);
+
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден".to_string())?;
+
+        let client = reqwest::Client::new();
+        let endpoint = format!("{}/api/v1/desktop/my-bracket-assignments/{}/{}",
+            url, tournament_id, table_number);
+
+        let response = client.get(&endpoint)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка запроса: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Сервер вернул ошибку: {}", response.status()));
+        }
+
+        let brackets: Vec<serde_json::Value> = response.json()
+            .await
+            .map_err(|e| format!("Ошибка парсинга: {}", e))?;
+
+        println!("[get_my_bracket_assignments] Получено {} сеток с сервера", brackets.len());
+        return Ok(brackets);
+    }
+
+    // Иначе читаем из локальной БД (админ режим)
+    println!("[get_my_bracket_assignments] Чтение из локальной БД");
+    let pool = &state.db_pool;
+
+    // Получить список bracket_id зарезервированных за этим столом
+    let bracket_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT ba.bracket_id
+         FROM bracket_assignments ba
+         WHERE ba.tournament_id = ? AND ba.table_number = ? AND ba.status = 'active'
+         ORDER BY ba.reserved_at DESC"
+    )
+    .bind(tournament_id)
+    .bind(table_number)
+    .fetch_all(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if bracket_ids.is_empty() {
+        println!("[get_my_bracket_assignments] Нет зарезервированных сеток");
+        return Ok(vec![]);
+    }
+
+    println!("[get_my_bracket_assignments] Найдено {} зарезервированных сеток", bracket_ids.len());
+
+    // Получить данные сеток из кэша
+    let mut brackets = Vec::new();
+    for bracket_id in bracket_ids {
+        let bracket_data: Option<String> = sqlx::query_scalar(
+            "SELECT data FROM brackets_cache WHERE bracket_id = ?"
+        )
+        .bind(bracket_id)
+        .fetch_optional(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if let Some(data_str) = bracket_data {
+            let bracket: serde_json::Value = serde_json::from_str(&data_str)
+                .map_err(|e| e.to_string())?;
+            brackets.push(bracket);
+        }
+    }
+
+    Ok(brackets)
 }
 
 #[tauri::command]
@@ -1905,13 +1990,43 @@ async fn create_temp_participant(
 
     let pool = &state.db_pool;
 
-    // Генерировать уникальный отрицательный ID (timestamp в миллисекундах с минусом)
-    let temp_id = -(std::time::SystemTime::now()
+    // Генерировать уникальный отрицательный ID
+    // Используем микросекунды для большей уникальности, берём только младшие 31 бит
+    let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as i32);
+        .as_micros() as i64;
+    let mut temp_id = -((timestamp & 0x7FFFFFFF) as i32);
 
-    state.logger.info(&format!("Generated temp_id: {}", temp_id));
+    // Если ID уже существует, добавляем к нему случайное смещение и проверяем снова
+    let mut attempts = 0;
+    let final_temp_id = loop {
+        let check_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM temp_participants WHERE temp_id = ?"
+        )
+        .bind(temp_id)
+        .fetch_one(&**pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if check_exists == 0 {
+            break temp_id;
+        }
+
+        // ID уже существует, генерируем новый с случайным смещением
+        attempts += 1;
+        if attempts > 100 {
+            // Защита от бесконечного цикла
+            return Err(format!("Не удалось сгенерировать уникальный temp_id после 100 попыток"));
+        }
+
+        let offset = (rand::random::<u32>() % 10000) as i32;
+        temp_id = temp_id - offset - 1; // -1 чтобы гарантировать изменение
+        state.logger.info(&format!("temp_id уже существует, попытка {}: новый ID = {}", attempts, temp_id));
+        // Продолжаем цикл для проверки нового temp_id
+    };
+
+    state.logger.info(&format!("Generated final_temp_id: {} (attempts: {})", final_temp_id, attempts));
 
     // Если указан server_url, отправить данные на локальный сервер админа
     if let Some(url) = server_url.filter(|s| !s.is_empty()) {
@@ -1933,7 +2048,7 @@ async fn create_temp_participant(
             .post(&api_url)
             .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({
-                "temp_id": temp_id,
+                "temp_id": final_temp_id,
                 "bracket_id": bracket_id,
                 "full_name": full_name,
                 "club_name": club_name,
@@ -1955,14 +2070,15 @@ async fn create_temp_participant(
         println!("[create_temp_participant] Сохранение в локальный кэш судьи");
     }
 
-    println!("[create_temp_participant] Creating temp participant with ID: {}, name: {}", temp_id, full_name);
+    println!("[create_temp_participant] Creating temp participant with ID: {}, name: {}", final_temp_id, full_name);
 
     // Сохранить в таблицу temp_participants
+    // Используем INSERT OR REPLACE чтобы избежать конфликтов при повторном создании
     sqlx::query(
-        "INSERT INTO temp_participants (temp_id, full_name, club_name, bracket_id, synced)
+        "INSERT OR REPLACE INTO temp_participants (temp_id, full_name, club_name, bracket_id, synced)
          VALUES (?, ?, ?, ?, 0)"
     )
-    .bind(temp_id)
+    .bind(final_temp_id)
     .bind(&full_name)
     .bind(&club_name)
     .bind(bracket_id)
@@ -1972,7 +2088,7 @@ async fn create_temp_participant(
 
     println!("[create_temp_participant] Temp participant created successfully");
 
-    Ok(temp_id)
+    Ok(final_temp_id)
 }
 
 #[tauri::command]
@@ -2548,6 +2664,10 @@ async fn create_empty_bracket(
     sport_id: i32,
     gender: String,
     characteristic_values: String,
+    min_age: Option<i32>,
+    max_age: Option<i32>,
+    min_weight: Option<i32>,
+    max_weight: Option<i32>,
     server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<i32, String> {
@@ -2580,6 +2700,10 @@ async fn create_empty_bracket(
                 "sport_id": sport_id,
                 "gender": gender,
                 "characteristic_values": characteristic_values,
+                "min_age": min_age,
+                "max_age": max_age,
+                "min_weight": min_weight,
+                "max_weight": max_weight,
             });
 
             let client = reqwest::Client::new();
@@ -2612,7 +2736,9 @@ async fn create_empty_bracket(
     let pool = &state.db_pool;
 
     // Генерация уникального ID для сетки (отрицательный ID для локальных сеток)
-    let bracket_id = -(Utc::now().timestamp_millis() as i32);
+    // Используем только младшие 31 бит timestamp для избежания переполнения i32
+    let timestamp = Utc::now().timestamp_millis();
+    let bracket_id = -((timestamp & 0x7FFFFFFF) as i32);
 
     // Создать JSON для bracket
     let bracket_data = serde_json::json!({
@@ -2624,6 +2750,12 @@ async fn create_empty_bracket(
         "current_round": 1,
         "status": "not_started",
         "is_published": true,
+        "sport_id": sport_id,
+        "gender": gender,
+        "min_age": min_age,
+        "max_age": max_age,
+        "min_weight": min_weight,
+        "max_weight": max_weight,
     });
 
     // Сохранить сетку в brackets_cache
@@ -2642,7 +2774,8 @@ async fn create_empty_bracket(
 
     // Генерация пустых матчей для турнирной сетки
     let total_rounds = (participant_count as f64).log2() as i32;
-    let mut match_id_counter = -(Utc::now().timestamp_millis() as i32);
+    let timestamp_for_matches = Utc::now().timestamp_millis();
+    let mut match_id_counter = -((timestamp_for_matches & 0x7FFFFFFF) as i32);
 
     for round in 1..=total_rounds {
         let matches_in_round = participant_count / (2_i32.pow(round as u32));
@@ -2756,6 +2889,116 @@ async fn check_unsynced_count(state: State<'_, AppState>) -> Result<i32, String>
     .map_err(|e| format!("Ошибка проверки sync_queue: {}", e))?;
 
     Ok(result.0)
+}
+
+// ============================================
+// СЛЕДУЮЩИЙ МАТЧ
+// ============================================
+
+/// Получить следующий незавершенный матч в сетке после текущего матча
+/// Возвращает None если следующий матч не найден или участники еще не определены
+#[tauri::command]
+async fn get_next_match_in_bracket(
+    bracket_id: i32,
+    current_match_id: i32,
+    server_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    state.logger.info(&format!(
+        "[get_next_match_in_bracket] bracket_id={}, current_match_id={}",
+        bracket_id, current_match_id
+    ));
+
+    // Получаем все матчи сетки
+    let matches = if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        // Загружаем с локального сервера
+        let api_client = ApiClient::new(url.clone(), Arc::clone(&state.db_pool), Arc::clone(&state.logger));
+        api_client.get_bracket_matches(bracket_id).await
+            .map_err(|e| e.to_string())?
+    } else {
+        // Загружаем из кэша или основного сервера
+        let pool = &state.db_pool;
+        let cached_matches = sqlx::query(
+            "SELECT match_id, data FROM matches_cache WHERE bracket_id = ? ORDER BY match_id"
+        )
+        .bind(bracket_id)
+        .fetch_all(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if !cached_matches.is_empty() {
+            cached_matches
+                .iter()
+                .filter_map(|row| {
+                    let data_str: String = sqlx::Row::get(row, "data");
+                    serde_json::from_str(&data_str).ok()
+                })
+                .collect()
+        } else {
+            state.api_client.get_bracket_matches(bracket_id).await
+                .map_err(|e| e.to_string())?
+        }
+    };
+
+    // Находим текущий матч
+    let current_match = matches.iter().find(|m| {
+        m.get("id").and_then(|id| id.as_i64()) == Some(current_match_id as i64)
+    });
+
+    if current_match.is_none() {
+        state.logger.warn("[get_next_match_in_bracket] Current match not found");
+        return Ok(None);
+    }
+
+    let current_match = current_match.unwrap();
+    let current_round = current_match.get("round_number")
+        .and_then(|r| r.as_i64())
+        .unwrap_or(0) as i32;
+    let current_match_number = current_match.get("match_number")
+        .and_then(|m| m.as_i64())
+        .unwrap_or(0) as i32;
+
+    state.logger.info(&format!(
+        "[get_next_match_in_bracket] Current match: round={}, match_number={}",
+        current_round, current_match_number
+    ));
+
+    // Ищем следующий незавершенный матч в той же сетке
+    // Сортируем по раунду и номеру матча
+    let next_match = matches.iter()
+        .filter(|m| {
+            let status = m.get("status").and_then(|s| s.as_str()).unwrap_or("");
+            let round = m.get("round_number").and_then(|r| r.as_i64()).unwrap_or(0) as i32;
+            let match_number = m.get("match_number").and_then(|m| m.as_i64()).unwrap_or(0) as i32;
+            let match_id = m.get("id").and_then(|id| id.as_i64()).unwrap_or(0) as i32;
+
+            // Следующий матч = не завершенный И (следующий раунд ИЛИ больший номер в том же раунде)
+            match_id != current_match_id
+                && status != "completed"
+                && status != "cancelled"
+                && (round > current_round || (round == current_round && match_number > current_match_number))
+        })
+        .min_by_key(|m| {
+            let round = m.get("round_number").and_then(|r| r.as_i64()).unwrap_or(0);
+            let match_number = m.get("match_number").and_then(|m| m.as_i64()).unwrap_or(0);
+            (round, match_number)
+        })
+        .cloned();
+
+    if let Some(ref next) = next_match {
+        let next_id = next.get("id").and_then(|id| id.as_i64()).unwrap_or(0);
+        let next_round = next.get("round_number").and_then(|r| r.as_i64()).unwrap_or(0);
+        let next_match_num = next.get("match_number").and_then(|m| m.as_i64()).unwrap_or(0);
+
+        state.logger.info(&format!(
+            "[get_next_match_in_bracket] Found next match: id={}, round={}, match_number={}",
+            next_id, next_round, next_match_num
+        ));
+    } else {
+        state.logger.info("[get_next_match_in_bracket] No next match found");
+    }
+
+    Ok(next_match)
 }
 
 // ============================================
@@ -2914,11 +3157,13 @@ pub fn run() {
             release_bracket,
             get_bracket_reservation,
             get_bracket_matches,
+            get_next_match_in_bracket,
             clear_all_reservations,
             release_judge_brackets,
             get_active_judge_sessions,
             get_active_matches,
             get_bracket_table_assignments,
+            get_my_bracket_assignments,
             start_match,
             update_match_score,
             record_match_event,

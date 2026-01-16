@@ -8,9 +8,11 @@ import {
   batchUpdateMatch,
   undoLastEvent as apiUndoLastEvent,
   finishMatch as apiFinishMatch,
+  getNextMatchInBracket,
 } from '../services/api';
 import { useSessionStore } from './sessionStore';
 import { useServerModeStore } from './serverModeStore';
+import { loadTimerDuration, saveTimerDuration } from '../utils/timerSettings';
 
 interface MatchStoreState {
   // State
@@ -27,6 +29,10 @@ interface MatchStoreState {
   error: string | null;
   lastUpdateTimestamp: string | null; // Timestamp последнего обновления для conflict resolution
 
+  // Next match state
+  nextMatch: Match | null;
+  isLoadingNextMatch: boolean;
+
   // Actions
   initMatch: (match: Match, totalSeconds: number) => Promise<void>;
   resetAll: () => Promise<void>;
@@ -36,6 +42,8 @@ interface MatchStoreState {
   undoLastAction: () => Promise<void>;
   finishMatch: (resultType: 'points' | 'submission' | 'disqualification', winnerId?: number) => Promise<void>;
   applyRemoteUpdate: (data: RemoteUpdateData, timestamp: string) => boolean;
+  setTimerDuration: (seconds: number) => void;
+  loadNextMatch: () => Promise<void>;
   cleanup: () => void;
 }
 
@@ -59,11 +67,15 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   blueScore: 0,
   redWarnings: 0,
   blueWarnings: 0,
-  initialTimerSeconds: 300, // 5 minutes default
+  initialTimerSeconds: loadTimerDuration(), // Загружаем сохранённое время или 300 секунд по умолчанию
   events: [],
   isLoading: false,
   error: null,
   lastUpdateTimestamp: null,
+
+  // Next match state
+  nextMatch: null,
+  isLoadingNextMatch: false,
 
   // Initialize match
   initMatch: async (match: Match, totalSeconds: number) => {
@@ -617,6 +629,66 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     return true;
   },
 
+  /**
+   * Установить и сохранить время таймера
+   */
+  setTimerDuration: (seconds: number) => {
+    saveTimerDuration(seconds);
+    set({ initialTimerSeconds: seconds });
+  },
+
+  /**
+   * Загрузить следующий матч в сетке
+   */
+  loadNextMatch: async () => {
+    const { match } = get();
+    if (!match) {
+      console.warn('[matchStore] Cannot load next match: current match is null');
+      return;
+    }
+
+    set({ isLoadingNextMatch: true });
+
+    try {
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const effectiveServerUrl = mode === 'local-client' ? serverUrl : null;
+
+      const nextMatchData = await getNextMatchInBracket(
+        match.bracket_id,
+        match.id,
+        effectiveServerUrl
+      );
+
+      if (nextMatchData) {
+        // Преобразуем данные в формат Match
+        const nextMatch: Match = {
+          id: nextMatchData.id,
+          bracket_id: nextMatchData.bracket_id,
+          participant1: nextMatchData.participant1,
+          participant2: nextMatchData.participant2,
+          winner_id: nextMatchData.winner_id,
+          round_number: nextMatchData.round_number,
+          match_number: nextMatchData.match_number,
+          status: nextMatchData.status,
+          score_participant1: nextMatchData.score_participant1 || 0,
+          score_participant2: nextMatchData.score_participant2 || 0,
+          warnings_participant1: nextMatchData.warnings_participant1 || 0,
+          warnings_participant2: nextMatchData.warnings_participant2 || 0,
+          result_type: nextMatchData.result_type,
+        };
+
+        set({ nextMatch, isLoadingNextMatch: false });
+        console.log('[matchStore] Next match loaded:', nextMatch);
+      } else {
+        set({ nextMatch: null, isLoadingNextMatch: false });
+        console.log('[matchStore] No next match found');
+      }
+    } catch (error) {
+      console.error('[matchStore] Failed to load next match:', error);
+      set({ nextMatch: null, isLoadingNextMatch: false });
+    }
+  },
+
   // Cleanup on unmount
   // Note: Timer is now managed by useMatchTimer hook in MatchScreen
   cleanup: () => {
@@ -628,11 +700,13 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
       blueScore: 0,
       redWarnings: 0,
       blueWarnings: 0,
-      initialTimerSeconds: 300,
+      initialTimerSeconds: loadTimerDuration(), // Сохраняем настройку таймера при очистке
       events: [],
       isLoading: false,
       error: null,
       lastUpdateTimestamp: null,
+      nextMatch: null,
+      isLoadingNextMatch: false,
     });
   },
 }));
@@ -663,9 +737,15 @@ export const matchStoreSelectors = {
     undoLastAction: state.undoLastAction,
     finishMatch: state.finishMatch,
     applyRemoteUpdate: state.applyRemoteUpdate,
+    setTimerDuration: state.setTimerDuration,
+    loadNextMatch: state.loadNextMatch,
     cleanup: state.cleanup,
   }),
   match: (state: MatchStoreState) => state.match,
+  nextMatch: (state: MatchStoreState) => ({
+    nextMatch: state.nextMatch,
+    isLoadingNextMatch: state.isLoadingNextMatch,
+  }),
   initialTimerSeconds: (state: MatchStoreState) => state.initialTimerSeconds,
   events: (state: MatchStoreState) => state.events,
 };

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { getCachedBrackets, getCachedBracketsWithMatches, getBracketTableAssignments, type BracketTableAssignment } from '../../services/api';
+import { getCachedBrackets, getCachedBracketsWithMatches, getBracketTableAssignments, getMyBracketAssignments, reserveBracket, releaseBracket, type BracketTableAssignment } from '../../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { BracketCardSkeleton, SkeletonList } from '../ui/Skeleton';
@@ -7,7 +7,9 @@ import type { BracketResponse, BracketFilters } from '../../types';
 import { useDebounce } from '../../hooks/useDebounce';
 import { applySortAndFilter, getGenderLabel, getAgeRangeLabel, getWeightRangeLabel, getEnhancedCategoryName } from '../../utils/bracketFilters';
 import { useServerModeStore } from '../../stores/serverModeStore';
+import { useAuthStore } from '../../stores/authStore';
 import { CreateBracketDialog } from './CreateBracketDialog';
+import { BracketProgressBar } from '../brackets/BracketProgressBar';
 
 interface BracketSelectionProps {
   tournamentId: number;
@@ -35,6 +37,15 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
   // Информация о занятых столах (bracket_id → table assignment)
   const [tableAssignments, setTableAssignments] = useState<Map<number, BracketTableAssignment>>(new Map());
+
+  // Новая функциональность: резервирование сеток
+  const [activeTab, setActiveTab] = useState<'available' | 'my'>('available');
+  const [myBrackets, setMyBrackets] = useState<BracketResponse[]>([]);
+  const [isReserving, setIsReserving] = useState(false);
+  const [reservationFilter, setReservationFilter] = useState<'available' | 'reserved' | 'all'>('available');
+  const [allReservedBrackets, setAllReservedBrackets] = useState<Set<number>>(new Set());
+  const { user } = useAuthStore();
+  const { mode, serverUrl } = useServerModeStore();
 
   // Флаг для контроля автопрокрутки (срабатывает только при первом рендере после возврата)
   const shouldScrollToSelected = useRef(false);
@@ -196,8 +207,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         // Судья - обычный режим
         const { mode, serverUrl: url } = useServerModeStore.getState();
         serverUrl = mode === 'local-client' ? url : null;
-        console.log('[BracketSelection] mode:', mode);
-        console.log('[BracketSelection] serverUrl:', serverUrl);
+        console.log('[BracketSelection] 📡 Режим работы:', mode);
+        console.log('[BracketSelection] 🌐 Raw serverUrl:', url);
+        console.log('[BracketSelection] ✅ Финальный serverUrl для getCachedBrackets:', serverUrl);
         data = await getCachedBrackets(tournamentId, serverUrl);
       }
 
@@ -210,15 +222,21 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       setBrackets(data);
 
-      // Загрузить информацию о занятых столах
+      // Загрузить информацию о занятых столах и зарезервированных сетках
       try {
         const assignments = await getBracketTableAssignments(tournamentId, serverUrl);
         const assignmentsMap = new Map<number, BracketTableAssignment>();
+        const reservedBracketIds = new Set<number>();
+
         assignments.forEach((assignment) => {
           assignmentsMap.set(assignment.bracket_id, assignment);
+          reservedBracketIds.add(assignment.bracket_id);
         });
+
         setTableAssignments(assignmentsMap);
+        setAllReservedBrackets(reservedBracketIds);
         console.log('[BracketSelection] Загружено занятых столов:', assignments.length);
+        console.log('[BracketSelection] Зарезервированные сетки:', Array.from(reservedBracketIds));
       } catch (err) {
         console.error('[BracketSelection] Ошибка загрузки информации о столах:', err);
         // Не критичная ошибка, продолжаем работу
@@ -270,6 +288,109 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     }
   };
 
+  // Загрузить "Мои сетки"
+  const loadMyBrackets = async () => {
+    if (!user?.table_number) {
+      console.log('[BracketSelection] Нет номера стола для загрузки моих сеток');
+      return;
+    }
+
+    try {
+      console.log('[BracketSelection] Загрузка моих сеток для стола', user.table_number);
+      const url = mode === 'local-client' ? serverUrl : null;
+      const myAssignedBrackets = await getMyBracketAssignments(tournamentId, user.table_number, url);
+      console.log('[BracketSelection] Загружено моих сеток:', myAssignedBrackets.length);
+      setMyBrackets(myAssignedBrackets);
+    } catch (err) {
+      console.error('[BracketSelection] Ошибка загрузки моих сеток:', err);
+    }
+  };
+
+  // Зарезервировать сетку
+  const handleReserveBracket = async (bracket: BracketResponse) => {
+    console.log('[BracketSelection] handleReserveBracket - user object:', JSON.stringify(user, null, 2));
+    console.log('[BracketSelection] judge_name:', user?.judge_name);
+    console.log('[BracketSelection] table_number:', user?.table_number);
+    console.log('[BracketSelection] user_id:', user?.user_id);
+
+    if (!user?.judge_name || !user?.table_number || user?.user_id === undefined) {
+      console.error('[BracketSelection] Нет данных пользователя для резервирования');
+      console.error('[BracketSelection] Missing fields:', {
+        hasJudgeName: !!user?.judge_name,
+        hasTableNumber: !!user?.table_number,
+        hasUserId: user?.user_id !== undefined,
+      });
+      return;
+    }
+
+    setIsReserving(true);
+    try {
+      await reserveBracket(bracket.id, tournamentId, user.judge_name, user.table_number, user.user_id);
+
+      // Показать уведомление
+      const event = new CustomEvent('show-toast', {
+        detail: {
+          message: `Сетка "${bracket.category_name}" зарезервирована`,
+          type: 'success',
+          duration: 2000,
+        },
+      });
+      window.dispatchEvent(event);
+
+      // Обновить только "Мои сетки"
+      await loadMyBrackets();
+    } catch (err) {
+      const event = new CustomEvent('show-toast', {
+        detail: {
+          message: err instanceof Error ? err.message : 'Ошибка резервирования',
+          type: 'error',
+          duration: 3000,
+        },
+      });
+      window.dispatchEvent(event);
+    } finally {
+      setIsReserving(false);
+    }
+  };
+
+  // Освободить сетку
+  const handleReleaseBracket = async (bracket: BracketResponse) => {
+    setIsReserving(true);
+    try {
+      await releaseBracket(bracket.id);
+
+      const event = new CustomEvent('show-toast', {
+        detail: {
+          message: `Сетка "${bracket.category_name}" освобождена`,
+          type: 'info',
+          duration: 2000,
+        },
+      });
+      window.dispatchEvent(event);
+
+      // Обновить только "Мои сетки"
+      await loadMyBrackets();
+    } catch (err) {
+      const event = new CustomEvent('show-toast', {
+        detail: {
+          message: err instanceof Error ? err.message : 'Ошибка освобождения сетки',
+          type: 'error',
+          duration: 3000,
+        },
+      });
+      window.dispatchEvent(event);
+    } finally {
+      setIsReserving(false);
+    }
+  };
+
+  // Загрузить "Мои сетки" при монтировании компонента
+  useEffect(() => {
+    if (user?.table_number) {
+      loadMyBrackets();
+    }
+  }, [tournamentId, user?.table_number]);
+
   // Применить фильтры и сортировку
   const filteredBrackets = useMemo(() => {
     console.log(`[BracketSelection] Фильтрация: всего сеток до фильтрации: ${brackets.length}`);
@@ -277,7 +398,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     console.log(`[BracketSelection] После applySortAndFilter: ${sorted.length} сеток`);
 
     // Отфильтровать сетки без участников, НО показывать локально созданные (ID < 0)
-    const result = sorted.filter(bracket => {
+    let result = sorted.filter(bracket => {
       // Локально созданные сетки (отрицательный ID) показываем всегда, даже без участников
       if (bracket.id < 0) {
         console.log(`[BracketSelection] ✅ Показываем локально созданную сетку: ${bracket.category_name} (ID: ${bracket.id})`);
@@ -293,8 +414,24 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     });
 
     console.log(`[BracketSelection] После фильтрации участников: ${result.length} сеток`);
+
+    // Применить фильтр резервирования
+    if (reservationFilter !== 'all') {
+      console.log(`[BracketSelection] Применяем фильтр резервирования: ${reservationFilter}`);
+      console.log(`[BracketSelection] Всего зарезервированных сеток: ${allReservedBrackets.size}`);
+      console.log(`[BracketSelection] ID зарезервированных сеток:`, Array.from(allReservedBrackets));
+
+      result = result.filter(bracket => {
+        const isReserved = allReservedBrackets.has(bracket.id);
+        const shouldShow = reservationFilter === 'available' ? !isReserved : isReserved;
+        console.log(`[BracketSelection] Сетка ${bracket.id} (${bracket.category_name}): isReserved=${isReserved}, shouldShow=${shouldShow}`);
+        return shouldShow;
+      });
+      console.log(`[BracketSelection] После фильтра резервирования (${reservationFilter}): ${result.length} сеток`);
+    }
+
     return result;
-  }, [brackets, filters, participantsByBracket]);
+  }, [brackets, filters, participantsByBracket, reservationFilter, allReservedBrackets]);
 
   // Отслеживаем изменение lastSelectedBracketId для определения момента возврата
   useEffect(() => {
@@ -578,11 +715,15 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
           tournamentId={tournamentId}
           onClose={() => setShowCreateDialog(false)}
           onSuccess={() => {
+            console.log('[BracketSelection] ========== onSuccess ВЫЗВАН ==========');
+            console.log('[BracketSelection] Сбрасываем фильтры и перезагружаем список сеток');
+
             // Сбросить фильтры, чтобы новая сетка была видна
             const hadActiveFilters = hasActiveFilters;
             handleResetFilters();
 
             // Перезагрузить список сеток
+            console.log('[BracketSelection] Вызываем loadBrackets()...');
             loadBrackets();
 
             // Показать уведомление если фильтры были активны
@@ -611,6 +752,68 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         </Button>
       </div>
 
+      {/* Табы: Мои сетки / Доступные сетки */}
+      {user?.table_number && (
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setActiveTab('my')}
+            className={`flex-1 px-4 py-3 rounded-lg font-medium transition-all ${
+              activeTab === 'my'
+                ? 'bg-blue-500 text-white shadow-md'
+                : 'bg-white/80 text-gray-700 hover:bg-white/90 border border-gray-300'
+            }`}
+          >
+            Мои сетки ({myBrackets.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('available')}
+            className={`flex-1 px-4 py-3 rounded-lg font-medium transition-all ${
+              activeTab === 'available'
+                ? 'bg-blue-500 text-white shadow-md'
+                : 'bg-white/80 text-gray-700 hover:bg-white/90 border border-gray-300'
+            }`}
+          >
+            Доступные сетки ({filteredBrackets.length})
+          </button>
+        </div>
+      )}
+
+      {/* Фильтр резервирования (только для вкладки "Доступные сетки") */}
+      {activeTab === 'available' && user?.table_number && (
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setReservationFilter('available')}
+            className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+              reservationFilter === 'available'
+                ? 'bg-green-500 text-white shadow'
+                : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+            }`}
+          >
+            Доступные
+          </button>
+          <button
+            onClick={() => setReservationFilter('reserved')}
+            className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+              reservationFilter === 'reserved'
+                ? 'bg-orange-500 text-white shadow'
+                : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+            }`}
+          >
+            Зарезервированные
+          </button>
+          <button
+            onClick={() => setReservationFilter('all')}
+            className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+              reservationFilter === 'all'
+                ? 'bg-blue-500 text-white shadow'
+                : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+            }`}
+          >
+            Все
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-4">
         <div className="flex-1"></div>
         <span className="text-sm text-gray-700">
@@ -620,7 +823,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       </div>
 
       {/* Поиск и фильтры - Sticky */}
-      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border border-gray-300 rounded-lg p-4 space-y-4 shadow-md">
+      <div className="sticky top-20 z-10 bg-white/95 backdrop-blur-md border border-gray-300 rounded-lg p-4 space-y-4 shadow-md">
         {/* Поиск */}
         <div className="flex gap-3">
           <div className="flex-1 relative">
@@ -760,7 +963,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                     </button>
                     {Array.from(values).map((value) => {
                       // Находим label для value из options
-                      const option = characteristic.options?.find(opt => opt.value === value);
+                      const option = characteristic.options?.find((opt: { value: string; label: string }) => opt.value === value);
                       const label = option?.label || value;
 
                       return (
@@ -815,7 +1018,13 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredBrackets.map((bracket) => (
+        {(activeTab === 'my' ? myBrackets : filteredBrackets).map((bracket) => {
+          // Подсчитать прогресс для "Моих сеток"
+          const totalMatches = bracket.matches?.length || 0;
+          const completedMatches = bracket.matches?.filter(m => m.status === 'completed').length || 0;
+          const isMyBracket = activeTab === 'my';
+
+          return (
           <div
             key={bracket.id}
             ref={(el: HTMLDivElement | null) => {
@@ -952,19 +1161,76 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                 </div>
               )}
 
-              {/* Кнопка выбора */}
-              <Button
-                onClick={() => handleSelectBracket(bracket)}
-                variant="primary"
-                size="sm"
-                className="w-full mt-4"
-              >
-                {bracket.status === 'completed' ? 'Просмотр' : 'Выбрать сетку'}
-              </Button>
+              {/* Прогрессбар для "Моих сеток" */}
+              {isMyBracket && totalMatches > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-200">
+                  <BracketProgressBar completed={completedMatches} total={totalMatches} />
+                </div>
+              )}
+
+              {/* Кнопки */}
+              {isMyBracket ? (
+                <div className="flex gap-2 mt-4">
+                  <Button
+                    onClick={() => handleSelectBracket(bracket)}
+                    variant="primary"
+                    size="sm"
+                    className="flex-1"
+                  >
+                    Открыть
+                  </Button>
+                  <Button
+                    onClick={() => handleReleaseBracket(bracket)}
+                    variant="secondary"
+                    size="sm"
+                    className="flex-1"
+                    disabled={isReserving}
+                  >
+                    Отказаться
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-2 mt-4">
+                  {tableAssignments.has(bracket.id) ? (
+                    <Button
+                      onClick={() => handleSelectBracket(bracket)}
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      disabled
+                    >
+                      Занята (Стол №{tableAssignments.get(bracket.id)!.table_number})
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        onClick={() => handleSelectBracket(bracket)}
+                        variant="primary"
+                        size="sm"
+                        className="flex-1"
+                      >
+                        {bracket.status === 'completed' ? 'Просмотр' : 'Выбрать'}
+                      </Button>
+                      {user?.table_number && (
+                        <Button
+                          onClick={() => handleReserveBracket(bracket)}
+                          variant="secondary"
+                          size="sm"
+                          className="flex-1"
+                          disabled={isReserving}
+                        >
+                          Зарезервировать
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
           </div>
-        ))}
+        );
+        })}
       </div>
     </div>
   );

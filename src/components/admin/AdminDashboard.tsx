@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from '../../stores/authStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
@@ -50,6 +51,7 @@ export const AdminDashboard = () => {
   const [selectedBracketForEdit, setSelectedBracketForEdit] = useState<{ id: number; name: string } | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
+  const [serverIp, setServerIp] = useState<string | null>(null);
 
   // Toast уведомления
   const { toasts, showToast, hideToast } = useToast();
@@ -69,14 +71,51 @@ export const AdminDashboard = () => {
     console.error('[AdminDashboard] Background sync ошибка:', error);
   }, []);
 
-  // Background синхронизация при старте приложения и каждые 30 секунд
+  // Background синхронизация отключена - работаем только в локальном режиме
+  // Оставляем hook для совместимости, но с enabled: false
   useSyncWorker({
-    enabled: serverMode === 'online', // Только в online режиме (в local-server данные уже на этом компьютере)
+    enabled: false,
     interval: 30000,
     serverMode: serverModeConfig,
     onSyncSuccess: handleSyncSuccess,
     onSyncError: handleSyncError,
   });
+
+  // Загрузить IP локального сервера
+  useEffect(() => {
+    let attempts = 0;
+    const maxAttempts = 10; // Максимум 10 попыток (10 секунд)
+
+    const loadServerIp = async () => {
+      if (serverMode === 'local-server' && attempts < maxAttempts) {
+        attempts++;
+        try {
+          console.log(`[AdminDashboard] Attempting to get server IP (attempt ${attempts}/${maxAttempts})...`);
+          const url = await invoke<string | null>('get_local_server_url');
+          console.log('[AdminDashboard] Got server URL:', url);
+          if (url) {
+            // Извлекаем только IP из URL (http://192.168.1.10:8081 -> 192.168.1.10)
+            const match = url.match(/\/\/([^:]+)/);
+            if (match) {
+              console.log('[AdminDashboard] Extracted IP:', match[1]);
+              setServerIp(match[1]);
+            } else {
+              console.warn('[AdminDashboard] Failed to extract IP from URL:', url);
+            }
+          } else {
+            console.warn('[AdminDashboard] Server URL is null, retrying in 1 second...');
+            // Если URL еще не готов, повторяем попытку через 1 секунду
+            setTimeout(loadServerIp, 1000);
+          }
+        } catch (error) {
+          console.error('[AdminDashboard] Failed to get server IP:', error);
+        }
+      } else if (attempts >= maxAttempts) {
+        console.error('[AdminDashboard] Failed to get server IP after 10 attempts. Server may not have started.');
+      }
+    };
+    loadServerIp();
+  }, [serverMode]);
 
   // WebSocket для административных событий (подключение/отключение судей)
   useAdminEventsWebSocket({
@@ -205,7 +244,7 @@ export const AdminDashboard = () => {
   const handleServerModeChange = (mode: ServerMode) => {
     setServerMode(mode);
     setShowServerModeDialog(false);
-    setSuccessMessage(`Режим изменен на: ${mode === 'online' ? 'Онлайн' : mode === 'local-server' ? 'Локальный сервер' : 'Подключение к серверу'}`);
+    setSuccessMessage(`Режим изменен на: ${mode === 'local-server' ? 'Локальный сервер' : 'Подключение к серверу'}`);
     setShowSuccessDialog(true);
   };
 
@@ -295,13 +334,15 @@ export const AdminDashboard = () => {
               Панель администратора
             </h1>
             <p className="text-gray-800">
-              ID: {user?.user_id} | Режим: {serverMode === 'online' ? 'Онлайн' : serverMode === 'local-server' ? 'Локальный сервер' : 'Клиент'}
+              ID: {user?.user_id} | Режим: {serverMode === 'local-server' ? 'Локальный сервер' : 'Клиент'}
+              {serverIp && (
+                <span className="ml-4 font-semibold text-blue-600">
+                  IP для судей: {serverIp}
+                </span>
+              )}
             </p>
           </div>
           <div className="flex gap-3">
-            <Button variant="ghost" onClick={() => setShowServerModeDialog(true)}>
-              Режим работы
-            </Button>
             <Button variant="secondary" onClick={handleLogout}>
               Выйти
             </Button>

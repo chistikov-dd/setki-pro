@@ -22,25 +22,33 @@ interface CharacteristicField {
   options: Array<{ value: string; label: string }>;
 }
 
-const PARTICIPANT_COUNT_OPTIONS = [4, 8, 16, 32, 64];
-
 export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
   tournamentId,
   onClose,
   onSuccess,
 }) => {
   const [bracketName, setBracketName] = useState('');
-  const [participantCount, setParticipantCount] = useState(8);
+  const [participantCount] = useState(16); // Всегда 16 участников
   const [isCreating, setIsCreating] = useState(false);
   const [sports, setSports] = useState<Sport[]>([]);
   const [selectedSportId, setSelectedSportId] = useState<number | null>(null);
   const [characteristics, setCharacteristics] = useState<CharacteristicField[]>([]);
   const [characteristicValues, setCharacteristicValues] = useState<Record<string, string>>({});
   const [gender, setGender] = useState<'male' | 'female' | 'mixed'>('male');
+  const [minAge, setMinAge] = useState<number | ''>('');
+  const [maxAge, setMaxAge] = useState<number | ''>('');
+  const [minWeight, setMinWeight] = useState<number | ''>('');
+  const [maxWeight, setMaxWeight] = useState<number | ''>('');
   const [isLoadingCharacteristics, setIsLoadingCharacteristics] = useState(false);
   const { showToast } = useToast();
   const { handleError } = useErrorHandler();
-  const { serverUrl } = useServerModeStore();
+  const { mode, serverUrl: rawServerUrl } = useServerModeStore();
+  // Используем serverUrl только если режим local-client (как в BracketSelection)
+  const serverUrl = mode === 'local-client' ? rawServerUrl : null;
+
+  console.log('[CreateBracketDialog] Текущий режим:', mode);
+  console.log('[CreateBracketDialog] Raw serverUrl:', rawServerUrl);
+  console.log('[CreateBracketDialog] Финальный serverUrl:', serverUrl);
 
   // Загрузить виды спорта
   useEffect(() => {
@@ -136,14 +144,15 @@ export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
     }
 
     const selectedSport = sports.find(s => s.id === selectedSportId);
-    console.log('[CreateBracketDialog] Creating bracket:');
-    console.log('  Турнир ID:', tournamentId);
-    console.log('  Название сетки:', bracketName.trim());
-    console.log('  Количество участников:', participantCount);
-    console.log('  Вид спорта:', selectedSport?.name, '(ID:', selectedSportId, ')');
-    console.log('  Пол:', gender);
-    console.log('  Характеристики:', characteristicValues);
-    console.log('  Количество характеристик:', Object.keys(characteristicValues).length);
+    console.log('[CreateBracketDialog] ========== СОЗДАНИЕ СЕТКИ ==========');
+    console.log('[CreateBracketDialog] Турнир ID:', tournamentId);
+    console.log('[CreateBracketDialog] Название сетки:', bracketName.trim());
+    console.log('[CreateBracketDialog] Количество участников:', participantCount);
+    console.log('[CreateBracketDialog] Вид спорта:', selectedSport?.name, '(ID:', selectedSportId, ')');
+    console.log('[CreateBracketDialog] Пол:', gender);
+    console.log('[CreateBracketDialog] Характеристики:', characteristicValues);
+    console.log('[CreateBracketDialog] serverUrl для создания:', serverUrl);
+    console.log('[CreateBracketDialog] Режим работы:', mode);
 
     setIsCreating(true);
     try {
@@ -155,15 +164,21 @@ export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
           sportId: selectedSportId,
           gender,
           characteristicValues,
+          minAge: minAge || undefined,
+          maxAge: maxAge || undefined,
+          minWeight: minWeight || undefined,
+          maxWeight: maxWeight || undefined,
         },
         serverUrl
       );
 
-      console.log('[CreateBracketDialog] Bracket created with ID:', bracketId);
+      console.log('[CreateBracketDialog] ✅ Сетка создана с ID:', bracketId);
       showToast(`Сетка создана (ID: ${bracketId})`, 'success');
 
       // Даём время на сохранение данных в БД перед перезагрузкой списка
+      console.log('[CreateBracketDialog] Ждём 300ms перед вызовом onSuccess...');
       setTimeout(() => {
+        console.log('[CreateBracketDialog] Вызываем onSuccess() и onClose()');
         onSuccess();
         onClose();
       }, 300);
@@ -221,7 +236,7 @@ export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Пол
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setGender('male')}
                 className={`
@@ -248,19 +263,68 @@ export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
               >
                 Женский
               </button>
-              <button
-                onClick={() => setGender('mixed')}
-                className={`
-                  px-4 py-2 rounded-md font-medium transition-colors
-                  ${
-                    gender === 'mixed'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }
-                `}
-              >
-                Смешанный
-              </button>
+            </div>
+          </div>
+
+          {/* Возраст */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Возраст (опционально)
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">От (лет)</label>
+                <input
+                  type="number"
+                  value={minAge}
+                  onChange={(e) => setMinAge(e.target.value ? Number(e.target.value) : '')}
+                  placeholder="Мин"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  min="0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">До (лет)</label>
+                <input
+                  type="number"
+                  value={maxAge}
+                  onChange={(e) => setMaxAge(e.target.value ? Number(e.target.value) : '')}
+                  placeholder="Макс"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  min="0"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Вес */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Вес (опционально)
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">От (кг)</label>
+                <input
+                  type="number"
+                  value={minWeight}
+                  onChange={(e) => setMinWeight(e.target.value ? Number(e.target.value) : '')}
+                  placeholder="Мин"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  min="0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">До (кг)</label>
+                <input
+                  type="number"
+                  value={maxWeight}
+                  onChange={(e) => setMaxWeight(e.target.value ? Number(e.target.value) : '')}
+                  placeholder="Макс"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  min="0"
+                />
+              </div>
             </div>
           </div>
 
@@ -307,43 +371,6 @@ export const CreateBracketDialog: React.FC<CreateBracketDialogProps> = ({
             </div>
           )}
 
-          {/* Количество участников */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Количество участников
-            </label>
-            <div className="grid grid-cols-5 gap-2">
-              {PARTICIPANT_COUNT_OPTIONS.map((count) => (
-                <button
-                  key={count}
-                  onClick={() => setParticipantCount(count)}
-                  className={`
-                    px-4 py-2 rounded-md font-medium transition-colors
-                    ${
-                      participantCount === count
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }
-                  `}
-                >
-                  {count}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Информация */}
-          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-800">
-            <p>
-              <strong>Тип сетки:</strong> Single Elimination
-            </p>
-            <p>
-              <strong>Количество раундов:</strong> {Math.log2(participantCount)}
-            </p>
-            <p className="mt-2 text-xs text-blue-600">
-              Сетка будет создана с пустыми матчами. Вы сможете добавить участников позже.
-            </p>
-          </div>
 
           {/* Кнопки */}
           <div className="flex gap-2 pt-2">

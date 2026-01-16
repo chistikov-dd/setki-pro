@@ -2,6 +2,7 @@ import { useRef, useMemo, useState, useCallback, useEffect, memo } from 'react';
 import { MatchCard } from './MatchCard';
 import { AddParticipantModal } from './AddParticipantModal';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { FloatingEditButton } from './FloatingEditButton';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useToast } from '../../hooks/useToast';
@@ -370,49 +371,34 @@ function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryNam
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full bg-gradient-to-br from-gray-50 via-white to-gray-100 rounded-lg overflow-auto p-8"
-    >
-      {/* Категория турнирной сетки */}
-      {categoryName && (
-        <div className="mb-6 pb-4 border-b-2 border-gray-300">
-          <div className="flex items-center justify-between">
-            <h3 className="text-2xl font-bold text-gray-900">
-              Категория: {categoryName}
-            </h3>
-            {bracketId && user && (
-              <button
-                onClick={() => setEditMode(!isEditMode, bracketId)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                  isEditMode
-                    ? 'bg-green-500 text-white hover:bg-green-600'
-                    : 'bg-blue-500 text-white hover:bg-blue-600'
-                }`}
-                title={isEditMode ? 'Выключить режим редактирования' : 'Включить режим редактирования'}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d={isEditMode
-                      ? "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                      : "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                    }
-                  />
-                </svg>
-                {isEditMode ? 'Готово' : 'Редактировать'}
-              </button>
+    <>
+      {/* Плавающая кнопка редактирования (только если есть права) */}
+      {bracketId && user && (
+        <FloatingEditButton
+          isEditMode={isEditMode}
+          onClick={() => setEditMode(!isEditMode, bracketId)}
+        />
+      )}
+
+      <div
+        ref={containerRef}
+        className="w-full bg-gradient-to-br from-gray-50 via-white to-gray-100 rounded-lg overflow-auto p-8"
+      >
+        {/* Категория турнирной сетки */}
+        {categoryName && (
+          <div className="mb-6 pb-4 border-b-2 border-gray-300">
+            <div className="flex items-center justify-between">
+              <h3 className="text-2xl font-bold text-gray-900">
+                Категория: {categoryName}
+              </h3>
+            </div>
+            {isEditMode && (
+              <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                <strong>Режим редактирования:</strong> Перетаскивайте участников между матчами или используйте кнопки + и × для добавления/удаления
+              </div>
             )}
           </div>
-          {isEditMode && (
-            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-              <strong>Режим редактирования:</strong> Перетаскивайте участников между матчами или используйте кнопки + и × для добавления/удаления
-            </div>
-          )}
-        </div>
-      )}
+        )}
       {bracketId && (
         <AddParticipantModal
           bracketId={bracketId}
@@ -500,7 +486,8 @@ function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryNam
           );
         })}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

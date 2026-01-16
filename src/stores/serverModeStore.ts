@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type ServerMode = 'online' | 'local-server' | 'local-client';
+export type ServerMode = 'local-server' | 'local-client';
 
 interface ServerModeState {
   mode: ServerMode;
@@ -37,14 +37,14 @@ function normalizeServerUrl(url: string | null): string | null {
 export const useServerModeStore = create<ServerModeState>()(
   persist(
     (set) => ({
-      mode: 'online',
+      mode: 'local-server',
       serverUrl: null,
 
       setMode: (mode) => set({ mode }),
 
       setServerUrl: (url) => set({ serverUrl: normalizeServerUrl(url) }),
 
-      reset: () => set({ mode: 'online', serverUrl: null }),
+      reset: () => set({ mode: 'local-server', serverUrl: null }),
     }),
     {
       name: 'server-mode-storage',

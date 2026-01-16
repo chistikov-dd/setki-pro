@@ -3,9 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
-import { useServerModeStore } from '../../stores/serverModeStore';
-
-export type ServerMode = 'online' | 'local-server' | 'local-client';
+import { useServerModeStore, type ServerMode } from '../../stores/serverModeStore';
 
 interface ServerModeSelectorProps {
   currentMode: ServerMode;
@@ -70,12 +68,6 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
     }
   };
 
-  const handleSwitchToOnline = () => {
-    setMode('online');
-    setServerUrl(null); // Сбрасываем serverUrl при переключении на online
-    onModeChange('online');
-  };
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-white to-gray-100 p-4">
       <div className="w-full max-w-2xl">
@@ -105,40 +97,21 @@ export function ServerModeSelector({ currentMode, onModeChange, onBack, isJudgeM
           )}
 
           {/* Current mode indicator */}
-          {actualMode !== 'online' && (
-            <div className="bg-blue-500/10 border border-blue-500/50 rounded-lg p-4">
-              <p className="text-blue-400 text-sm font-medium">
-                Текущий режим:{' '}
-                {actualMode === 'local-server' && 'Локальный сервер'}
-                {actualMode === 'local-client' && 'Подключение к локальному серверу'}
+          <div className="bg-blue-500/10 border border-blue-500/50 rounded-lg p-4">
+            <p className="text-blue-400 text-sm font-medium">
+              Текущий режим:{' '}
+              {actualMode === 'local-server' && 'Локальный сервер'}
+              {actualMode === 'local-client' && 'Подключение к локальному серверу'}
+            </p>
+            {actualMode === 'local-server' && localServerUrl && (
+              <p className="text-blue-300 text-xs mt-2">
+                Адрес сервера: <span className="font-mono">{localServerUrl}</span>
               </p>
-              {actualMode === 'local-server' && localServerUrl && (
-                <p className="text-blue-300 text-xs mt-2">
-                  Адрес сервера: <span className="font-mono">{localServerUrl}</span>
-                </p>
-              )}
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Mode options */}
           <div className="space-y-4">
-            {/* Online mode */}
-            {!isJudgeMode && (
-              <div className="border border-gray-400 rounded-lg p-4 hover:border-gray-600 transition-colors">
-                <h3 className="text-white font-semibold mb-2">Работа через интернет</h3>
-                <p className="text-gray-800 text-sm mb-3">
-                  Подключение к серверу setki.pro. Требуется стабильное интернет-соединение.
-                </p>
-                <Button
-                  onClick={handleSwitchToOnline}
-                  variant={actualMode === 'online' ? 'primary' : 'secondary'}
-                  disabled={actualMode === 'online'}
-                >
-                  {actualMode === 'online' ? 'Активен' : 'Переключиться'}
-                </Button>
-              </div>
-            )}
-
             {/* Local server mode */}
             {!isJudgeMode && (
               <div className="border border-gray-400 rounded-lg p-4 hover:border-gray-600 transition-colors">

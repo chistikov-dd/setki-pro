@@ -2,14 +2,12 @@ import React from 'react';
 
 interface LoginChoiceProps {
   onSelectRole: (role: 'admin' | 'judge') => void;
-  onOpenServerMode: () => void;
   isAutoLoginInProgress?: boolean;
   autoLoginRole?: 'admin' | 'judge' | null;
 }
 
 export const LoginChoice: React.FC<LoginChoiceProps> = ({
   onSelectRole,
-  onOpenServerMode,
   isAutoLoginInProgress = false,
   autoLoginRole = null
 }) => {
@@ -117,21 +115,6 @@ export const LoginChoice: React.FC<LoginChoiceProps> = ({
                 </>
               )}
             </div>
-          </button>
-        </div>
-
-        {/* Server Mode Button */}
-        <div className="text-center mb-6 sm:mb-8">
-          <button
-            onClick={onOpenServerMode}
-            className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-white border border-gray-400 hover:border-purple-500 hover:shadow-md transition-all duration-200 group"
-          >
-            <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-            </svg>
-            <span className="text-gray-900 font-medium group-hover:text-purple-600 transition-colors">
-              Режим работы
-            </span>
           </button>
         </div>
 

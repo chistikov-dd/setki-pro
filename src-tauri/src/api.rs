@@ -242,11 +242,11 @@ impl ApiClient {
             Ok(response) if response.status().is_success() => {
                 self.logger.info(&format!("HTTP SUCCESS - status: {}", response.status()));
                 // Online успешно
-                let mut auth: AuthResponse = response.json().await?;
-                auth.judge_name = None; // Имя будет добавлено в Tauri command
-                // Токен будет сохранен в save_judge_session с полными данными
-                self.logger.info(&format!("Received auth response: user_id={}, role={}, tournament_id={:?}",
-                    auth.user_id, auth.role, auth.tournament_id));
+                let auth: AuthResponse = response.json().await?;
+                // Для локального сервера judge_name и table_number уже в ответе
+                // Для онлайн-сервера их добавит Tauri command
+                self.logger.info(&format!("Received auth response: user_id={}, role={}, tournament_id={:?}, judge_name={:?}, table_number={:?}",
+                    auth.user_id, auth.role, auth.tournament_id, auth.judge_name, auth.table_number));
                 self.logger.info("========== ApiClient::login_by_pin SUCCESS ==========");
                 Ok(auth)
             },
@@ -1322,7 +1322,7 @@ impl ApiClient {
             let token = self.get_token().await?
                 .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
 
-            let url = format!("{}/desktop/brackets/reserve", self.base_url);
+            let url = format!("{}/api/v1/desktop/brackets/reserve", self.base_url);
             let payload = serde_json::json!({
                 "bracket_id": bracket_id,
                 "tournament_id": tournament_id,
@@ -1357,23 +1357,27 @@ impl ApiClient {
         println!("[ApiClient::reserve_bracket] Using local DB mode");
 
         // Проверить, не занята ли уже сетка
-        let existing = sqlx::query_as::<_, (String, i32, i32)>(
-            "SELECT judge_name, table_number, user_id FROM bracket_reservations WHERE bracket_id = ?"
+        let existing = sqlx::query_as::<_, (String, i32)>(
+            "SELECT judge_name, table_number FROM bracket_assignments
+             WHERE bracket_id = ? AND tournament_id = ? AND status = 'active'"
         )
         .bind(bracket_id)
+        .bind(tournament_id)
         .fetch_optional(self.db.as_ref())
         .await?;
 
         println!("[ApiClient::reserve_bracket] Existing reservation: {:?}", existing);
 
-        if let Some((existing_judge, existing_table, existing_user_id)) = existing {
+        if let Some((existing_judge, existing_table)) = existing {
             // Если сетка уже занята этим же судьей, просто обновляем время
-            if existing_user_id == user_id {
+            if existing_judge == judge_name && existing_table == table_number {
                 println!("[ApiClient::reserve_bracket] Updating existing reservation for same user");
                 sqlx::query(
-                    "UPDATE bracket_reservations SET reserved_at = datetime('now') WHERE bracket_id = ?"
+                    "UPDATE bracket_assignments SET reserved_at = datetime('now')
+                     WHERE bracket_id = ? AND tournament_id = ?"
                 )
                 .bind(bracket_id)
+                .bind(tournament_id)
                 .execute(self.db.as_ref())
                 .await?;
                 println!("[ApiClient::reserve_bracket] SUCCESS (updated)");
@@ -1392,14 +1396,18 @@ impl ApiClient {
         // Зарезервировать сетку
         println!("[ApiClient::reserve_bracket] Inserting new reservation");
         let result = sqlx::query(
-            "INSERT INTO bracket_reservations (bracket_id, tournament_id, judge_name, table_number, user_id, reserved_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))"
+            "INSERT INTO bracket_assignments (bracket_id, tournament_id, judge_name, table_number, reserved_at, status)
+             VALUES (?, ?, ?, ?, datetime('now'), 'active')
+             ON CONFLICT(bracket_id, tournament_id) DO UPDATE SET
+                judge_name = excluded.judge_name,
+                table_number = excluded.table_number,
+                reserved_at = datetime('now'),
+                status = 'active'"
         )
         .bind(bracket_id)
         .bind(tournament_id)
         .bind(judge_name)
         .bind(table_number)
-        .bind(user_id)
         .execute(self.db.as_ref())
         .await;
 
@@ -1424,7 +1432,7 @@ impl ApiClient {
 
             // Получить judge_name из резервирования
             let judge_name = sqlx::query_scalar::<_, Option<String>>(
-                "SELECT judge_name FROM bracket_reservations WHERE bracket_id = ?"
+                "SELECT judge_name FROM bracket_assignments WHERE bracket_id = ? AND status = 'active'"
             )
             .bind(bracket_id)
             .fetch_optional(self.db.as_ref())
@@ -1432,7 +1440,7 @@ impl ApiClient {
             .flatten();
 
             if let Some(name) = judge_name {
-                let url = format!("{}/desktop/brackets/release", self.base_url);
+                let url = format!("{}/api/v1/desktop/brackets/release", self.base_url);
                 let payload = serde_json::json!({
                     "bracket_id": bracket_id,
                     "judge_name": name,
@@ -1451,8 +1459,8 @@ impl ApiClient {
                 }
             }
 
-            // Также удалить из локальной БД
-            sqlx::query("DELETE FROM bracket_reservations WHERE bracket_id = ?")
+            // Также обновить статус в локальной БД
+            sqlx::query("UPDATE bracket_assignments SET status = 'released' WHERE bracket_id = ? AND status = 'active'")
                 .bind(bracket_id)
                 .execute(self.db.as_ref())
                 .await?;
@@ -1461,7 +1469,7 @@ impl ApiClient {
         }
 
         // Онлайн режим или локальная БД
-        sqlx::query("DELETE FROM bracket_reservations WHERE bracket_id = ?")
+        sqlx::query("UPDATE bracket_assignments SET status = 'released' WHERE bracket_id = ? AND status = 'active'")
             .bind(bracket_id)
             .execute(self.db.as_ref())
             .await?;
@@ -1471,7 +1479,7 @@ impl ApiClient {
 
     // Очистить все резервирования (для отладки)
     pub async fn clear_all_reservations(&self) -> Result<()> {
-        sqlx::query("DELETE FROM bracket_reservations")
+        sqlx::query("UPDATE bracket_assignments SET status = 'released' WHERE status = 'active'")
             .execute(self.db.as_ref())
             .await?;
 
@@ -1487,7 +1495,7 @@ impl ApiClient {
 
             // Получить все резервации судьи
             let brackets = sqlx::query_scalar::<_, i32>(
-                "SELECT bracket_id FROM bracket_reservations WHERE judge_name = ?"
+                "SELECT bracket_id FROM bracket_assignments WHERE judge_name = ? AND status = 'active'"
             )
             .bind(judge_name)
             .fetch_all(self.db.as_ref())
@@ -1495,7 +1503,7 @@ impl ApiClient {
 
             // Освободить каждую сетку через HTTP
             for bracket_id in brackets {
-                let url = format!("{}/desktop/brackets/release", self.base_url);
+                let url = format!("{}/api/v1/desktop/brackets/release", self.base_url);
                 let payload = serde_json::json!({
                     "bracket_id": bracket_id,
                     "judge_name": judge_name,
@@ -1511,8 +1519,8 @@ impl ApiClient {
             }
         }
 
-        // Удалить все резервации судьи из локальной БД
-        sqlx::query("DELETE FROM bracket_reservations WHERE judge_name = ?")
+        // Обновить статус всех резерваций судьи в локальной БД
+        sqlx::query("UPDATE bracket_assignments SET status = 'released' WHERE judge_name = ? AND status = 'active'")
             .bind(judge_name)
             .execute(self.db.as_ref())
             .await?;
@@ -1523,7 +1531,7 @@ impl ApiClient {
     // Получить информацию о резервировании сетки
     pub async fn get_bracket_reservation(&self, bracket_id: i32) -> Result<Option<(String, i32)>> {
         let result = sqlx::query_as::<_, (String, i32)>(
-            "SELECT judge_name, user_id FROM bracket_reservations WHERE bracket_id = ?"
+            "SELECT judge_name, table_number FROM bracket_assignments WHERE bracket_id = ? AND status = 'active'"
         )
         .bind(bracket_id)
         .fetch_optional(self.db.as_ref())
@@ -2423,8 +2431,8 @@ impl ApiClient {
 
             // Вычислить параметры следующего матча
                 let next_round = current_round + 1;
-                // Нумерация матчей начинается с 0, поэтому формула: current_match_number / 2
-                let next_match_number = current_match_number / 2;
+                // Нумерация матчей начинается с 1, поэтому формула: (current_match_number + 1) / 2
+                let next_match_number = (current_match_number + 1) / 2;
                 println!("[finish_match] Next match calculation - current_round: {}, current_match_number: {}, next_round: {}, next_match_number: {}",
                          current_round, current_match_number, next_round, next_match_number);
 

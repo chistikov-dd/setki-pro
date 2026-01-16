@@ -18,10 +18,15 @@ function extractMinAgeFromName(categoryName: string): number {
   const ageMatch = categoryName.match(/(\d+)\s*[-–]\s*\d+\s*лет/);
   if (ageMatch) return parseInt(ageMatch[1]);
 
+  // Ищем "от X лет"
+  const fromAgeMatch = categoryName.match(/от\s+(\d+)\s*лет/);
+  if (fromAgeMatch) return parseInt(fromAgeMatch[1]);
+
   // Ищем "Взрослые"
   if (categoryName.toLowerCase().includes('взрослые')) return 18;
 
-  return 999; // Неизвестный возраст - в конец
+  // Не показываем возраст если не нашли
+  return 0;
 }
 
 /**

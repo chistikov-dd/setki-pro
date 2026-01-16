@@ -5,19 +5,16 @@ import { checkUnsyncedCount } from '../../services/api';
 interface ConnectionStatusBannerProps {
   /** Показывать ли статус WebSocket подключения */
   wsConnected?: boolean;
-  /** Показывать всегда или только в offline режимах */
-  alwaysShow?: boolean;
 }
 
 /**
  * Глобальный sticky banner показывающий текущий режим работы и статус подключения
  *
  * Режимы:
- * - online: работа через интернет с setki.pro
  * - local-server: админ запустил локальный сервер
  * - local-client: судья подключен к локальному серверу
  */
-export function ConnectionStatusBanner({ wsConnected, alwaysShow = false }: ConnectionStatusBannerProps) {
+export function ConnectionStatusBanner({ wsConnected }: ConnectionStatusBannerProps) {
   const { mode, serverUrl } = useServerModeStore();
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [unsyncedCount, setUnsyncedCount] = useState<number>(0);
@@ -56,28 +53,15 @@ export function ConnectionStatusBanner({ wsConnected, alwaysShow = false }: Conn
     return () => clearInterval(interval);
   }, []);
 
-  // Не показываем banner в online режиме если alwaysShow=false
-  if (!alwaysShow && mode === 'online' && isOnline) {
-    return null;
-  }
-
   // Определяем цвет и сообщение в зависимости от режима
   const getBannerConfig = () => {
-    // Критично: нет интернета
-    if (!isOnline && mode === 'online') {
-      return {
-        bg: 'bg-red-600',
-        icon: '⚠️',
-        text: 'Нет интернета - данные сохраняются локально',
-      };
-    }
-
     // Локальный сервер (админ)
     if (mode === 'local-server') {
+      const internetStatus = isOnline ? '🌐 Интернет доступен' : '⚠️ Нет интернета';
       return {
-        bg: 'bg-blue-600',
+        bg: isOnline ? 'bg-blue-600' : 'bg-yellow-600',
         icon: '🖥️',
-        text: 'Локальный сервер запущен - турнир в offline режиме',
+        text: `Локальный сервер запущен | ${internetStatus}`,
       };
     }
 
@@ -91,15 +75,6 @@ export function ConnectionStatusBanner({ wsConnected, alwaysShow = false }: Conn
         bg: wsConnected === false ? 'bg-yellow-600' : 'bg-green-600',
         icon: '🔌',
         text: `Локальный режим: ${serverUrl} ${wsStatus}`,
-      };
-    }
-
-    // Онлайн режим с интернетом
-    if (mode === 'online' && isOnline) {
-      return {
-        bg: 'bg-green-600',
-        icon: '🌐',
-        text: 'Работа через интернет - setki.pro',
       };
     }
 
