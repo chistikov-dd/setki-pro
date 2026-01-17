@@ -1352,28 +1352,8 @@ impl ApiClient {
                 return Err(anyhow::anyhow!("Ошибка резервирования сетки: {}", error_text));
             }
 
-            println!("[ApiClient::reserve_bracket] SUCCESS (local server) - сервер принял резервирование");
-
-            // ВАЖНО: Также сохраняем резервирование локально у судьи,
-            // чтобы оно отображалось в "Мои сетки"
-            println!("[ApiClient::reserve_bracket] Saving reservation locally...");
-            sqlx::query(
-                "INSERT INTO bracket_assignments (bracket_id, tournament_id, judge_name, table_number, reserved_at, status)
-                 VALUES (?, ?, ?, ?, datetime('now'), 'active')
-                 ON CONFLICT(bracket_id, tournament_id) DO UPDATE SET
-                    judge_name = excluded.judge_name,
-                    table_number = excluded.table_number,
-                    reserved_at = datetime('now'),
-                    status = 'active'"
-            )
-            .bind(bracket_id)
-            .bind(tournament_id)
-            .bind(judge_name)
-            .bind(table_number)
-            .execute(self.db.as_ref())
-            .await?;
-
-            println!("[ApiClient::reserve_bracket] SUCCESS (saved locally and on server)");
+            println!("[ApiClient::reserve_bracket] SUCCESS - reservation saved on admin server");
+            // Судья НЕ сохраняет локально - все данные только на сервере админа
             return Ok(());
         }
 
