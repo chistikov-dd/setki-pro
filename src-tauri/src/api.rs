@@ -974,7 +974,8 @@ impl ApiClient {
             // Парсим данные для отправки на локальный сервер
             let match_data: serde_json::Value = serde_json::from_str(&data)?;
 
-            let url = format!("{}/api/v1/desktop/matches/update", server_url);
+            // server_url уже содержит /api/v1, не добавляем повторно
+            let url = format!("{}/desktop/matches/update", server_url);
             let response = reqwest::Client::new()
                 .post(&url)
                 .header("Content-Type", "application/json")
@@ -1029,7 +1030,8 @@ impl ApiClient {
         self.logger.info(&format!("participant_name: {:?}", participant_name));
         self.logger.info(&format!("club: {:?}", club));
 
-        let url = format!("{}/api/v1/desktop/matches/participant", server_url);
+        // server_url уже содержит /api/v1, не добавляем повторно
+        let url = format!("{}/desktop/matches/participant", server_url);
         self.logger.info(&format!("Full URL: {}", url));
 
         // Retry логика: 5 попыток с экспоненциальной задержкой (1s, 2s, 4s, 8s, 16s)
@@ -1322,7 +1324,8 @@ impl ApiClient {
             let token = self.get_token().await?
                 .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
 
-            let url = format!("{}/api/v1/desktop/brackets/reserve", self.base_url);
+            // base_url уже содержит /api/v1, не добавляем повторно
+            let url = format!("{}/desktop/brackets/reserve", self.base_url);
             let payload = serde_json::json!({
                 "bracket_id": bracket_id,
                 "tournament_id": tournament_id,
@@ -1440,7 +1443,8 @@ impl ApiClient {
             .flatten();
 
             if let Some(name) = judge_name {
-                let url = format!("{}/api/v1/desktop/brackets/release", self.base_url);
+                // base_url уже содержит /api/v1, не добавляем повторно
+                let url = format!("{}/desktop/brackets/release", self.base_url);
                 let payload = serde_json::json!({
                     "bracket_id": bracket_id,
                     "judge_name": name,
@@ -2123,8 +2127,8 @@ impl ApiClient {
             }
         };
 
-        // Формируем полный URL с /api/v1
-        let url = format!("{}/api/v1/desktop/matches/undo", server_url);
+        // server_url уже содержит /api/v1, не добавляем повторно
+        let url = format!("{}/desktop/matches/undo", server_url);
         println!("[undo_match_on_local_server] Full URL: {}", url);
 
         let payload = serde_json::json!({
