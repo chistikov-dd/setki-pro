@@ -1541,6 +1541,9 @@ async fn reserve_bracket_handler(
     State(state): State<LocalServerState>,
     Json(payload): Json<ReserveBracketRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    state.logger.info("========== reserve_bracket_handler START ==========");
+    state.logger.info(&format!("bracket_id: {}, tournament_id: {}, judge_name: {}, table_number: {}, user_id: {}",
+        payload.bracket_id, payload.tournament_id, payload.judge_name, payload.table_number, payload.user_id));
     println!("[LOCAL SERVER] ========== reserve_bracket_handler START ==========");
     println!("[LOCAL SERVER] bracket_id: {}, tournament_id: {}, judge_name: {}, table_number: {}, user_id: {}",
         payload.bracket_id, payload.tournament_id, payload.judge_name, payload.table_number, payload.user_id);
@@ -1599,6 +1602,18 @@ async fn reserve_bracket_handler(
     println!("[LOCAL SERVER] Broadcast event: bracket_reserved for bracket {} by {} (стол №{})",
         payload.bracket_id, payload.judge_name, payload.table_number);
 
+    // Проверяем, сохранилось ли резервирование
+    let verify_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM bracket_assignments WHERE bracket_id = ? AND tournament_id = ? AND status = 'active'"
+    )
+    .bind(payload.bracket_id)
+    .bind(payload.tournament_id)
+    .fetch_one(&*state.db)
+    .await?;
+
+    state.logger.info(&format!("Verification: {} active reservations for bracket {}", verify_count, payload.bracket_id));
+    state.logger.info("========== reserve_bracket_handler SUCCESS ==========");
+    println!("[LOCAL SERVER] Verification: {} active reservations for bracket {}", verify_count, payload.bracket_id);
     println!("[LOCAL SERVER] ========== reserve_bracket_handler SUCCESS ==========");
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
@@ -1896,6 +1911,20 @@ async fn get_my_bracket_assignments_handler(
         }
     }
 
+    state.logger.info(&format!("Returning {} brackets with full data", brackets.len()));
+
+    // Подробное логирование возвращаемых данных
+    for (i, bracket) in brackets.iter().enumerate() {
+        let bracket_info = format!("Bracket {}: id={}, category={}",
+            i + 1,
+            bracket.get("id").and_then(|v| v.as_i64()).unwrap_or(-1),
+            bracket.get("category_name").and_then(|v| v.as_str()).unwrap_or("unknown")
+        );
+        state.logger.info(&bracket_info);
+        println!("[LOCAL SERVER] {}", bracket_info);
+    }
+
+    state.logger.info("========== get_my_bracket_assignments_handler END ==========");
     println!("[LOCAL SERVER] Returning {} brackets with full data", brackets.len());
     println!("[LOCAL SERVER] ========== get_my_bracket_assignments_handler END ==========");
     Ok(Json(brackets))
