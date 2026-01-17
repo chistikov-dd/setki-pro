@@ -158,8 +158,17 @@ function App() {
         }
 
         // Без дополнительной задержки, т.к. logout уже отработал или превысил timeout
-        // Закрываем окно
-        await currentWindow.destroy();
+        console.log('[Window Close] Closing application...');
+
+        // Для гарантированного выхода используем процессный exit через Tauri command
+        try {
+          await invoke('exit_app');
+          console.log('[Window Close] Exit command sent');
+        } catch (exitErr) {
+          console.error('[Window Close] Exit command failed, using window destroy:', exitErr);
+          // Fallback: destroy окна
+          await currentWindow.destroy();
+        }
       });
 
       // 2. Добавляем browser beforeunload как запасной вариант

@@ -210,6 +210,24 @@ async fn clear_all_table_reservations(
 }
 
 #[tauri::command]
+async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
+    println!("[exit_app] Exiting application...");
+
+    // Останавливаем локальный сервер если запущен
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut server_handle = state.local_server_handle.lock().await;
+        if let Some(handle) = server_handle.take() {
+            println!("[exit_app] Stopping local server...");
+            let _ = handle.send(());
+        }
+    }
+
+    // Выходим из приложения
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 async fn check_internet_connection() -> Result<bool, String> {
     // Проверка доступности setki.pro API с timeout 3 секунды
     let client = reqwest::Client::builder()
@@ -3149,6 +3167,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            exit_app,
             has_saved_auth,
             get_token,
             get_saved_credentials,
