@@ -2,20 +2,15 @@ import { useServerModeStore } from '../../stores/serverModeStore';
 import { useEffect, useState } from 'react';
 import { checkUnsyncedCount, checkInternetConnection } from '../../services/api';
 
-interface ConnectionStatusBannerProps {
-  /** Показывать ли статус WebSocket подключения */
-  wsConnected?: boolean;
-}
-
 /**
  * Глобальный sticky banner показывающий текущий режим работы и статус подключения
  *
  * Режимы:
  * - local-server: админ запустил локальный сервер
- * - local-client: судья подключен к локальному серверу
+ * - local-client: судья подключен к локальному серверу (баннер скрыт)
  */
-export function ConnectionStatusBanner({ wsConnected }: ConnectionStatusBannerProps) {
-  const { mode, serverUrl } = useServerModeStore();
+export function ConnectionStatusBanner() {
+  const { mode } = useServerModeStore();
   const [isOnline, setIsOnline] = useState(false);
   const [unsyncedCount, setUnsyncedCount] = useState<number>(0);
 
