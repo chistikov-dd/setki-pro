@@ -1030,9 +1030,14 @@ async fn get_my_bracket_assignments(
             .map_err(|e| format!("Ошибка получения токена: {}", e))?
             .ok_or_else(|| "Токен не найден".to_string())?;
 
+        println!("[get_my_bracket_assignments] Токен найден: {}...", &token[..token.len().min(10)]);
+
         let client = reqwest::Client::new();
-        let endpoint = format!("{}/api/v1/desktop/my-bracket-assignments/{}/{}",
+        // server_url УЖЕ содержит /api/v1, не добавляем его повторно
+        let endpoint = format!("{}/desktop/my-bracket-assignments/{}/{}",
             url, tournament_id, table_number);
+
+        println!("[get_my_bracket_assignments] Endpoint: {}", endpoint);
 
         let response = client.get(&endpoint)
             .header("Authorization", format!("Bearer {}", token))
