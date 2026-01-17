@@ -235,16 +235,51 @@ export async function reserveBracket(
   tournamentId: number,
   judgeName: string,
   tableNumber: number,
-  userId: number
+  userId: number,
+  serverUrl?: string | null
 ): Promise<void> {
-  return await invoke('reserve_bracket', { bracketId, tournamentId, judgeName, tableNumber, userId });
+  console.log('========== reserveBracket API CALL START ==========');
+  console.log('[api.ts] Parameters:', {
+    bracketId,
+    tournamentId,
+    judgeName,
+    tableNumber,
+    userId,
+    serverUrl,
+  });
+
+  try {
+    const startTime = performance.now();
+    const result = await invoke('reserve_bracket', {
+      bracketId,
+      tournamentId,
+      judgeName,
+      tableNumber,
+      userId,
+      serverUrl: serverUrl || null,
+    });
+    const elapsed = performance.now() - startTime;
+
+    console.log(`[api.ts] ✅ Tauri invoke SUCCESS (${elapsed.toFixed(0)}ms)`);
+    console.log('[api.ts] Result:', result);
+    console.log('========== reserveBracket API CALL END (SUCCESS) ==========');
+
+    return result;
+  } catch (error) {
+    console.error('========== reserveBracket API CALL FAILED ==========');
+    console.error('[api.ts] Error type:', error instanceof Error ? error.constructor.name : typeof error);
+    console.error('[api.ts] Error message:', error instanceof Error ? error.message : String(error));
+    console.error('[api.ts] Error details:', error);
+    console.error('[api.ts] Full error object:', JSON.stringify(error, null, 2));
+    throw error;
+  }
 }
 
 /**
  * Освободить сетку (отменить резервирование)
  */
-export async function releaseBracket(bracketId: number): Promise<void> {
-  return await invoke('release_bracket', { bracketId });
+export async function releaseBracket(bracketId: number, serverUrl?: string | null): Promise<void> {
+  return await invoke('release_bracket', { bracketId, serverUrl: serverUrl || null });
 }
 
 /**
@@ -682,11 +717,38 @@ export async function getMyBracketAssignments(
   tableNumber: number,
   serverUrl?: string | null
 ): Promise<BracketResponse[]> {
-  return await invoke<BracketResponse[]>('get_my_bracket_assignments', {
+  console.log('========== getMyBracketAssignments API CALL START ==========');
+  console.log('[api.ts] Parameters:', {
     tournamentId,
     tableNumber,
-    serverUrl: serverUrl || null,
+    serverUrl,
   });
+
+  try {
+    const startTime = performance.now();
+    const result = await invoke<BracketResponse[]>('get_my_bracket_assignments', {
+      tournamentId,
+      tableNumber,
+      serverUrl: serverUrl || null,
+    });
+    const elapsed = performance.now() - startTime;
+
+    console.log(`[api.ts] ✅ Tauri invoke SUCCESS (${elapsed.toFixed(0)}ms)`);
+    console.log('[api.ts] Result count:', result.length);
+    console.log('[api.ts] Result brackets:', result.map(b => ({
+      id: b.id,
+      category_name: b.category_name,
+    })));
+    console.log('========== getMyBracketAssignments API CALL END (SUCCESS) ==========');
+
+    return result;
+  } catch (error) {
+    console.error('========== getMyBracketAssignments API CALL FAILED ==========');
+    console.error('[api.ts] Error type:', error instanceof Error ? error.constructor.name : typeof error);
+    console.error('[api.ts] Error message:', error instanceof Error ? error.message : String(error));
+    console.error('[api.ts] Error details:', error);
+    throw error;
+  }
 }
 
 // ============================================

@@ -578,10 +578,58 @@ async fn reserve_bracket(
     judge_name: String,
     table_number: i32,
     user_id: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("[reserve_bracket] START: bracket_id={}, tournament_id={}, judge_name={}, table_number={}, user_id={}",
-        bracket_id, tournament_id, judge_name, table_number, user_id);
+    println!("[reserve_bracket] START: bracket_id={}, tournament_id={}, judge_name={}, table_number={}, user_id={}, server_url={:?}",
+        bracket_id, tournament_id, judge_name, table_number, user_id, server_url);
+
+    // Если есть server_url (local-client режим) - отправить на локальный сервер админа
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[reserve_bracket] Отправка на локальный сервер админа: {}", url);
+
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден".to_string())?;
+
+        println!("[reserve_bracket] Токен найден: {}...", &token[..token.len().min(10)]);
+
+        let client = reqwest::Client::new();
+        // server_url УЖЕ содержит /api/v1, не добавляем его повторно
+        let endpoint = format!("{}/desktop/brackets/reserve", url);
+
+        let payload = serde_json::json!({
+            "bracket_id": bracket_id,
+            "tournament_id": tournament_id,
+            "judge_name": judge_name,
+            "table_number": table_number,
+            "user_id": user_id,
+        });
+
+        println!("[reserve_bracket] Endpoint: {}", endpoint);
+        println!("[reserve_bracket] Payload: {}", payload);
+
+        let response = client.post(&endpoint)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка запроса: {}", e))?;
+
+        println!("[reserve_bracket] Response status: {}", response.status());
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            println!("[reserve_bracket] ERROR: {}", error_text);
+            return Err(format!("Ошибка резервирования сетки: {}", error_text));
+        }
+
+        println!("[reserve_bracket] SUCCESS - reservation saved on admin server");
+        return Ok(());
+    }
+
+    // Иначе используем локальную БД (админ режим)
+    println!("[reserve_bracket] Сохранение в локальную БД (админ режим)");
 
     let result = state.api_client
         .reserve_bracket(bracket_id, tournament_id, &judge_name, table_number, user_id)
@@ -601,8 +649,47 @@ async fn reserve_bracket(
 #[tauri::command]
 async fn release_bracket(
     bracket_id: i32,
+    server_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    println!("[release_bracket] START: bracket_id={}, server_url={:?}", bracket_id, server_url);
+
+    // Если есть server_url (local-client режим) - отправить на локальный сервер админа
+    if let Some(url) = server_url.filter(|s| !s.is_empty()) {
+        println!("[release_bracket] Отправка на локальный сервер админа: {}", url);
+
+        let token = state.api_client.get_token().await
+            .map_err(|e| format!("Ошибка получения токена: {}", e))?
+            .ok_or_else(|| "Токен не найден".to_string())?;
+
+        let client = reqwest::Client::new();
+        let endpoint = format!("{}/desktop/brackets/release", url);
+
+        let payload = serde_json::json!({
+            "bracket_id": bracket_id,
+        });
+
+        println!("[release_bracket] Endpoint: {}", endpoint);
+
+        let response = client.post(&endpoint)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Ошибка запроса: {}", e))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            println!("[release_bracket] ERROR: {}", error_text);
+            return Err(format!("Ошибка освобождения сетки: {}", error_text));
+        }
+
+        println!("[release_bracket] SUCCESS");
+        return Ok(());
+    }
+
+    // Иначе используем локальную БД (админ режим)
+    println!("[release_bracket] Освобождение в локальной БД (админ режим)");
     state.api_client
         .release_bracket(bracket_id)
         .await

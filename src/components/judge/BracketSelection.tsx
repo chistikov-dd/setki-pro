@@ -290,31 +290,66 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
   // Загрузить "Мои сетки"
   const loadMyBrackets = async () => {
+    console.log('========== loadMyBrackets START ==========');
+
     if (!user?.table_number) {
-      console.log('[BracketSelection] Нет номера стола для загрузки моих сеток');
+      console.log('[BracketSelection] ❌ Нет номера стола для загрузки моих сеток');
+      console.log('[BracketSelection] User object:', user);
       return;
     }
 
     try {
-      console.log('[BracketSelection] Загрузка моих сеток для стола', user.table_number);
+      console.log('[BracketSelection] Loading my brackets for:', {
+        tournamentId,
+        tableNumber: user.table_number,
+        mode,
+        serverUrl,
+      });
+
       const url = mode === 'local-client' ? serverUrl : null;
+      console.log('[BracketSelection] Final URL for getMyBracketAssignments:', url);
+
+      const startTime = performance.now();
       const myAssignedBrackets = await getMyBracketAssignments(tournamentId, user.table_number, url);
-      console.log('[BracketSelection] Загружено моих сеток:', myAssignedBrackets.length);
+      const elapsed = performance.now() - startTime;
+
+      console.log(`[BracketSelection] ✅ getMyBracketAssignments SUCCESS (${elapsed.toFixed(0)}ms)`);
+      console.log('[BracketSelection] Loaded brackets count:', myAssignedBrackets.length);
+      console.log('[BracketSelection] Loaded brackets:', myAssignedBrackets.map(b => ({
+        id: b.id,
+        category_name: b.category_name,
+      })));
+
       setMyBrackets(myAssignedBrackets);
+      console.log('[BracketSelection] myBrackets state updated');
+      console.log('========== loadMyBrackets END (SUCCESS) ==========');
     } catch (err) {
-      console.error('[BracketSelection] Ошибка загрузки моих сеток:', err);
+      console.error('========== loadMyBrackets FAILED ==========');
+      console.error('[BracketSelection] Error type:', err instanceof Error ? err.constructor.name : typeof err);
+      console.error('[BracketSelection] Error message:', err instanceof Error ? err.message : String(err));
+      console.error('[BracketSelection] Error details:', err);
     }
   };
 
   // Зарезервировать сетку
   const handleReserveBracket = async (bracket: BracketResponse) => {
-    console.log('[BracketSelection] handleReserveBracket - user object:', JSON.stringify(user, null, 2));
-    console.log('[BracketSelection] judge_name:', user?.judge_name);
-    console.log('[BracketSelection] table_number:', user?.table_number);
-    console.log('[BracketSelection] user_id:', user?.user_id);
+    console.log('========== handleReserveBracket START ==========');
+    console.log('[BracketSelection] Bracket:', {
+      id: bracket.id,
+      category_name: bracket.category_name,
+      tournament_id: tournamentId,
+    });
+    console.log('[BracketSelection] User object (full):', JSON.stringify(user, null, 2));
+    console.log('[BracketSelection] User fields:', {
+      judge_name: user?.judge_name,
+      table_number: user?.table_number,
+      user_id: user?.user_id,
+    });
+    console.log('[BracketSelection] Server mode:', mode);
+    console.log('[BracketSelection] Server URL:', serverUrl);
 
     if (!user?.judge_name || !user?.table_number || user?.user_id === undefined) {
-      console.error('[BracketSelection] Нет данных пользователя для резервирования');
+      console.error('[BracketSelection] ❌ VALIDATION FAILED - Missing user data');
       console.error('[BracketSelection] Missing fields:', {
         hasJudgeName: !!user?.judge_name,
         hasTableNumber: !!user?.table_number,
@@ -323,9 +358,25 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       return;
     }
 
+    console.log('[BracketSelection] ✅ Validation passed, calling reserveBracket API...');
     setIsReserving(true);
+
     try {
-      await reserveBracket(bracket.id, tournamentId, user.judge_name, user.table_number, user.user_id);
+      const url = mode === 'local-client' ? serverUrl : null;
+      console.log('[BracketSelection] API call params:', {
+        bracketId: bracket.id,
+        tournamentId: tournamentId,
+        judgeName: user.judge_name,
+        tableNumber: user.table_number,
+        userId: user.user_id,
+        serverUrl: url,
+      });
+
+      const startTime = performance.now();
+      await reserveBracket(bracket.id, tournamentId, user.judge_name, user.table_number, user.user_id, url);
+      const elapsed = performance.now() - startTime;
+
+      console.log(`[BracketSelection] ✅ reserveBracket SUCCESS (${elapsed.toFixed(0)}ms)`);
 
       // Показать уведомление
       const event = new CustomEvent('show-toast', {
@@ -336,11 +387,21 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         },
       });
       window.dispatchEvent(event);
+      console.log('[BracketSelection] Success toast dispatched');
 
       // Обновить "Мои сетки" и переключиться на эту вкладку
+      console.log('[BracketSelection] Loading my brackets...');
       await loadMyBrackets();
+      console.log('[BracketSelection] Switching to "my" tab');
       setActiveTab('my');
+      console.log('========== handleReserveBracket END (SUCCESS) ==========');
     } catch (err) {
+      console.error('========== handleReserveBracket FAILED ==========');
+      console.error('[BracketSelection] Error details:', err);
+      console.error('[BracketSelection] Error type:', err instanceof Error ? err.constructor.name : typeof err);
+      console.error('[BracketSelection] Error message:', err instanceof Error ? err.message : String(err));
+      console.error('[BracketSelection] Error stack:', err instanceof Error ? err.stack : 'N/A');
+
       const event = new CustomEvent('show-toast', {
         detail: {
           message: err instanceof Error ? err.message : 'Ошибка резервирования',
@@ -349,8 +410,10 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         },
       });
       window.dispatchEvent(event);
+      console.log('[BracketSelection] Error toast dispatched');
     } finally {
       setIsReserving(false);
+      console.log('[BracketSelection] isReserving set to false');
     }
   };
 
@@ -358,7 +421,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   const handleReleaseBracket = async (bracket: BracketResponse) => {
     setIsReserving(true);
     try {
-      await releaseBracket(bracket.id);
+      const url = mode === 'local-client' ? serverUrl : null;
+      await releaseBracket(bracket.id, url);
 
       const event = new CustomEvent('show-toast', {
         detail: {
