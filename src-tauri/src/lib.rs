@@ -215,10 +215,10 @@ async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
 
     // Останавливаем локальный сервер если запущен
     if let Some(state) = app.try_state::<AppState>() {
-        let mut server_handle = state.local_server_handle.lock().await;
-        if let Some(handle) = server_handle.take() {
+        let mut shutdown_tx = state.local_server_shutdown_tx.lock().await;
+        if let Some(tx) = shutdown_tx.take() {
             println!("[exit_app] Stopping local server...");
-            let _ = handle.send(());
+            let _ = tx.send(());
         }
     }
 
