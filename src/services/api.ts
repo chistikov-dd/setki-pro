@@ -250,7 +250,7 @@ export async function reserveBracket(
 
   try {
     const startTime = performance.now();
-    const result = await invoke('reserve_bracket', {
+    await invoke<void>('reserve_bracket', {
       bracketId,
       tournamentId,
       judgeName,
@@ -261,10 +261,7 @@ export async function reserveBracket(
     const elapsed = performance.now() - startTime;
 
     console.log(`[api.ts] ✅ Tauri invoke SUCCESS (${elapsed.toFixed(0)}ms)`);
-    console.log('[api.ts] Result:', result);
     console.log('========== reserveBracket API CALL END (SUCCESS) ==========');
-
-    return result;
   } catch (error) {
     console.error('========== reserveBracket API CALL FAILED ==========');
     console.error('[api.ts] Error type:', error instanceof Error ? error.constructor.name : typeof error);
@@ -279,7 +276,7 @@ export async function reserveBracket(
  * Освободить сетку (отменить резервирование)
  */
 export async function releaseBracket(bracketId: number, serverUrl?: string | null): Promise<void> {
-  return await invoke('release_bracket', { bracketId, serverUrl: serverUrl || null });
+  await invoke<void>('release_bracket', { bracketId, serverUrl: serverUrl || null });
 }
 
 /**
