@@ -826,8 +826,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         </Button>
       </div>
 
-      {/* Табы: Мои сетки / Доступные сетки */}
-      {user?.table_number && (
+      {/* Табы: Мои сетки / Доступные сетки - ВРЕМЕННО ОТКЛЮЧЕНО */}
+      {false && user?.table_number && (
         <div className="flex gap-2 mb-6">
           <button
             onClick={() => setActiveTab('my')}
@@ -852,8 +852,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         </div>
       )}
 
-      {/* Фильтр резервирования (только для вкладки "Доступные сетки") */}
-      {activeTab === 'available' && user?.table_number && (
+      {/* Фильтр резервирования (только для вкладки "Доступные сетки") - ВРЕМЕННО ОТКЛЮЧЕНО */}
+      {false && activeTab === 'available' && user?.table_number && (
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setReservationFilter('available')}
@@ -1265,7 +1265,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                 </div>
               ) : (
                 <div className="flex gap-2 mt-4">
-                  {tableAssignments.has(bracket.id) ? (
+                  {/* ВРЕМЕННО ОТКЛЮЧЕНО: индикатор занятости стола */}
+                  {false && tableAssignments.has(bracket.id) ? (
                     <Button
                       onClick={() => handleSelectBracket(bracket)}
                       variant="secondary"
@@ -1281,11 +1282,12 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
                         onClick={() => handleSelectBracket(bracket)}
                         variant="primary"
                         size="sm"
-                        className="flex-1"
+                        className="w-full"
                       >
                         {bracket.status === 'completed' ? 'Просмотр' : 'Выбрать'}
                       </Button>
-                      {user?.table_number && (
+                      {/* ВРЕМЕННО ОТКЛЮЧЕНО: кнопка резервирования */}
+                      {false && user?.table_number && (
                         <Button
                           onClick={() => handleReserveBracket(bracket)}
                           variant="secondary"
