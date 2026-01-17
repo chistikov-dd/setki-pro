@@ -1035,6 +1035,15 @@ async fn undo_match_handler(
                     next_match_data[name_field] = serde_json::json!(null);
                     next_match_data[club_field] = serde_json::json!(null);
                 }
+
+                // Очистить legacy поля (fighter1_name, fighter2_name, fighter1_club, fighter2_club)
+                if slot == "participant1" {
+                    next_match_data["fighter1_name"] = serde_json::json!(null);
+                    next_match_data["fighter1_club"] = serde_json::json!(null);
+                } else if slot == "participant2" {
+                    next_match_data["fighter2_name"] = serde_json::json!(null);
+                    next_match_data["fighter2_club"] = serde_json::json!(null);
+                }
             } else {
                 println!("[LOCAL SERVER] ⚠️ Winner ID {} not found in next match {}", winner_id_value, next_match_id);
             }

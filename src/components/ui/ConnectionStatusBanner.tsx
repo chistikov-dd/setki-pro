@@ -1,6 +1,6 @@
 import { useServerModeStore } from '../../stores/serverModeStore';
 import { useEffect, useState } from 'react';
-import { checkUnsyncedCount } from '../../services/api';
+import { checkUnsyncedCount, checkInternetConnection } from '../../services/api';
 
 interface ConnectionStatusBannerProps {
   /** Показывать ли статус WebSocket подключения */
@@ -16,21 +16,28 @@ interface ConnectionStatusBannerProps {
  */
 export function ConnectionStatusBanner({ wsConnected }: ConnectionStatusBannerProps) {
   const { mode, serverUrl } = useServerModeStore();
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(false);
   const [unsyncedCount, setUnsyncedCount] = useState<number>(0);
 
-  // Отслеживаем статус интернет-подключения
+  // Проверяем реальный доступ к setki.pro API
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+    const checkInternet = async () => {
+      try {
+        const online = await checkInternetConnection();
+        setIsOnline(online);
+      } catch (error) {
+        console.error('[ConnectionStatusBanner] Ошибка проверки интернета:', error);
+        setIsOnline(false);
+      }
     };
+
+    // Проверяем сразу при монтировании
+    checkInternet();
+
+    // Повторяем каждые 30 секунд
+    const interval = setInterval(checkInternet, 30000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Периодически проверяем количество несинхронизированных записей
@@ -65,18 +72,10 @@ export function ConnectionStatusBanner({ wsConnected }: ConnectionStatusBannerPr
       };
     }
 
-    // Подключен к локальному серверу (судья)
-    if (mode === 'local-client' && serverUrl) {
-      const wsStatus = wsConnected !== undefined
-        ? (wsConnected ? '✅ Связь активна' : '❌ Нет связи')
-        : '';
-
-      return {
-        bg: wsConnected === false ? 'bg-yellow-600' : 'bg-green-600',
-        icon: '🔌',
-        text: `Локальный режим: ${serverUrl} ${wsStatus}`,
-      };
-    }
+    // Для судьи (local-client) баннер не показываем
+    // if (mode === 'local-client' && serverUrl) {
+    //   return null;
+    // }
 
     return null;
   };

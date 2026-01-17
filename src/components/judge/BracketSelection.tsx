@@ -337,8 +337,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
       });
       window.dispatchEvent(event);
 
-      // Обновить только "Мои сетки"
+      // Обновить "Мои сетки" и переключиться на эту вкладку
       await loadMyBrackets();
+      setActiveTab('my');
     } catch (err) {
       const event = new CustomEvent('show-toast', {
         detail: {
@@ -397,14 +398,23 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     const sorted = applySortAndFilter(brackets, filters, participantsByBracket);
     console.log(`[BracketSelection] После applySortAndFilter: ${sorted.length} сеток`);
 
-    // Отфильтровать сетки без участников, НО показывать локально созданные (ID < 0)
+    // Отфильтровать сетки без участников
+    // Для судей (local-client) показываем все сетки, полученные от сервера
+    // Для админа (useDirectDbAccess) показываем только сетки с участниками
     let result = sorted.filter(bracket => {
       // Локально созданные сетки (отрицательный ID) показываем всегда, даже без участников
       if (bracket.id < 0) {
         console.log(`[BracketSelection] ✅ Показываем локально созданную сетку: ${bracket.category_name} (ID: ${bracket.id})`);
         return true;
       }
-      // Остальные сетки показываем только если есть участники
+
+      // Если это судья (не useDirectDbAccess), показываем все сетки от сервера
+      if (!useDirectDbAccess) {
+        console.log(`[BracketSelection] ✅ Показываем сетку для судьи: ${bracket.category_name} (ID: ${bracket.id})`);
+        return true;
+      }
+
+      // Для админа показываем только сетки с участниками
       const participants = participantsByBracket[bracket.id];
       const hasParticipants = participants && participants.length > 0;
       if (!hasParticipants) {

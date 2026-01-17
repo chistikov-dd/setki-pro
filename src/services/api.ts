@@ -215,6 +215,14 @@ export async function checkUnsyncedCount(): Promise<number> {
   return await invoke<number>('check_unsynced_count');
 }
 
+/**
+ * Проверить доступность интернета через ping setki.pro API
+ * Возвращает true если setki.pro доступен, false в противном случае
+ */
+export async function checkInternetConnection(): Promise<boolean> {
+  return await invoke<boolean>('check_internet_connection');
+}
+
 // ============================================
 // BRACKET RESERVATION API (через Tauri Commands)
 // ============================================

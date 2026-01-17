@@ -210,6 +210,24 @@ async fn clear_all_table_reservations(
 }
 
 #[tauri::command]
+async fn check_internet_connection() -> Result<bool, String> {
+    // Проверка доступности setki.pro API с timeout 3 секунды
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Используем реальный API endpoint setki.pro (без авторизации)
+    match client.get("https://setki.pro/api/v1/tournaments").send().await {
+        Ok(response) => {
+            // Даже если вернется 401 Unauthorized - это значит что сервер доступен
+            Ok(response.status().as_u16() < 500)
+        },
+        Err(_) => Ok(false), // Нет интернета или сервер недоступен
+    }
+}
+
+#[tauri::command]
 async fn download_tournament(
     tournament_id: i32,
     state: State<'_, AppState>,
@@ -3136,6 +3154,7 @@ pub fn run() {
             release_table_number,
             force_release_table,
             clear_all_table_reservations,
+            check_internet_connection,
             download_tournament,
             get_cached_brackets,
             get_cached_brackets_with_matches,

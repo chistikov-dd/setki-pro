@@ -45,19 +45,15 @@ function App() {
 
   console.log('[App] Window label:', currentWindow.label, 'isPublicDisplay:', isPublicDisplayWindow);
 
-  // Автоосвобождение стола при закрытии приложения (если судья)
+  // Обработчик закрытия приложения для всех ролей
   useEffect(() => {
     // Не устанавливать обработчик для публичного табло
     if (isPublicDisplayWindow) {
       console.log('[Window Close] Skipping handler - public display window');
       return;
     }
-    if (!user || user.role !== 'referee') {
-      console.log('[Window Close] Skipping handler - not a referee', { hasUser: !!user, role: user?.role });
-      return;
-    }
 
-    console.log('[Window Close] Setting up close handler for referee');
+    console.log('[Window Close] Setting up close handler', { hasUser: !!user, role: user?.role });
 
     const currentWindow = getCurrentWebviewWindow();
     let unlistenClose: (() => void) | null = null;
@@ -65,11 +61,11 @@ function App() {
 
     // Также добавляем обработчик beforeunload для гарантии
     const handleBeforeUnload = () => {
-      console.log('[Window Close] beforeunload - releasing table synchronously...');
-      // Синхронный вызов для немедленного освобождения
-      if (user && user.table_number && user.tournament_id) {
+      console.log('[Window Close] beforeunload - cleanup...');
+      // Освобождаем стол только для судьи
+      if (user && user.role === 'referee' && user.table_number && user.tournament_id) {
         try {
-          // Вызываем Tauri команду через invoke API
+          console.log('[Window Close] Releasing table for referee...');
           invoke('release_table_number', {
             tournamentId: user.tournament_id,
             tableNumber: user.table_number,
@@ -124,31 +120,36 @@ function App() {
         event.preventDefault();
         isClosing = true;
 
-        console.log('[Window Close] Releasing table before close...');
+        console.log('[Window Close] Cleanup before close...');
 
-        // Закрываем публичное табло перед выходом
-        try {
-          const { closePublicDisplay } = await import('./utils/publicDisplay');
-          await closePublicDisplay();
-          console.log('[Window Close] Public display closed');
-        } catch (error) {
-          console.error('[Window Close] Error closing public display:', error);
-          // Продолжаем даже если не удалось закрыть
+        // Закрываем публичное табло перед выходом (только для судьи)
+        if (user && user.role === 'referee') {
+          try {
+            const { closePublicDisplay } = await import('./utils/publicDisplay');
+            await closePublicDisplay();
+            console.log('[Window Close] Public display closed');
+          } catch (error) {
+            console.error('[Window Close] Error closing public display:', error);
+            // Продолжаем даже если не удалось закрыть
+          }
         }
 
-        // FIX: Используем Promise.race с timeout 2000ms вместо 100ms
-        // logout() может занять до 1500ms (3 попытки × 500ms для release_table_number)
-        try {
-          await Promise.race([
-            logout(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Logout timeout')), 2000)
-            )
-          ]);
-          console.log('[Window Close] Table released successfully');
-        } catch (error) {
-          console.error('[Window Close] Error during logout:', error);
-          // Продолжаем закрытие даже если logout failed
+        // Вызываем logout для корректного завершения сессии
+        // Для судьи: освобождает стол
+        // Для админа: останавливает локальный сервер и сохраняет состояние
+        if (user) {
+          try {
+            await Promise.race([
+              logout(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Logout timeout')), 2000)
+              )
+            ]);
+            console.log('[Window Close] Logout completed successfully');
+          } catch (error) {
+            console.error('[Window Close] Error during logout:', error);
+            // Продолжаем закрытие даже если logout failed
+          }
         }
 
         if (unlistenClose) {

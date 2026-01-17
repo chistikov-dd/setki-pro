@@ -19,7 +19,7 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
   const [pin, setPin] = useState(['', '', '', '', '', '']);
   const [judgeName, setJudgeName] = useState('');
   const [tableNumber, setTableNumber] = useState('');
-  const [serverIp, setServerIp] = useState('192.168.1.10');
+  const [serverIp, setServerIp] = useState('192.168.0.101');
   const [isOfflineAvailable, setIsOfflineAvailable] = useState(false);
   const [isCheckingPin, setIsCheckingPin] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -208,7 +208,7 @@ export const JudgeLogin: React.FC<JudgeLoginProps> = ({
               <Input
                 label="IP адрес локального сервера"
                 type="text"
-                placeholder="192.168.1.10"
+                placeholder="192.168.0.101"
                 value={serverIp}
                 onChange={(e) => setServerIp(e.target.value)}
                 disabled={isLoading}

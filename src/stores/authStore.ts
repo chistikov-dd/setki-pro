@@ -151,11 +151,14 @@ export const useAuthStore = create<AuthState>()(
           const appError = ErrorFactory.fromTauriError(error, { judgeName });
           logger.error(LOG_CATEGORIES.AUTH, 'Judge login failed', { judgeName }, appError);
 
+          // Для судьи всегда показываем упрощенное сообщение
+          const userFriendlyMessage = 'Неверный PIN-код или IP';
+
           set({
             user: null,
             isAuthenticated: false,
             isLoading: false,
-            error: appError.userMessage,
+            error: userFriendlyMessage,
           });
           throw appError;
         }
@@ -181,6 +184,17 @@ export const useAuthStore = create<AuthState>()(
         // Cleanup операции в фоне (не блокируют logout)
         (async () => {
           try {
+            // Останавливаем локальный сервер при выходе админа
+            if (user?.role === 'admin' || user?.role === 'organizer') {
+              try {
+                const { invoke } = await import('@tauri-apps/api/core');
+                await invoke('stop_local_server');
+                logger.info(LOG_CATEGORIES.AUTH, 'Local server stopped on admin logout');
+              } catch (error) {
+                logger.warn(LOG_CATEGORIES.AUTH, 'Failed to stop local server on logout', {}, error instanceof Error ? error : undefined);
+              }
+            }
+
             // Закрываем публичное табло при выходе судьи
             if (user?.role === 'referee') {
               try {
