@@ -32,7 +32,7 @@ export function PublicDisplay({
     : 'text-black';
 
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden p-6 lg:p-8">
+    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden p-6 lg:p-8" style={{ cursor: 'none' }}>
       {/* Участники и счет */}
       <div className="grid grid-cols-2 gap-6 lg:gap-8 flex-none" style={{ height: '50vh' }}>
         {/* Синий угол (левый) */}

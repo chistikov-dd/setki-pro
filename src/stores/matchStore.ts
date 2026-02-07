@@ -431,10 +431,15 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
     };
 
     try {
-      // Remove event from database
+      console.log('[matchStore.undoLastAction] Step 1: Calling apiUndoLastEvent...');
+
+      // 1️⃣ Remove event from local database
       await apiUndoLastEvent(match.id);
 
-      // Recalculate scores
+      console.log('[matchStore.undoLastAction] Step 1 complete');
+      console.log('[matchStore.undoLastAction] Step 2: Recalculating scores...');
+
+      // 2️⃣ Recalculate scores from remaining events
       const remainingEvents = events.slice(0, -1);
       let redScore = 0;
       let blueScore = 0;
@@ -464,17 +469,28 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         }
       });
 
-      // Update match
-      await updateMatchScore({
+      console.log('[matchStore.undoLastAction] Step 2 complete, new scores:', {
+        redScore,
+        blueScore,
+        redWarnings,
+        blueWarnings,
+      });
+      console.log('[matchStore.undoLastAction] Step 3: Calling updateMatchScoreUniversal...');
+
+      // 3️⃣ КРИТИЧНО: Отправка на сервер (локальный или setki.pro)
+      // FIX: Используем updateMatchScoreUniversal вместо updateMatchScore
+      await updateMatchScoreUniversal({
         matchId: match.id,
         redScore,
         blueScore,
         redWarnings,
         blueWarnings,
         status: 'in_progress',
-      });
+      }, serverMode);
 
-      // Update local state
+      console.log('[matchStore.undoLastAction] Step 3 complete');
+
+      // 4️⃣ Update local state
       set({
         redScore,
         blueScore,
@@ -482,11 +498,18 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         blueWarnings,
         events: remainingEvents,
       });
+
+      console.log('[matchStore.undoLastAction] SUCCESS - state updated');
     } catch (error) {
       console.error('[matchStore.undoLastAction] Failed, rolling back:', error);
 
       // FIX: ROLLBACK при ошибке
       set(oldState);
+
+      console.error('[matchStore.undoLastAction] ROLLBACK complete, Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
 
       throw error;
     }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useShallow } from 'zustand/react/shallow';
@@ -401,6 +401,35 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match.id]); // Только match.id, actions игнорируем
+
+  // Захват курсора в основном окне (не даём уходить на второй монитор)
+  useEffect(() => {
+    const grabCursor = async () => {
+      try {
+        const currentWindow = getCurrentWebviewWindow();
+        console.log('[MatchScreen] Захватываем курсор в основном окне');
+        await currentWindow.setCursorGrab(true);
+      } catch (error) {
+        console.error('[MatchScreen] Ошибка при захвате курсора:', error);
+      }
+    };
+
+    const releaseCursor = async () => {
+      try {
+        const currentWindow = getCurrentWebviewWindow();
+        console.log('[MatchScreen] Освобождаем курсор');
+        await currentWindow.setCursorGrab(false);
+      } catch (error) {
+        console.error('[MatchScreen] Ошибка при освобождении курсора:', error);
+      }
+    };
+
+    grabCursor();
+
+    return () => {
+      releaseCursor();
+    };
+  }, []);
 
   // Звук для последних 10 секунд таймера
   useEffect(() => {
