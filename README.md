@@ -14,20 +14,48 @@
 - **Горячие клавиши**: Быстрое ведение поединков
 - **Admin monitoring**: Отслеживание всех судейских столов
 
-## 📦 Установка
+## 📥 Скачать
 
-### Windows
-Скачайте `SETKI-PRO-KEEPER_x.x.x_x64-setup.exe` из [Releases](https://github.com/chistikov/desktop_setki/releases)
+> ⚡ **[БЫСТРАЯ ЗАГРУЗКА - Прямые ссылки и CDN зеркала](DOWNLOAD.md)**
 
-### Linux
-```bash
-# Скачайте .AppImage
-chmod +x setki-keeper_*.AppImage
-./setki-keeper_*.AppImage
+### Последняя версия: [v0.5.2](https://github.com/chistikov-d/setki.pro-keeper/releases/tag/v0.5.2)
+
+**Прямые ссылки:**
+- **Windows:** [SETKI-PRO-KEEPER_0.5.2_x64-setup.exe](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/SETKI-PRO-KEEPER_0.5.2_x64-setup.exe)
+- **Linux (старые системы):** [setki-keeper_0.5.2_amd64.deb](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/setki-keeper_0.5.2_amd64.deb) - **Для Linux Mint 19.3, Ubuntu 18.04+**
+- **Linux (новые системы):** [setki-keeper_0.5.2_amd64.AppImage](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/setki-keeper_0.5.2_amd64.AppImage)
+- **Android:** [setki-keeper_0.5.2_arm64-v8a.apk](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/setki-keeper_0.5.2_arm64-v8a.apk)
+
+**Если GitHub медленный:** См. [DOWNLOAD.md](DOWNLOAD.md) для CDN зеркал и альтернативных способов загрузки
+
+### Быстрая установка
+
+#### Windows
+```powershell
+# Скачайте и запустите установщик
+.\SETKI-PRO-KEEPER_0.5.2_x64-setup.exe
 ```
 
-### macOS
-Скачайте `.dmg` для вашей архитектуры (Intel/Apple Silicon)
+#### Linux
+
+**Для старых систем (Linux Mint 19.3, Ubuntu 18.04+) - используйте .deb:**
+```bash
+# Скачайте и установите пакет
+sudo dpkg -i setki-keeper_0.5.2_amd64.deb
+sudo apt-get install -f  # Установка зависимостей
+```
+
+**Для новых систем (Ubuntu 20.04+) - используйте AppImage:**
+```bash
+# Скачайте, сделайте исполняемым и запустите
+chmod +x setki-keeper_0.5.2_amd64.AppImage
+./setki-keeper_0.5.2_amd64.AppImage
+```
+
+#### Android
+1. Включите "Установка из неизвестных источников" в настройках
+2. Откройте скачанный APK файл
+3. Следуйте инструкциям установщика
 
 ## 🚀 Быстрый старт для разработки
 
