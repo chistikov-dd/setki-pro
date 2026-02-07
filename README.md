@@ -23,17 +23,9 @@
 # Скачайте SETKI-PRO-KEEPER_*_x64-setup.exe и запустите
 ```
 
-### Linux
-**Для старых систем (Linux Mint 19.3, Ubuntu 18.04+):**
+### Linux (все системы, включая Linux Mint 19.3+)
 ```bash
-# Используйте .deb пакет
-sudo dpkg -i setki-keeper_*_amd64.deb
-sudo apt-get install -f
-```
-
-**Для новых систем (Ubuntu 20.04+):**
-```bash
-# Используйте AppImage
+# Универсальный AppImage (работает везде)
 chmod +x setki-keeper_*.AppImage
 ./setki-keeper_*.AppImage
 ```
