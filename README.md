@@ -14,48 +14,35 @@
 - **Горячие клавиши**: Быстрое ведение поединков
 - **Admin monitoring**: Отслеживание всех судейских столов
 
-## 📥 Скачать
+## 📦 Установка
 
-> ⚡ **[БЫСТРАЯ ЗАГРУЗКА - Прямые ссылки и CDN зеркала](DOWNLOAD.md)**
+Скачайте последнюю версию из [Releases](https://github.com/chistikov-d/setki.pro-keeper/releases)
 
-### Последняя версия: [v0.5.2](https://github.com/chistikov-d/setki.pro-keeper/releases/tag/v0.5.2)
-
-**Прямые ссылки:**
-- **Windows:** [SETKI-PRO-KEEPER_0.5.2_x64-setup.exe](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/SETKI-PRO-KEEPER_0.5.2_x64-setup.exe)
-- **Linux (старые системы):** [setki-keeper_0.5.2_amd64.deb](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/setki-keeper_0.5.2_amd64.deb) - **Для Linux Mint 19.3, Ubuntu 18.04+**
-- **Linux (новые системы):** [setki-keeper_0.5.2_amd64.AppImage](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/setki-keeper_0.5.2_amd64.AppImage)
-- **Android:** [setki-keeper_0.5.2_arm64-v8a.apk](https://github.com/chistikov-d/setki.pro-keeper/releases/download/v0.5.2/setki-keeper_0.5.2_arm64-v8a.apk)
-
-**Если GitHub медленный:** См. [DOWNLOAD.md](DOWNLOAD.md) для CDN зеркал и альтернативных способов загрузки
-
-### Быстрая установка
-
-#### Windows
+### Windows
 ```powershell
-# Скачайте и запустите установщик
-.\SETKI-PRO-KEEPER_0.5.2_x64-setup.exe
+# Скачайте SETKI-PRO-KEEPER_*_x64-setup.exe и запустите
 ```
 
-#### Linux
-
-**Для старых систем (Linux Mint 19.3, Ubuntu 18.04+) - используйте .deb:**
+### Linux
+**Для старых систем (Linux Mint 19.3, Ubuntu 18.04+):**
 ```bash
-# Скачайте и установите пакет
-sudo dpkg -i setki-keeper_0.5.2_amd64.deb
-sudo apt-get install -f  # Установка зависимостей
+# Используйте .deb пакет
+sudo dpkg -i setki-keeper_*_amd64.deb
+sudo apt-get install -f
 ```
 
-**Для новых систем (Ubuntu 20.04+) - используйте AppImage:**
+**Для новых систем (Ubuntu 20.04+):**
 ```bash
-# Скачайте, сделайте исполняемым и запустите
-chmod +x setki-keeper_0.5.2_amd64.AppImage
-./setki-keeper_0.5.2_amd64.AppImage
+# Используйте AppImage
+chmod +x setki-keeper_*.AppImage
+./setki-keeper_*.AppImage
 ```
 
-#### Android
-1. Включите "Установка из неизвестных источников" в настройках
-2. Откройте скачанный APK файл
-3. Следуйте инструкциям установщика
+### Android
+```
+Минимальная версия: Android 7.0 (API 24)
+Установите APK файл
+```
 
 ## 🚀 Быстрый старт для разработки
 
