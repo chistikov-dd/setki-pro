@@ -1,9 +1,16 @@
 [package]
 name = "setki-keeper"
-version = "0.1.0"
+version = "0.6.0"
 description = "SETKI.PRO KEEPER - Судейское приложение для турниров"
 authors = ["chistikov"]
 edition = "2021"
+
+[profile.release]
+# Статическая линковка для совместимости со старыми системами
+opt-level = "z"     # Оптимизация размера
+lto = true          # Link Time Optimization
+codegen-units = 1   # Улучшает оптимизацию
+strip = true        # Удаление отладочной информации
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
