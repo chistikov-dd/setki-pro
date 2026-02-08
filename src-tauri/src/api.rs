@@ -2128,8 +2128,13 @@ impl ApiClient {
             }
         };
 
-        // server_url уже содержит /api/v1, не добавляем повторно
-        let url = format!("{}/desktop/matches/undo", server_url);
+        // Нормализуем URL: добавляем /api/v1 если отсутствует
+        let base = if !server_url.contains("/api/v1") {
+            format!("{}/api/v1", server_url.trim_end_matches('/'))
+        } else {
+            server_url.to_string()
+        };
+        let url = format!("{}/desktop/matches/undo", base);
         println!("[undo_match_on_local_server] Full URL: {}", url);
 
         let payload = serde_json::json!({
