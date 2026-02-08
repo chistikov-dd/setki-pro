@@ -21,11 +21,6 @@ jobs:
           - platform: 'windows-latest'
             args: ''
             target: 'windows'
-          # Android
-          - platform: 'ubuntu-22.04'
-            args: '--target aarch64-linux-android'
-            target: 'android'
-
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -39,33 +34,9 @@ jobs:
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target == 'android' && 'aarch64-linux-android' || '' }}
-
-      - name: Setup Java 17 (Android only)
-        if: matrix.target == 'android'
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK (Android only)
-        if: matrix.target == 'android'
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK (Android only)
-        if: matrix.target == 'android'
-        run: |
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
-          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
-          echo "CC_aarch64_linux_android=$ANDROID_SDK_ROOT/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
-          echo "AR_aarch64_linux_android=$ANDROID_SDK_ROOT/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_SDK_ROOT/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04' && matrix.target != 'android'
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -73,16 +44,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Initialize Tauri Android (Android only)
-        if: matrix.target == 'android'
-        run: npm run tauri android init
-
-      - name: Build Android APK (Android only)
-        if: matrix.target == 'android'
-        run: npm run tauri android build -- --apk
-
-      - name: Build Desktop App (Non-Android)
-        if: matrix.target != 'android'
+      - name: Build Desktop App
         uses: tauri-apps/tauri-action@v0.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -103,22 +65,8 @@ jobs:
             - Сделайте исполняемым: `chmod +x setki-keeper*.AppImage`
             - Запустите: `./setki-keeper*.AppImage`
 
-            **Android (arm64-v8a):**
-            - Скачайте `setki-keeper_x.x.x_arm64-v8a.apk`
-            - Включите установку из неизвестных источников в настройках Android
-            - Откройте APK файл для установки
-            - Минимальные требования: Android 7.0 (API 24)
-
             ### Что нового
             См. [CHANGELOG.md](https://github.com/YOUR_USERNAME/desktop_setki/blob/main/CHANGELOG.md)
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-
-      - name: Upload Android APK to Release (Android only)
-        if: matrix.target == 'android'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
-          tag_name: ${{ github.ref_name }}
-          draft: true
