@@ -35,7 +35,6 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
   } | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
   // Сохраняем позицию прокрутки при drag&drop (фикс для Windows/WebView2)
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const savedScrollRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const {

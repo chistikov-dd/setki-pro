@@ -3101,6 +3101,208 @@ async fn search_fighters(
     Ok(result)
 }
 
+/// Вычислить и сохранить занятые места по итогам завершённых сеток турнира
+/// Логика: финал → 1 и 2 место; полуфинал → 3-4; четвертьфинал → 5-8; 1/8 → 9-10 (только первые 2)
+#[tauri::command]
+async fn compute_tournament_places(
+    tournament_id: i32,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    use sqlx::Row;
+    let pool = &state.db_pool;
+
+    // Загружаем все завершённые матчи турнира
+    let matches = sqlx::query(
+        "SELECT m.match_id, m.bracket_id, m.round_number, m.match_number,
+                m.p1_id, m.p1_name, m.p1_club,
+                m.p2_id, m.p2_name, m.p2_club,
+                m.winner_id, m.status,
+                b.category_name, b.total_rounds
+         FROM matches_cache m
+         JOIN brackets_cache b ON m.bracket_id = b.bracket_id
+         WHERE m.tournament_id = ?
+           AND m.status = 'finished'
+         ORDER BY m.bracket_id, m.round_number DESC, m.match_number"
+    )
+    .bind(tournament_id)
+    .fetch_all(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if matches.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Группируем по bracket_id
+    let mut bracket_matches: std::collections::HashMap<i32, Vec<_>> = std::collections::HashMap::new();
+    for row in &matches {
+        let bid: i32 = row.get("bracket_id");
+        bracket_matches.entry(bid).or_default().push(row);
+    }
+
+    let mut places_to_insert: Vec<(i32, i32, String, Option<i32>, String, Option<String>, i32)> = vec![];
+    // (bracket_id, place, bracket_name, fighter_id, fighter_name, club_name, tournament_id)
+
+    for (bracket_id, rows) in &bracket_matches {
+        // Определяем total_rounds (максимальный round_number в этой сетке)
+        let total_rounds: i32 = rows.iter()
+            .map(|r| r.get::<i32, _>("round_number"))
+            .max()
+            .unwrap_or(1);
+
+        let bracket_name: String = rows.first()
+            .map(|r| r.get::<Option<String>, _>("category_name").unwrap_or_else(|| format!("Сетка {}", bracket_id)))
+            .unwrap_or_default();
+
+        // Для каждого раунда вычисляем места
+        for row in rows.iter() {
+            let round: i32 = row.get("round_number");
+            let winner_id: Option<i32> = row.get("winner_id");
+            let p1_id: Option<i32> = row.get("p1_id");
+            let p1_name: Option<String> = row.get("p1_name");
+            let p1_club: Option<String> = row.get("p1_club");
+            let p2_id: Option<i32> = row.get("p2_id");
+            let p2_name: Option<String> = row.get("p2_name");
+            let p2_club: Option<String> = row.get("p2_club");
+
+            // Финал (последний раунд)
+            if round == total_rounds {
+                // Победитель финала = 1 место, проигравший = 2 место
+                let (winner_name, winner_club, loser_id, loser_name, loser_club) = if winner_id == p1_id {
+                    (p1_name.clone(), p1_club.clone(), p2_id, p2_name.clone(), p2_club.clone())
+                } else {
+                    (p2_name.clone(), p2_club.clone(), p1_id, p1_name.clone(), p1_club.clone())
+                };
+                if let Some(name) = winner_name {
+                    places_to_insert.push((*bracket_id, 1, bracket_name.clone(), winner_id, name, winner_club, tournament_id));
+                }
+                if let Some(name) = loser_name {
+                    places_to_insert.push((*bracket_id, 2, bracket_name.clone(), loser_id, name, loser_club, tournament_id));
+                }
+            } else if round == total_rounds - 1 {
+                // Полуфинал: проигравший = 3-4 место (оба получают 3)
+                let loser = if winner_id == p1_id {
+                    (p2_id, p2_name.clone(), p2_club.clone())
+                } else {
+                    (p1_id, p1_name.clone(), p1_club.clone())
+                };
+                if let (_, Some(name), club) = loser {
+                    // place 3 для первого полуфинала, 4 для второго — используем match_number
+                    let match_num: i32 = row.get("match_number");
+                    let place = if match_num == 1 { 3 } else { 4 };
+                    places_to_insert.push((*bracket_id, place, bracket_name.clone(),
+                        if winner_id == p1_id { p2_id } else { p1_id },
+                        name, club, tournament_id));
+                }
+            } else if round == total_rounds - 2 {
+                // Четвертьфинал: проигравший = 5-8 место
+                let loser = if winner_id == p1_id {
+                    (p2_id, p2_name.clone(), p2_club.clone())
+                } else {
+                    (p1_id, p1_name.clone(), p1_club.clone())
+                };
+                if let (_, Some(name), club) = loser {
+                    let match_num: i32 = row.get("match_number");
+                    let place = 4 + match_num; // 5, 6, 7, 8
+                    if place <= 8 {
+                        places_to_insert.push((*bracket_id, place, bracket_name.clone(),
+                            if winner_id == p1_id { p2_id } else { p1_id },
+                            name, club, tournament_id));
+                    }
+                }
+            } else if round == total_rounds - 3 {
+                // 1/8: только первые 2 проигравших = 9-10 место
+                let loser = if winner_id == p1_id {
+                    (p2_id, p2_name.clone(), p2_club.clone())
+                } else {
+                    (p1_id, p1_name.clone(), p1_club.clone())
+                };
+                if let (_, Some(name), club) = loser {
+                    let match_num: i32 = row.get("match_number");
+                    let place = 8 + match_num; // 9, 10, ...
+                    if place <= 10 {
+                        places_to_insert.push((*bracket_id, place, bracket_name.clone(),
+                            if winner_id == p1_id { p2_id } else { p1_id },
+                            name, club, tournament_id));
+                    }
+                }
+            }
+        }
+    }
+
+    // Удаляем старые места для данного турнира
+    sqlx::query("DELETE FROM tournament_places WHERE tournament_id = ?")
+        .bind(tournament_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Вставляем новые места
+    for (bracket_id, place, bracket_name, fighter_id, fighter_name, club_name, tid) in &places_to_insert {
+        sqlx::query(
+            "INSERT OR REPLACE INTO tournament_places
+             (tournament_id, bracket_id, bracket_name, place, fighter_id, fighter_name, club_name)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(tid)
+        .bind(bracket_id)
+        .bind(bracket_name)
+        .bind(place)
+        .bind(fighter_id)
+        .bind(fighter_name)
+        .bind(club_name)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Возвращаем результат
+    get_tournament_places_inner(tournament_id, pool).await
+}
+
+/// Получить сохранённые места для турнира
+#[tauri::command]
+async fn get_tournament_places(
+    tournament_id: i32,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    get_tournament_places_inner(tournament_id, &state.db_pool).await
+}
+
+async fn get_tournament_places_inner(
+    tournament_id: i32,
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<serde_json::Value>, String> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT id, tournament_id, bracket_id, bracket_name, place,
+                fighter_id, fighter_name, club_name, computed_at
+         FROM tournament_places
+         WHERE tournament_id = ?
+         ORDER BY bracket_id, place"
+    )
+    .bind(tournament_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let result = rows.iter().map(|row| {
+        serde_json::json!({
+            "id": row.get::<i32, _>("id"),
+            "tournament_id": row.get::<i32, _>("tournament_id"),
+            "bracket_id": row.get::<i32, _>("bracket_id"),
+            "bracket_name": row.get::<Option<String>, _>("bracket_name"),
+            "place": row.get::<i32, _>("place"),
+            "fighter_id": row.get::<Option<i32>, _>("fighter_id"),
+            "fighter_name": row.get::<String, _>("fighter_name"),
+            "club_name": row.get::<Option<String>, _>("club_name"),
+            "computed_at": row.get::<String, _>("computed_at"),
+        })
+    }).collect();
+
+    Ok(result)
+}
+
 /// Очистка синхронизированных записей из sync_queue
 /// Удаляет записи старше 7 дней, которые уже успешно синхронизированы с сервером
 #[tauri::command]
@@ -3265,7 +3467,9 @@ pub fn run() {
             check_unsynced_count,
             log_to_file,
             download_fighters,
-            search_fighters
+            search_fighters,
+            compute_tournament_places,
+            get_tournament_places
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

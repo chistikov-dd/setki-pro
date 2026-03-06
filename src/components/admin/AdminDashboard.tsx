@@ -15,6 +15,7 @@ import { JudgeTablesMonitor } from './JudgeTablesMonitor';
 import { ActiveMatchesMonitor } from './ActiveMatchesMonitor';
 import { ActiveSessionsPanel } from './ActiveSessionsPanel';
 import { SyncProgress } from './SyncProgress';
+import { TournamentPlacesPanel } from './TournamentPlacesPanel';
 import { TournamentBracket } from '../brackets/TournamentBracket';
 import { BracketSelection } from '../judge/BracketSelection';
 import type { Match } from '../../types';
@@ -590,6 +591,13 @@ export const AdminDashboard = () => {
             {currentSession && (
               <div className="mb-8">
                 <SyncProgress tournamentId={currentSession.tournament_id} />
+              </div>
+            )}
+
+            {/* Tournament Places */}
+            {currentSession && (
+              <div className="mb-8">
+                <TournamentPlacesPanel tournamentId={currentSession.tournament_id} />
               </div>
             )}
           </>

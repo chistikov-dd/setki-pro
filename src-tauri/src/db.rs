@@ -500,5 +500,30 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Таблица для учёта занятых мест (1–10) по итогам сеток
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tournament_places (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tournament_id INTEGER NOT NULL,
+            bracket_id INTEGER NOT NULL,
+            bracket_name TEXT,
+            place INTEGER NOT NULL,
+            fighter_id INTEGER,
+            fighter_name TEXT NOT NULL,
+            club_name TEXT,
+            computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_tournament_places_tournament ON tournament_places(tournament_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_tournament_places_bracket_place ON tournament_places(bracket_id, place)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
