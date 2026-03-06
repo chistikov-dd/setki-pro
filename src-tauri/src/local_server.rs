@@ -345,6 +345,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/matches/undo", post(undo_match_handler)) // Отмена завершённого матча
         .route("/api/v1/desktop/matches/cancel", post(cancel_match_handler)) // Отмена активного матча
         .route("/api/v1/desktop/call-admin", post(call_admin_handler)) // Вызов администратора
+        .route("/api/v1/desktop/fighters/search", get(search_fighters_handler)) // Поиск спортсменов для автодополнения
         .route("/api/v1/desktop/matches/participant", post(update_bracket_participant_handler)) // Редактирование участников судьями
 
         // Bracket editing endpoints
@@ -2623,4 +2624,44 @@ async fn call_admin_handler(
     let _ = state.admin_events_channel.send(event.to_string());
 
     Ok(Json(serde_json::json!({ "status": "sent" })))
+}
+
+// Поиск спортсменов из fighters_cache (для автодополнения у судей)
+#[derive(Deserialize)]
+struct SearchFightersQuery {
+    q: String,
+}
+
+async fn search_fighters_handler(
+    State(state): State<LocalServerState>,
+    Query(params): Query<SearchFightersQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let query = params.q;
+    if query.chars().count() < 3 {
+        return Ok(Json(vec![]));
+    }
+
+    let pattern = format!("%{}%", query.to_lowercase());
+    let rows = sqlx::query(
+        "SELECT fighter_id, full_name, club_name, gender
+         FROM fighters_cache
+         WHERE full_name_lower LIKE ?
+         ORDER BY full_name
+         LIMIT 20"
+    )
+    .bind(&pattern)
+    .fetch_all(&*state.db)
+    .await?;
+
+    use sqlx::Row;
+    let result: Vec<serde_json::Value> = rows.iter().map(|row| {
+        serde_json::json!({
+            "id": row.get::<i32, _>("fighter_id"),
+            "full_name": row.get::<String, _>("full_name"),
+            "club_name": row.get::<Option<String>, _>("club_name"),
+            "gender": row.get::<Option<String>, _>("gender"),
+        })
+    }).collect();
+
+    Ok(Json(result))
 }

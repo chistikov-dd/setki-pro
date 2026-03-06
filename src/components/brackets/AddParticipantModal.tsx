@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
 import { Button } from '../ui/Button';
 
 interface FighterSuggestion {
@@ -28,6 +29,7 @@ export const AddParticipantModal: React.FC<AddParticipantModalProps> = ({ bracke
   } = useBracketEditorStore();
 
   const { user } = useAuthStore();
+  const { mode, serverUrl } = useServerModeStore();
 
   const [fighterName, setFighterName] = useState('');
   const [clubName, setClubName] = useState('');
@@ -46,7 +48,18 @@ export const AddParticipantModal: React.FC<AddParticipantModalProps> = ({ bracke
 
     const timer = setTimeout(async () => {
       try {
-        const results = await invoke<FighterSuggestion[]>('search_fighters', { query: fighterName });
+        let results: FighterSuggestion[];
+        if (mode === 'local-client' && serverUrl) {
+          // Судья: запрос к локальному серверу админа
+          const resp = await fetch(
+            `${serverUrl}/api/v1/desktop/fighters/search?q=${encodeURIComponent(fighterName)}`,
+            { headers: { 'Authorization': `Bearer ${user?.access_token ?? ''}` } }
+          );
+          results = resp.ok ? await resp.json() : [];
+        } else {
+          // Админ: читаем из локальной SQLite
+          results = await invoke<FighterSuggestion[]>('search_fighters', { query: fighterName });
+        }
         setSuggestions(results);
         setShowSuggestions(results.length > 0);
       } catch {
@@ -55,7 +68,7 @@ export const AddParticipantModal: React.FC<AddParticipantModalProps> = ({ bracke
     }, 200);
 
     return () => clearTimeout(timer);
-  }, [fighterName]);
+  }, [fighterName, mode, serverUrl, user?.token]);
 
   // Закрытие по клику вне списка
   useEffect(() => {
