@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useServerModeStore } from '../../stores/serverModeStore';
@@ -34,6 +34,9 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
     slot: 'participant1' | 'participant2';
   } | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
+  // Сохраняем позицию прокрутки при drag&drop (фикс для Windows/WebView2)
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const savedScrollRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const {
     draggedParticipant,
@@ -86,12 +89,24 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
     fighterId?: number
   ) => {
     console.log('[DragDrop] START:', { matchId, slot, fighterName, fighterId });
+    // Сохраняем текущую позицию прокрутки страницы (фикс Windows/WebView2)
+    savedScrollRef.current = { x: window.scrollX, y: window.scrollY };
     startDrag({
       matchId,
       slot,
       fighterName,
       fighterId,
     });
+    // Восстанавливаем через requestAnimationFrame — после того как браузер сделал scroll
+    requestAnimationFrame(() => {
+      window.scrollTo(savedScrollRef.current.x, savedScrollRef.current.y);
+    });
+  };
+
+  const handleDragEnd = () => {
+    endDrag();
+    // Восстанавливаем прокрутку если браузер сдвинул страницу (фикс Windows/WebView2)
+    window.scrollTo(savedScrollRef.current.x, savedScrollRef.current.y);
   };
 
   const handleDragOver = (e: React.DragEvent, matchId: number, slot: 'participant1' | 'participant2') => {
@@ -156,7 +171,12 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
   };
 
   const handleAddParticipant = (match: MatchWithData, slot: 'participant1' | 'participant2') => {
+    // Сохраняем позицию прокрутки перед открытием модалки (фикс Windows/WebView2)
+    savedScrollRef.current = { x: window.scrollX, y: window.scrollY };
     openAddParticipantModal(match as Match, slot);
+    requestAnimationFrame(() => {
+      window.scrollTo(savedScrollRef.current.x, savedScrollRef.current.y);
+    });
   };
 
   const handleRemoveParticipant = (matchId: number, slot: 'participant1' | 'participant2') => {
@@ -286,7 +306,7 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                     handleDragStart(match.id, 'participant1', match.fighter1_name, match.participant1?.fighter_id);
                   }
                 }}
-                onDragEnd={endDrag}
+                onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOver(e, match.id, 'participant1')}
                 onDragLeave={(e) => handleDragLeave(e, match.id, 'participant1')}
                 onDrop={(e) => handleDrop(e, match.id, 'participant1')}
@@ -359,7 +379,7 @@ export const BracketEditor: React.FC<BracketEditorProps> = ({ bracketId, bracket
                     handleDragStart(match.id, 'participant2', match.fighter2_name, match.participant2?.fighter_id);
                   }
                 }}
-                onDragEnd={endDrag}
+                onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOver(e, match.id, 'participant2')}
                 onDragLeave={(e) => handleDragLeave(e, match.id, 'participant2')}
                 onDrop={(e) => handleDrop(e, match.id, 'participant2')}
