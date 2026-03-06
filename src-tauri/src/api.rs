@@ -2678,7 +2678,7 @@ impl ApiClient {
         let token = self.get_token().await?
             .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
 
-        let url = format!("{}/fighters/", self.base_url);
+        let url = format!("{}/desktop/fighters/", self.base_url);
         println!("[download_fighters] Requesting URL: {}", url);
         let response = self.client
             .get(&url)
