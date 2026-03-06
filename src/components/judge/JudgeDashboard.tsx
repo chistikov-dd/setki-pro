@@ -288,20 +288,20 @@ export const JudgeDashboard: React.FC = () => {
     handleBracketEdited();
   };
 
-  const handleBackToBracketSelection = async () => {
-    // Освобождаем сетку при возврате к выбору
-    if (selectedBracketId) {
-      try {
-        await releaseBracket(selectedBracketId);
-        console.log('Сетка освобождена:', selectedBracketId);
-      } catch (error) {
-        console.error('Ошибка освобождения сетки:', error);
-      }
-    }
-    // Сбрасываем только selectedBracketId, lastSelectedBracketId остается для прокрутки
+  const handleBackToBracketSelection = () => {
+    // Сначала навигируем назад — не ждём release
+    const bracketId = selectedBracketId;
     setSelectedBracketId(null);
-    // Обновить список сеток чтобы увидеть обновленные статусы
     handleBracketEdited();
+
+    // Освобождаем сетку в фоне, не блокируя UI
+    if (bracketId) {
+      const { mode, serverUrl } = useServerModeStore.getState();
+      const url = mode === 'local-client' ? serverUrl : null;
+      releaseBracket(bracketId, url).catch((error) => {
+        console.error('Ошибка освобождения сетки:', error);
+      });
+    }
   };
 
   // Callback для перезагрузки BracketSelection после редактирования сетки

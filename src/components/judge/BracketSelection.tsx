@@ -286,7 +286,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки сеток');
     } finally {
-      if (showLoading) setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
