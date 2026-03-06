@@ -113,8 +113,9 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
   }, [showFilters]);
 
   useEffect(() => {
+    const isInitial = reloadTrigger === 0 || reloadTrigger === undefined;
     console.log('[BracketSelection] Перезагрузка сеток, reloadTrigger:', reloadTrigger);
-    loadBrackets();
+    loadBrackets(isInitial);
   }, [tournamentId, reloadTrigger]); // Добавлен reloadTrigger для перезагрузки
 
   // Polling для обновления информации о занятых столах (каждые 5 секунд в local-client режиме)
@@ -187,8 +188,8 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     };
   }, [tournamentId]);
 
-  const loadBrackets = async () => {
-    setIsLoading(true);
+  const loadBrackets = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true);
     setError(null);
 
     try {
@@ -285,7 +286,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки сеток');
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   };
 

@@ -3145,15 +3145,17 @@ async fn cancel_match(
     }
 
     // Локальный режим (local-server или offline) — выполняем напрямую
-    let match_row: Option<(String, Option<i32>, i32, i32, i32)> = sqlx::query_as(
-        "SELECT status, winner_id, bracket_id, round_number, match_number FROM matches_cache WHERE match_id = ?"
+    let match_row: Option<(String, Option<i32>, i32, i32, i32, Option<i32>, Option<String>, Option<i32>, Option<String>)> = sqlx::query_as(
+        "SELECT status, winner_id, bracket_id, round_number, match_number,
+                p1_id, p1_name, p2_id, p2_name
+         FROM matches_cache WHERE match_id = ?"
     )
     .bind(match_id)
     .fetch_optional(pool.as_ref())
     .await
     .map_err(|e| e.to_string())?;
 
-    let (_, winner_id, bracket_id, current_round, current_match_number) = match_row
+    let (_, winner_id, bracket_id, current_round, current_match_number, p1_id, p1_name, p2_id, p2_name) = match_row
         .ok_or_else(|| "Матч не найден".to_string())?;
 
     // Сбросить матч
@@ -3185,30 +3187,45 @@ async fn cancel_match(
     .map_err(|e| e.to_string())?;
 
     if let Some(next_id) = next_match_id {
-        let next_slots: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
-            "SELECT p1_id, p2_id FROM matches_cache WHERE match_id = ?"
+        let next_slots: Option<(Option<i32>, Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT p1_id, p2_id, p1_name, p2_name FROM matches_cache WHERE match_id = ?"
         )
         .bind(next_id)
         .fetch_optional(pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
 
-        if let Some((p1_id, p2_id)) = next_slots {
+        if let Some((next_p1_id, next_p2_id, next_p1_name, next_p2_name)) = next_slots {
+            // Определяем какой слот занял победитель данного матча.
+            // Сначала пробуем по ID (надёжно), затем по имени (для ручных участников без ID).
             let clear_p1 = if let Some(wid) = winner_id {
-                p1_id == Some(wid)
+                // Победитель с ID — ищем его в следующем матче по ID
+                if next_p1_id == Some(wid) {
+                    true
+                } else if next_p2_id == Some(wid) {
+                    false
+                } else {
+                    // ID не совпал (возможно перезаписан) — по позиции матча
+                    current_match_number % 2 == 1
+                }
             } else {
-                current_match_number % 2 == 1
-            };
-            let clear_p2 = if let Some(wid) = winner_id {
-                p2_id == Some(wid)
-            } else {
-                current_match_number % 2 == 0
+                // winner_id = NULL → участник добавлен вручную, ищем по имени
+                let winner_name = if p1_id.is_none() && p2_id.is_none() {
+                    // Оба без ID — определяем по позиции
+                    if current_match_number % 2 == 1 { p1_name.as_deref() } else { p2_name.as_deref() }
+                } else if p1_id.is_none() { p1_name.as_deref() } else { p2_name.as_deref() };
+
+                if let Some(wname) = winner_name {
+                    next_p1_name.as_deref() == Some(wname)
+                } else {
+                    current_match_number % 2 == 1
+                }
             };
 
             if clear_p1 {
                 sqlx::query("UPDATE matches_cache SET p1_id = NULL, p1_name = NULL, p1_club = NULL, updated_at = datetime('now') WHERE match_id = ?")
                     .bind(next_id).execute(pool.as_ref()).await.map_err(|e| e.to_string())?;
-            } else if clear_p2 {
+            } else {
                 sqlx::query("UPDATE matches_cache SET p2_id = NULL, p2_name = NULL, p2_club = NULL, updated_at = datetime('now') WHERE match_id = ?")
                     .bind(next_id).execute(pool.as_ref()).await.map_err(|e| e.to_string())?;
             }
