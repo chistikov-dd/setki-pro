@@ -674,8 +674,7 @@ async fn reserve_bracket(
         println!("[reserve_bracket] Токен найден: {}...", &token[..token.len().min(10)]);
 
         let client = reqwest::Client::new();
-        // server_url УЖЕ содержит /api/v1, не добавляем его повторно
-        let endpoint = format!("{}/desktop/brackets/reserve", url);
+        let endpoint = format!("{}/api/v1/desktop/brackets/reserve", url);
 
         let payload = serde_json::json!({
             "bracket_id": bracket_id,
@@ -742,7 +741,7 @@ async fn release_bracket(
             .ok_or_else(|| "Токен не найден".to_string())?;
 
         let client = reqwest::Client::new();
-        let endpoint = format!("{}/desktop/brackets/release", url);
+        let endpoint = format!("{}/api/v1/desktop/brackets/release", url);
 
         let payload = serde_json::json!({
             "bracket_id": bracket_id,
@@ -1134,8 +1133,7 @@ async fn get_my_bracket_assignments(
         println!("[get_my_bracket_assignments] Токен найден: {}...", &token[..token.len().min(10)]);
 
         let client = reqwest::Client::new();
-        // server_url УЖЕ содержит /api/v1, не добавляем его повторно
-        let endpoint = format!("{}/desktop/my-bracket-assignments/{}/{}",
+        let endpoint = format!("{}/api/v1/desktop/my-bracket-assignments/{}/{}",
             url, tournament_id, table_number);
 
         println!("[get_my_bracket_assignments] Endpoint: {}", endpoint);

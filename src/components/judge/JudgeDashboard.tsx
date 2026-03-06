@@ -145,8 +145,8 @@ export const JudgeDashboard: React.FC = () => {
     }
   }, [selectedBracketId]);
 
-  const loadMatches = async (bracketId: number) => {
-    setIsLoadingMatches(true);
+  const loadMatches = async (bracketId: number, showLoading = true) => {
+    if (showLoading) setIsLoadingMatches(true);
     try {
       // Получаем serverUrl из store для локального сервера
       const { mode, serverUrl } = useServerModeStore.getState();
@@ -201,7 +201,7 @@ export const JudgeDashboard: React.FC = () => {
       console.error('Ошибка загрузки матчей:', error);
       setReservationError('Не удалось загрузить матчи сетки');
     } finally {
-      setIsLoadingMatches(false);
+      if (showLoading) setIsLoadingMatches(false);
     }
   };
 
@@ -367,7 +367,7 @@ export const JudgeDashboard: React.FC = () => {
                 onUndoMatch={handleUndoMatch}
                 categoryName={selectedBracketName}
                 bracketId={selectedBracketId}
-                onMatchesReload={() => loadMatches(selectedBracketId)}
+                onMatchesReload={() => loadMatches(selectedBracketId, false)}
                 onBracketEdited={handleBracketEdited}
               />
             ) : (
