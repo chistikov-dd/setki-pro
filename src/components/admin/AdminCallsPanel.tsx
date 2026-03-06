@@ -1,6 +1,3 @@
-import { useRef } from 'react';
-import type { AdminCalledEvent } from '../../hooks/useAdminEventsWebSocket';
-
 interface AdminCall {
   id: string;
   table_number: number;
@@ -14,7 +11,6 @@ interface AdminCallsPanelProps {
   onDismiss: (id: string) => void;
 }
 
-// Форматирует время вызова (HH:MM)
 function formatTime(timestamp: string): string {
   try {
     return new Date(timestamp).toLocaleTimeString('ru-RU', {
@@ -72,31 +68,5 @@ export const AdminCallsPanel: React.FC<AdminCallsPanelProps> = ({ calls, onDismi
     </div>
   );
 };
-
-// Hook для использования в AdminDashboard
-export function useAdminCalls() {
-  const callsRef = useRef<AdminCall[]>([]);
-  // Используем внешний setState — передаём через callback
-  const setCallsRef = useRef<((calls: AdminCall[]) => void) | null>(null);
-
-  const addCall = (event: AdminCalledEvent) => {
-    const newCall: AdminCall = {
-      id: `${event.table_number}-${event.timestamp}`,
-      table_number: event.table_number,
-      judge_name: event.judge_name,
-      message: event.message,
-      timestamp: event.timestamp,
-    };
-    callsRef.current = [...callsRef.current.filter(c => c.table_number !== event.table_number), newCall];
-    setCallsRef.current?.(callsRef.current);
-  };
-
-  const dismissCall = (id: string) => {
-    callsRef.current = callsRef.current.filter(c => c.id !== id);
-    setCallsRef.current?.(callsRef.current);
-  };
-
-  return { addCall, dismissCall, setCallsRef };
-}
 
 export type { AdminCall };

@@ -3062,7 +3062,17 @@ fn log_to_file(
 async fn download_fighters(
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    state.api_client.download_fighters().await.map_err(|e| e.to_string())
+    state.logger.info("[download_fighters] Starting...");
+    match state.api_client.download_fighters().await {
+        Ok(count) => {
+            state.logger.info(&format!("[download_fighters] OK - {} fighters", count));
+            Ok(count)
+        }
+        Err(e) => {
+            state.logger.error(&format!("[download_fighters] FAILED: {}", e));
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Поиск спортсменов по имени из локального кэша (от 3 символов)
@@ -3239,7 +3249,7 @@ async fn compute_tournament_places(
          FROM matches_cache m
          JOIN brackets_cache b ON m.bracket_id = b.bracket_id
          WHERE m.tournament_id = ?
-           AND m.status = 'finished'
+           AND m.status = 'completed'
          ORDER BY m.bracket_id, m.round_number DESC, m.match_number"
     )
     .bind(tournament_id)

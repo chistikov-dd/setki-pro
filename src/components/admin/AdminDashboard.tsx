@@ -16,7 +16,7 @@ import { ActiveMatchesMonitor } from './ActiveMatchesMonitor';
 import { ActiveSessionsPanel } from './ActiveSessionsPanel';
 import { SyncProgress } from './SyncProgress';
 import { TournamentPlacesPanel } from './TournamentPlacesPanel';
-import { AdminCallsPanel, useAdminCalls } from './AdminCallsPanel';
+import { AdminCallsPanel } from './AdminCallsPanel';
 import type { AdminCall } from './AdminCallsPanel';
 import { TournamentBracket } from '../brackets/TournamentBracket';
 import { BracketSelection } from '../judge/BracketSelection';
@@ -57,12 +57,23 @@ export const AdminDashboard = () => {
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [serverIp, setServerIp] = useState<string | null>(null);
   const [adminCalls, setAdminCalls] = useState<AdminCall[]>([]);
-  const { addCall, dismissCall, setCallsRef } = useAdminCalls();
 
-  // Связываем setCallsRef с локальным setState
-  useEffect(() => {
-    setCallsRef.current = setAdminCalls;
-  }, [setCallsRef]);
+  const addAdminCall = useCallback((event: { table_number: number; judge_name: string | null; message: string | null; timestamp: string }) => {
+    setAdminCalls(prev => {
+      const filtered = prev.filter(c => c.table_number !== event.table_number);
+      return [...filtered, {
+        id: `${event.table_number}-${event.timestamp}`,
+        table_number: event.table_number,
+        judge_name: event.judge_name,
+        message: event.message,
+        timestamp: event.timestamp,
+      }];
+    });
+  }, []);
+
+  const dismissAdminCall = useCallback((id: string) => {
+    setAdminCalls(prev => prev.filter(c => c.id !== id));
+  }, []);
 
   // Toast уведомления
   const { toasts, showToast, hideToast } = useToast();
@@ -146,7 +157,7 @@ export const AdminDashboard = () => {
       );
     },
     onAdminCalled: (event) => {
-      addCall(event);
+      addAdminCall(event);
       // Звуковой сигнал через Web Audio API
       try {
         const ctx = new AudioContext();
@@ -246,8 +257,9 @@ export const AdminDashboard = () => {
       const count = await invoke<number>('download_fighters');
       showToast(`Загружено ${count} спортсменов`, 'success', 3000);
     } catch (error) {
-      console.error('Ошибка загрузки спортсменов:', error);
-      showToast('Ошибка загрузки базы спортсменов', 'error', 4000);
+      const msg = String(error);
+      console.error('Ошибка загрузки спортсменов:', msg);
+      showToast(`Ошибка: ${msg}`, 'error', 8000);
     } finally {
       setIsDownloadingFighters(false);
     }
@@ -436,6 +448,14 @@ export const AdminDashboard = () => {
           </div>
         )}
 
+        {/* Admin Calls Panel — вызовы от судей (всегда видна если есть вызовы) */}
+        {serverMode === 'local-server' && adminCalls.length > 0 && (
+          <AdminCallsPanel
+            calls={adminCalls}
+            onDismiss={dismissAdminCall}
+          />
+        )}
+
         {/* Dashboard Tab Content */}
         {activeTab === 'dashboard' && (
           <>
@@ -592,14 +612,6 @@ export const AdminDashboard = () => {
               </CardContent>
             </Card>
           </div>
-        )}
-
-        {/* Admin Calls Panel — вызовы от судей */}
-        {currentSession && serverMode === 'local-server' && (
-          <AdminCallsPanel
-            calls={adminCalls}
-            onDismiss={dismissCall}
-          />
         )}
 
         {/* Monitoring Section */}

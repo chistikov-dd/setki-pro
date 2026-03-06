@@ -3,8 +3,10 @@ import { MatchCard } from './MatchCard';
 import { AddParticipantModal } from './AddParticipantModal';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { FloatingEditButton } from './FloatingEditButton';
+import { CallAdminButton } from '../judge/CallAdminButton';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useServerModeStore } from '../../stores/serverModeStore';
 import { useToast } from '../../hooks/useToast';
 import { useBracketClickEditing } from '../../hooks/useBracketClickEditing';
 import { useDisplayMode } from '../../hooks/useResponsive';
@@ -45,6 +47,7 @@ function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryNam
   const containerRef = useRef<HTMLDivElement>(null);
   const mode = useDisplayMode();
   const { user } = useAuthStore();
+  const { mode: serverMode } = useServerModeStore();
   const { showToast } = useToast();
   const {
     isEditMode,
@@ -378,6 +381,13 @@ function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryNam
           isEditMode={isEditMode}
           onClick={() => setEditMode(!isEditMode, bracketId)}
         />
+      )}
+
+      {/* Кнопка «Вызвать администратора» — только для судей в local-client режиме */}
+      {user?.role === 'referee' && serverMode === 'local-client' && (
+        <div className="fixed bottom-6 right-52 z-50">
+          <CallAdminButton />
+        </div>
       )}
 
       <div

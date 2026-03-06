@@ -25,6 +25,7 @@ import { HelpDialog } from './HelpDialog';
 import { Toast, ToastContainer } from '../ui/Toast';
 import { Button } from '../ui/Button';
 import { Wifi, WifiOff } from 'lucide-react';
+import { CallAdminButton } from '../judge/CallAdminButton';
 
 interface MatchScreenProps {
   match: Match;
@@ -977,6 +978,7 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
 
             {/* Right Controls */}
             <div className={`flex flex-col justify-center ${mode === 'hd' ? 'gap-2 px-2' : 'gap-4 px-4'} flex-shrink-0`}>
+              <CallAdminButton />
               <Button
                 variant="primary"
                 size="xl"
