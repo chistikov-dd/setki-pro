@@ -68,7 +68,7 @@ export const AddParticipantModal: React.FC<AddParticipantModalProps> = ({ bracke
     }, 200);
 
     return () => clearTimeout(timer);
-  }, [fighterName, mode, serverUrl, user?.token]);
+  }, [fighterName, mode, serverUrl, user?.access_token]);
 
   // Закрытие по клику вне списка
   useEffect(() => {
