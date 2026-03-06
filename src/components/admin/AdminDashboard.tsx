@@ -16,6 +16,8 @@ import { ActiveMatchesMonitor } from './ActiveMatchesMonitor';
 import { ActiveSessionsPanel } from './ActiveSessionsPanel';
 import { SyncProgress } from './SyncProgress';
 import { TournamentPlacesPanel } from './TournamentPlacesPanel';
+import { AdminCallsPanel, useAdminCalls } from './AdminCallsPanel';
+import type { AdminCall } from './AdminCallsPanel';
 import { TournamentBracket } from '../brackets/TournamentBracket';
 import { BracketSelection } from '../judge/BracketSelection';
 import type { Match } from '../../types';
@@ -54,6 +56,13 @@ export const AdminDashboard = () => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [serverIp, setServerIp] = useState<string | null>(null);
+  const [adminCalls, setAdminCalls] = useState<AdminCall[]>([]);
+  const { addCall, dismissCall, setCallsRef } = useAdminCalls();
+
+  // Связываем setCallsRef с локальным setState
+  useEffect(() => {
+    setCallsRef.current = setAdminCalls;
+  }, [setCallsRef]);
 
   // Toast уведомления
   const { toasts, showToast, hideToast } = useToast();
@@ -119,7 +128,7 @@ export const AdminDashboard = () => {
     loadServerIp();
   }, [serverMode]);
 
-  // WebSocket для административных событий (подключение/отключение судей)
+  // WebSocket для административных событий (подключение/отключение судей, вызовы)
   useAdminEventsWebSocket({
     enabled: serverMode === 'local-server',
     onJudgeConnected: (event) => {
@@ -134,6 +143,28 @@ export const AdminDashboard = () => {
         `Судья ${event.judge_name} отключился от стола №${event.table_number}`,
         'info',
         5000
+      );
+    },
+    onAdminCalled: (event) => {
+      addCall(event);
+      // Звуковой сигнал через Web Audio API
+      try {
+        const ctx = new AudioContext();
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.connect(gain);
+        gain.connect(ctx.destination);
+        oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+        oscillator.frequency.setValueAtTime(660, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        oscillator.start(ctx.currentTime);
+        oscillator.stop(ctx.currentTime + 0.5);
+      } catch { /* ignore */ }
+      showToast(
+        `Вызов от стола №${event.table_number}${event.judge_name ? ` (${event.judge_name})` : ''}`,
+        'warning',
+        8000
       );
     },
     onError: () => {
@@ -561,6 +592,14 @@ export const AdminDashboard = () => {
               </CardContent>
             </Card>
           </div>
+        )}
+
+        {/* Admin Calls Panel — вызовы от судей */}
+        {currentSession && serverMode === 'local-server' && (
+          <AdminCallsPanel
+            calls={adminCalls}
+            onDismiss={dismissCall}
+          />
         )}
 
         {/* Monitoring Section */}

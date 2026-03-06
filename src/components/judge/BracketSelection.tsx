@@ -9,6 +9,7 @@ import { applySortAndFilter, getGenderLabel, getAgeRangeLabel, getWeightRangeLab
 import { useServerModeStore } from '../../stores/serverModeStore';
 import { useAuthStore } from '../../stores/authStore';
 import { CreateBracketDialog } from './CreateBracketDialog';
+import { CallAdminButton } from './CallAdminButton';
 import { BracketProgressBar } from '../brackets/BracketProgressBar';
 
 interface BracketSelectionProps {
@@ -817,13 +818,16 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
 
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-900">Выберите сетку</h2>
-        <Button
-          onClick={() => setShowCreateDialog(true)}
-          variant="primary"
-          size="sm"
-        >
-          + Создать сетку
-        </Button>
+        <div className="flex items-center gap-2">
+          <CallAdminButton />
+          <Button
+            onClick={() => setShowCreateDialog(true)}
+            variant="primary"
+            size="sm"
+          >
+            + Создать сетку
+          </Button>
+        </div>
       </div>
 
       {/* Табы: Мои сетки / Доступные сетки - ВРЕМЕННО ОТКЛЮЧЕНО */}

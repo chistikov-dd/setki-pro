@@ -21,12 +21,21 @@ export interface JudgeDisconnectedEvent {
   timestamp: string;
 }
 
-export type AdminEvent = JudgeConnectedEvent | JudgeDisconnectedEvent;
+export interface AdminCalledEvent {
+  type: 'admin_called';
+  table_number: number;
+  judge_name: string | null;
+  message: string | null;
+  timestamp: string;
+}
+
+export type AdminEvent = JudgeConnectedEvent | JudgeDisconnectedEvent | AdminCalledEvent;
 
 interface UseAdminEventsWebSocketOptions {
   enabled?: boolean;
   onJudgeConnected?: (event: JudgeConnectedEvent) => void;
   onJudgeDisconnected?: (event: JudgeDisconnectedEvent) => void;
+  onAdminCalled?: (event: AdminCalledEvent) => void;
   onError?: (error: Error) => void;
 }
 
@@ -49,6 +58,7 @@ export function useAdminEventsWebSocket({
   enabled = true,
   onJudgeConnected,
   onJudgeDisconnected,
+  onAdminCalled,
   onError,
 }: UseAdminEventsWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
@@ -62,12 +72,14 @@ export function useAdminEventsWebSocket({
   // FIX: Используем useRef для callbacks чтобы избежать reconnect при изменении callback функций
   const onJudgeConnectedRef = useRef(onJudgeConnected);
   const onJudgeDisconnectedRef = useRef(onJudgeDisconnected);
+  const onAdminCalledRef = useRef(onAdminCalled);
   const onErrorRef = useRef(onError);
 
   // Обновляем refs при изменении callbacks
   useEffect(() => {
     onJudgeConnectedRef.current = onJudgeConnected;
     onJudgeDisconnectedRef.current = onJudgeDisconnected;
+    onAdminCalledRef.current = onAdminCalled;
     onErrorRef.current = onError;
   });
 
@@ -167,6 +179,10 @@ export function useAdminEventsWebSocket({
             // Вызываем callback если есть (используем ref)
             if (onJudgeDisconnectedRef.current) {
               onJudgeDisconnectedRef.current(judgeEvent);
+            }
+          } else if (message.type === 'admin_called') {
+            if (onAdminCalledRef.current) {
+              onAdminCalledRef.current(message as AdminCalledEvent);
             }
           }
         } catch (error) {

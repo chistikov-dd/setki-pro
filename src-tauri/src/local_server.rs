@@ -118,6 +118,14 @@ pub struct UpdateMatchParticipantRequest {
     pub club: Option<String>,
 }
 
+// Вызов администратора
+#[derive(Debug, Deserialize)]
+pub struct CallAdminRequest {
+    pub table_number: i32,
+    pub judge_name: Option<String>,
+    pub message: Option<String>,
+}
+
 // Bracket editing requests
 #[derive(Debug, Deserialize)]
 pub struct SwapParticipantsRequest {
@@ -336,6 +344,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/matches/update", post(update_match_score_handler))
         .route("/api/v1/desktop/matches/undo", post(undo_match_handler)) // Отмена завершённого матча
         .route("/api/v1/desktop/matches/cancel", post(cancel_match_handler)) // Отмена активного матча
+        .route("/api/v1/desktop/call-admin", post(call_admin_handler)) // Вызов администратора
         .route("/api/v1/desktop/matches/participant", post(update_bracket_participant_handler)) // Редактирование участников судьями
 
         // Bracket editing endpoints
@@ -2588,4 +2597,24 @@ async fn advance_winner_to_next_match(
     }
 
     Ok(())
+}
+
+// Вызов администратора от судьи — отправляет событие в admin_events_channel
+async fn call_admin_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<CallAdminRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] call_admin_handler - table_number: {}", payload.table_number);
+
+    let event = serde_json::json!({
+        "type": "admin_called",
+        "table_number": payload.table_number,
+        "judge_name": payload.judge_name,
+        "message": payload.message,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+
+    let _ = state.admin_events_channel.send(event.to_string());
+
+    Ok(Json(serde_json::json!({ "status": "sent" })))
 }
