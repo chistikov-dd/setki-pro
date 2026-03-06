@@ -335,6 +335,7 @@ pub async fn start_server(
         .route("/api/v1/desktop/sync/matches", post(sync_matches_handler))
         .route("/api/v1/desktop/matches/update", post(update_match_score_handler))
         .route("/api/v1/desktop/matches/undo", post(undo_match_handler)) // Отмена завершённого матча
+        .route("/api/v1/desktop/matches/cancel", post(cancel_match_handler)) // Отмена активного матча
         .route("/api/v1/desktop/matches/participant", post(update_bracket_participant_handler)) // Редактирование участников судьями
 
         // Bracket editing endpoints
@@ -1098,7 +1099,26 @@ async fn undo_match_handler(
                     .execute(&*state.db)
                     .await?;
                 } else {
-                    println!("[LOCAL SERVER] ⚠️ Winner ID {} not found in next match {}", winner_id_value, next_match_id);
+                    // Fallback: ID не совпал (временный участник) — определяем по формуле слота
+                    println!("[LOCAL SERVER] ⚠️ Winner ID {} not found by ID in next match {} — using slot formula",
+                        winner_id_value, next_match_id);
+                    if current_match_number % 2 == 1 {
+                        sqlx::query(
+                            "UPDATE matches_cache SET p1_id = NULL, p1_name = NULL, p1_club = NULL,
+                             updated_at = datetime('now') WHERE match_id = ?"
+                        )
+                        .bind(next_match_id)
+                        .execute(&*state.db)
+                        .await?;
+                    } else {
+                        sqlx::query(
+                            "UPDATE matches_cache SET p2_id = NULL, p2_name = NULL, p2_club = NULL,
+                             updated_at = datetime('now') WHERE match_id = ?"
+                        )
+                        .bind(next_match_id)
+                        .execute(&*state.db)
+                        .await?;
+                    }
                 }
             }
 
@@ -1138,6 +1158,142 @@ async fn undo_match_handler(
 
     Ok(Json(serde_json::json!({
         "status": "undone",
+        "match_id": payload.match_id
+    })))
+}
+
+// Отмена активного или незавершённого матча (сброс счёта, статус → scheduled)
+// Доступно для всех: судей и администраторов
+async fn cancel_match_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<UndoMatchRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    println!("[LOCAL SERVER] ========== cancel_match_handler START ==========");
+    println!("[LOCAL SERVER] match_id: {}", payload.match_id);
+
+    // 1. Получить данные матча
+    let current_row: Option<(String, Option<i32>, i32, i32, i32)> = sqlx::query_as(
+        "SELECT status, winner_id, bracket_id, round_number, match_number FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(payload.match_id)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    let (status, winner_id, bracket_id, current_round, current_match_number) = if let Some(row) = current_row {
+        row
+    } else {
+        println!("[LOCAL SERVER] ERROR: Match {} not found", payload.match_id);
+        return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
+    };
+
+    println!("[LOCAL SERVER] Match status: {}, winner_id: {:?}", status, winner_id);
+
+    // 2. Сбросить матч в начальное состояние
+    sqlx::query(
+        "UPDATE matches_cache
+         SET status = 'scheduled', score_p1 = 0, score_p2 = 0,
+             warnings_p1 = 0, warnings_p2 = 0,
+             winner_id = NULL, result_type = NULL,
+             version = version + 1, updated_at = datetime('now')
+         WHERE match_id = ?"
+    )
+    .bind(payload.match_id)
+    .execute(&*state.db)
+    .await?;
+
+    println!("[LOCAL SERVER] ✅ Match {} reset to scheduled", payload.match_id);
+
+    // 3. Если был победитель — убрать его из следующего раунда
+    let next_round = current_round + 1;
+    let next_match_number = (current_match_number + 1) / 2;
+
+    let next_match_id: Option<i32> = sqlx::query_scalar(
+        "SELECT match_id FROM matches_cache
+         WHERE bracket_id = ? AND round_number = ? AND match_number = ?"
+    )
+    .bind(bracket_id)
+    .bind(next_round)
+    .bind(next_match_number)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    if let Some(next_match_id) = next_match_id {
+        println!("[LOCAL SERVER] Found next match: {}", next_match_id);
+
+        // Определяем слот по позиции матча (нечётные → p1, чётные → p2)
+        // Также проверяем по winner_id если он есть
+        let next_slots: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
+            "SELECT p1_id, p2_id FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(next_match_id)
+        .fetch_optional(&*state.db)
+        .await?;
+
+        if let Some((next_p1_id, next_p2_id)) = next_slots {
+            let should_clear_p1 = if let Some(wid) = winner_id {
+                // Если winner_id совпадает с p1 — очищаем p1
+                next_p1_id == Some(wid)
+            } else {
+                // Нет winner_id — используем формулу по слоту
+                current_match_number % 2 == 1
+            };
+
+            let should_clear_p2 = if let Some(wid) = winner_id {
+                next_p2_id == Some(wid)
+            } else {
+                current_match_number % 2 == 0
+            };
+
+            if should_clear_p1 {
+                sqlx::query(
+                    "UPDATE matches_cache SET p1_id = NULL, p1_name = NULL, p1_club = NULL,
+                     updated_at = datetime('now') WHERE match_id = ?"
+                )
+                .bind(next_match_id)
+                .execute(&*state.db)
+                .await?;
+                println!("[LOCAL SERVER] Cleared p1 slot in next match {}", next_match_id);
+            } else if should_clear_p2 {
+                sqlx::query(
+                    "UPDATE matches_cache SET p2_id = NULL, p2_name = NULL, p2_club = NULL,
+                     updated_at = datetime('now') WHERE match_id = ?"
+                )
+                .bind(next_match_id)
+                .execute(&*state.db)
+                .await?;
+                println!("[LOCAL SERVER] Cleared p2 slot in next match {}", next_match_id);
+            }
+        }
+    } else {
+        println!("[LOCAL SERVER] No next match found");
+    }
+
+    // 4. Очистить историю событий матча
+    sqlx::query("DELETE FROM match_events WHERE match_id = ?")
+        .bind(payload.match_id)
+        .execute(&*state.db)
+        .await?;
+
+    // 5. Обновить статус сетки
+    if let Err(e) = update_bracket_status_from_matches(&state.db, payload.match_id).await {
+        println!("[LOCAL SERVER] WARNING: Failed to update bracket status: {:?}", e);
+    }
+
+    // 6. Broadcast через WebSocket
+    let channels = state.match_channels.read().await;
+    if let Some(tx) = channels.get(&payload.match_id.to_string()) {
+        let ws_message = serde_json::json!({
+            "type": "match_cancelled",
+            "match_id": payload.match_id,
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        });
+        let _ = tx.send(ws_message.to_string());
+    }
+
+    println!("[LOCAL SERVER] ========== cancel_match_handler SUCCESS ==========");
+
+    Ok(Json(serde_json::json!({
+        "status": "cancelled",
         "match_id": payload.match_id
     })))
 }

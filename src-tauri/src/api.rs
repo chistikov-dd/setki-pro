@@ -2260,6 +2260,56 @@ impl ApiClient {
         Err(anyhow::anyhow!("Failed to undo match on local server after {} attempts", max_retries))
     }
 
+    // Отменить активный матч на локальном сервере (для режима local-client)
+    pub async fn cancel_match_on_local_server(
+        &self,
+        server_url: &str,
+        match_id: i32,
+    ) -> Result<()> {
+        let token = self.get_token().await
+            .map_err(|e| anyhow::anyhow!("Failed to get token: {}", e))?
+            .ok_or_else(|| anyhow::anyhow!("No auth token found"))?;
+
+        let base = if !server_url.contains("/api/v1") {
+            format!("{}/api/v1", server_url.trim_end_matches('/'))
+        } else {
+            server_url.to_string()
+        };
+        let url = format!("{}/desktop/matches/cancel", base);
+
+        let payload = serde_json::json!({ "match_id": match_id });
+
+        let max_retries = 3;
+        for attempt in 0..max_retries {
+            let response = self.client
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => return Ok(()),
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    println!("[cancel_match_on_local_server] Failed {} on attempt {}: {}", status, attempt + 1, body);
+                    if attempt < max_retries - 1 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+                Err(e) => {
+                    println!("[cancel_match_on_local_server] Error on attempt {}: {}", attempt + 1, e);
+                    if attempt < max_retries - 1 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        }
+        Err(anyhow::anyhow!("Failed to cancel match on local server after {} attempts", max_retries))
+    }
+
     // Завершить матч
     pub async fn finish_match(
         &self,

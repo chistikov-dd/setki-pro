@@ -740,6 +740,22 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     }
   }, [redWarnings, blueWarnings, showEndDialog, disqualificationToastShown, currentSession?.scoring_config.warnings.max_count, showToast, timer]);
 
+  const [showCancelMatchDialog, setShowCancelMatchDialog] = useState(false);
+
+  const handleCancelMatch = async () => {
+    try {
+      const serverUrl = serverMode.mode === 'local-client' ? (serverMode.serverUrl ?? undefined) : undefined;
+      await invoke('cancel_match', { matchId: match.id, serverUrl });
+      showToast('Матч отменён', 'success', 3000);
+      setShowCancelMatchDialog(false);
+      await closePublicDisplay();
+      onExit();
+    } catch (error) {
+      console.error('[MatchScreen] Failed to cancel match:', error);
+      showToast(`Ошибка при отмене матча: ${error}`, 'error', 4000);
+    }
+  };
+
   const handleFinishMatch = async (
     resultType: 'points' | 'submission' | 'disqualification',
     winnerId?: number
@@ -969,10 +985,47 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
               >
                 Завершить<br />(Enter)
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowCancelMatchDialog(true)}
+                className="whitespace-nowrap text-red-500 hover:text-red-700 hover:bg-red-50 text-xs"
+              >
+                Отменить матч
+              </Button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Cancel Match Dialog */}
+      {showCancelMatchDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-3">Отменить матч?</h3>
+            <p className="text-gray-600 text-sm mb-6">
+              Счёт и предупреждения будут сброшены. Победитель будет убран из следующего раунда.
+              Это действие нельзя отменить.
+            </p>
+            <div className="flex gap-3">
+              <Button
+                variant="danger"
+                className="flex-1"
+                onClick={handleCancelMatch}
+              >
+                Да, отменить
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => setShowCancelMatchDialog(false)}
+              >
+                Назад
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* End Dialog */}
       {showEndDialog && (

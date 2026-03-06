@@ -3101,6 +3101,124 @@ async fn search_fighters(
     Ok(result)
 }
 
+/// Отменить матч (сбросить счёт, вернуть в scheduled, убрать победителя из следующего раунда)
+/// Доступно для всех пользователей (судьи и администраторы)
+#[tauri::command]
+async fn cancel_match(
+    match_id: i32,
+    server_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let pool = &state.db_pool;
+
+    state.logger.info(&format!("[cancel_match] START - match_id: {}, server_url: {:?}", match_id, server_url));
+
+    // В режиме local-client — делегируем на сервер админа
+    let is_local_client = server_url.as_ref()
+        .map(|url| !url.is_empty() && (
+            url.contains("192.168.") || url.contains("10.0.") ||
+            url.contains("localhost") || url.contains("127.0.0.1") ||
+            url.contains("172.")
+        ))
+        .unwrap_or(false);
+
+    if is_local_client {
+        let api_client = Arc::new(ApiClient::new(
+            server_url.clone().unwrap(),
+            Arc::clone(&state.db_pool),
+            Arc::clone(&state.logger)
+        ));
+        return api_client
+            .cancel_match_on_local_server(server_url.as_ref().unwrap(), match_id)
+            .await
+            .map_err(|e| e.to_string());
+    }
+
+    // Локальный режим (local-server или offline) — выполняем напрямую
+    let match_row: Option<(String, Option<i32>, i32, i32, i32)> = sqlx::query_as(
+        "SELECT status, winner_id, bracket_id, round_number, match_number FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(match_id)
+    .fetch_optional(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let (_, winner_id, bracket_id, current_round, current_match_number) = match_row
+        .ok_or_else(|| "Матч не найден".to_string())?;
+
+    // Сбросить матч
+    sqlx::query(
+        "UPDATE matches_cache
+         SET status = 'scheduled', score_p1 = 0, score_p2 = 0,
+             warnings_p1 = 0, warnings_p2 = 0,
+             winner_id = NULL, result_type = NULL,
+             updated_at = datetime('now')
+         WHERE match_id = ?"
+    )
+    .bind(match_id)
+    .execute(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Убрать победителя из следующего раунда
+    let next_round = current_round + 1;
+    let next_match_number = (current_match_number + 1) / 2;
+
+    let next_match_id: Option<i32> = sqlx::query_scalar(
+        "SELECT match_id FROM matches_cache WHERE bracket_id = ? AND round_number = ? AND match_number = ?"
+    )
+    .bind(bracket_id)
+    .bind(next_round)
+    .bind(next_match_number)
+    .fetch_optional(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(next_id) = next_match_id {
+        let next_slots: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
+            "SELECT p1_id, p2_id FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(next_id)
+        .fetch_optional(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if let Some((p1_id, p2_id)) = next_slots {
+            let clear_p1 = if let Some(wid) = winner_id {
+                p1_id == Some(wid)
+            } else {
+                current_match_number % 2 == 1
+            };
+            let clear_p2 = if let Some(wid) = winner_id {
+                p2_id == Some(wid)
+            } else {
+                current_match_number % 2 == 0
+            };
+
+            if clear_p1 {
+                sqlx::query("UPDATE matches_cache SET p1_id = NULL, p1_name = NULL, p1_club = NULL, updated_at = datetime('now') WHERE match_id = ?")
+                    .bind(next_id).execute(pool.as_ref()).await.map_err(|e| e.to_string())?;
+            } else if clear_p2 {
+                sqlx::query("UPDATE matches_cache SET p2_id = NULL, p2_name = NULL, p2_club = NULL, updated_at = datetime('now') WHERE match_id = ?")
+                    .bind(next_id).execute(pool.as_ref()).await.map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    // Очистить историю событий
+    sqlx::query("DELETE FROM match_events WHERE match_id = ?")
+        .bind(match_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Пересчитать статус сетки
+    update_bracket_status(bracket_id, pool).await?;
+
+    state.logger.info(&format!("[cancel_match] SUCCESS - match {} cancelled", match_id));
+    Ok(())
+}
+
 /// Вычислить и сохранить занятые места по итогам завершённых сеток турнира
 /// Логика: финал → 1 и 2 место; полуфинал → 3-4; четвертьфинал → 5-8; 1/8 → 9-10 (только первые 2)
 #[tauri::command]
@@ -3468,6 +3586,7 @@ pub fn run() {
             log_to_file,
             download_fighters,
             search_fighters,
+            cancel_match,
             compute_tournament_places,
             get_tournament_places
         ])
