@@ -753,7 +753,7 @@ export const BracketSelection: React.FC<BracketSelectionProps> = ({
         </svg>
         <p className="text-red-400 font-medium mb-2">Ошибка загрузки</p>
         <p className="text-red-300 text-sm mb-4">{error}</p>
-        <Button onClick={loadBrackets} variant="secondary" size="sm">
+        <Button onClick={() => loadBrackets()} variant="secondary" size="sm">
           Повторить
         </Button>
       </div>
