@@ -41,6 +41,7 @@ export const AdminDashboard = () => {
   const [selectedTournamentId, setSelectedTournamentId] = useState<number | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState('');
+  const [isDownloadingFighters, setIsDownloadingFighters] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
@@ -203,6 +204,20 @@ export const AdminDashboard = () => {
       console.error('Ошибка скачивания:', error);
       setDownloadProgress('Ошибка загрузки данных');
       setIsDownloading(false);
+    }
+  };
+
+  // Скачать базу спортсменов для автодополнения
+  const handleDownloadFighters = async () => {
+    setIsDownloadingFighters(true);
+    try {
+      const count = await invoke<number>('download_fighters');
+      showToast(`Загружено ${count} спортсменов`, 'success', 3000);
+    } catch (error) {
+      console.error('Ошибка загрузки спортсменов:', error);
+      showToast('Ошибка загрузки базы спортсменов', 'error', 4000);
+    } finally {
+      setIsDownloadingFighters(false);
     }
   };
 
@@ -479,6 +494,15 @@ export const AdminDashboard = () => {
                   {downloadProgress && (
                     <p className="text-center text-blue-600">{downloadProgress}</p>
                   )}
+
+                  <Button
+                    variant="ghost"
+                    onClick={handleDownloadFighters}
+                    disabled={isDownloadingFighters}
+                    className="w-full text-sm text-gray-400 hover:text-gray-200"
+                  >
+                    {isDownloadingFighters ? 'Загрузка спортсменов...' : 'Скачать базу спортсменов'}
+                  </Button>
                 </div>
               </CardContent>
             </Card>

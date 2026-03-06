@@ -483,5 +483,22 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Таблица для кэша спортсменов (для автодополнения при добавлении участников)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS fighters_cache (
+            fighter_id INTEGER PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            club_name TEXT,
+            gender TEXT,
+            cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_fighters_cache_name ON fighters_cache(full_name)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }

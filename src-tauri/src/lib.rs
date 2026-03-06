@@ -3057,6 +3057,50 @@ fn log_to_file(
     Ok(())
 }
 
+/// Скачать всех спортсменов с setki.pro в локальный кэш fighters_cache
+#[tauri::command]
+async fn download_fighters(
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    state.api_client.download_fighters().await.map_err(|e| e.to_string())
+}
+
+/// Поиск спортсменов по имени из локального кэша (от 3 символов)
+#[tauri::command]
+async fn search_fighters(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    if query.chars().count() < 3 {
+        return Ok(vec![]);
+    }
+
+    let pattern = format!("%{}%", query);
+    let rows = sqlx::query(
+        "SELECT fighter_id, full_name, club_name, gender
+         FROM fighters_cache
+         WHERE full_name LIKE ?
+         ORDER BY full_name
+         LIMIT 20"
+    )
+    .bind(&pattern)
+    .fetch_all(&*state.db_pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let result: Vec<serde_json::Value> = rows.iter().map(|row| {
+        use sqlx::Row;
+        serde_json::json!({
+            "id": row.get::<i32, _>("fighter_id"),
+            "full_name": row.get::<String, _>("full_name"),
+            "club_name": row.get::<Option<String>, _>("club_name"),
+            "gender": row.get::<Option<String>, _>("gender"),
+        })
+    }).collect();
+
+    Ok(result)
+}
+
 /// Очистка синхронизированных записей из sync_queue
 /// Удаляет записи старше 7 дней, которые уже успешно синхронизированы с сервером
 #[tauri::command]
@@ -3219,7 +3263,9 @@ pub fn run() {
             clear_tournament_cache,
             cleanup_sync_queue,
             check_unsynced_count,
-            log_to_file
+            log_to_file,
+            download_fighters,
+            search_fighters
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

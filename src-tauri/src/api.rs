@@ -2622,4 +2622,52 @@ impl ApiClient {
             }
         }
     }
+
+    /// Скачать всех спортсменов с setki.pro и сохранить в fighters_cache
+    pub async fn download_fighters(&self) -> Result<usize> {
+        let token = self.get_token().await?
+            .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
+
+        let url = format!("{}/fighters/", self.base_url);
+        let response = self.client
+            .get(&url)
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("HTTP {}: {}", status, text));
+        }
+
+        let fighters: Vec<serde_json::Value> = response.json().await?;
+        let count = fighters.len();
+
+        // Очистить старый кэш и залить новый
+        sqlx::query("DELETE FROM fighters_cache")
+            .execute(self.db.as_ref())
+            .await?;
+
+        for f in &fighters {
+            let id = f["id"].as_i64().unwrap_or(0) as i32;
+            let full_name = f["full_name"].as_str().unwrap_or("").to_string();
+            let club_name = f["club_name"].as_str().map(String::from);
+            let gender = f["gender"].as_str().map(String::from);
+
+            sqlx::query(
+                "INSERT INTO fighters_cache (fighter_id, full_name, club_name, gender)
+                 VALUES (?, ?, ?, ?)"
+            )
+            .bind(id)
+            .bind(&full_name)
+            .bind(&club_name)
+            .bind(&gender)
+            .execute(self.db.as_ref())
+            .await?;
+        }
+
+        println!("[download_fighters] Saved {} fighters to cache", count);
+        Ok(count)
+    }
 }
