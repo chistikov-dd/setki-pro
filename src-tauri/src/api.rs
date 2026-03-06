@@ -2704,15 +2704,17 @@ impl ApiClient {
         for f in &fighters {
             let id = f["id"].as_i64().unwrap_or(0) as i32;
             let full_name = f["full_name"].as_str().unwrap_or("").to_string();
+            let full_name_lower = full_name.to_lowercase();
             let club_name = f["club_name"].as_str().map(String::from);
             let gender = f["gender"].as_str().map(String::from);
 
             sqlx::query(
-                "INSERT INTO fighters_cache (fighter_id, full_name, club_name, gender)
-                 VALUES (?, ?, ?, ?)"
+                "INSERT INTO fighters_cache (fighter_id, full_name, full_name_lower, club_name, gender)
+                 VALUES (?, ?, ?, ?, ?)"
             )
             .bind(id)
             .bind(&full_name)
+            .bind(&full_name_lower)
             .bind(&club_name)
             .bind(&gender)
             .execute(self.db.as_ref())

@@ -505,6 +505,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS fighters_cache (
             fighter_id INTEGER PRIMARY KEY,
             full_name TEXT NOT NULL,
+            full_name_lower TEXT NOT NULL DEFAULT '',
             club_name TEXT,
             gender TEXT,
             cached_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -513,9 +514,27 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_fighters_cache_name ON fighters_cache(full_name)")
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_fighters_cache_name ON fighters_cache(full_name_lower)")
         .execute(pool)
         .await?;
+
+    // Миграция: добавить full_name_lower если его нет
+    let has_name_lower: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('fighters_cache') WHERE name = 'full_name_lower'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_name_lower {
+        if count == 0 {
+            println!("[DB] Adding full_name_lower column to fighters_cache");
+            sqlx::query("ALTER TABLE fighters_cache ADD COLUMN full_name_lower TEXT NOT NULL DEFAULT ''")
+                .execute(pool)
+                .await?;
+            sqlx::query("UPDATE fighters_cache SET full_name_lower = lower(full_name)")
+                .execute(pool)
+                .await?;
+        }
+    }
 
     // Таблица для учёта занятых мест (1–10) по итогам сеток
     sqlx::query(

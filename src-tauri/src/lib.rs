@@ -3085,11 +3085,11 @@ async fn search_fighters(
         return Ok(vec![]);
     }
 
-    let pattern = format!("%{}%", query);
+    let pattern = format!("%{}%", query.to_lowercase());
     let rows = sqlx::query(
         "SELECT fighter_id, full_name, club_name, gender
          FROM fighters_cache
-         WHERE full_name LIKE ?
+         WHERE full_name_lower LIKE ?
          ORDER BY full_name
          LIMIT 20"
     )
