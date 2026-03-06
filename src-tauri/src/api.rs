@@ -663,17 +663,29 @@ impl ApiClient {
             let weight_min = bracket["min_weight"].as_f64();
             let weight_max = bracket["max_weight"].as_f64();
             let gender = bracket["gender"].as_str().unwrap_or("").to_string();
+            let sport_id = bracket["sport_id"].as_i64().map(|v| v as i32);
             let sport_name = bracket["sport_name"].as_str().unwrap_or("").to_string();
             let bracket_type = bracket["bracket_type"].as_str().unwrap_or("single_elimination").to_string();
             let total_rounds = bracket["total_rounds"].as_i64().map(|v| v as i32);
             let status = bracket["status"].as_str().unwrap_or("not_started").to_string();
             let is_published = if bracket["is_published"].as_bool().unwrap_or(false) { 1 } else { 0 };
+            let characteristics_schema = if bracket["characteristics_schema"].is_null() {
+                None
+            } else {
+                Some(bracket["characteristics_schema"].to_string())
+            };
+            let characteristic_filters = if bracket["characteristic_filters"].is_null() {
+                None
+            } else {
+                Some(bracket["characteristic_filters"].to_string())
+            };
 
             sqlx::query(
                 "INSERT OR REPLACE INTO brackets_cache
                  (bracket_id, tournament_id, category_id, category_name, weight_min, weight_max,
-                  gender, sport_name, bracket_type, total_rounds, status, is_published, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+                  gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
+                  characteristics_schema, characteristic_filters, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
             )
             .bind(bracket_id)
             .bind(tournament_id)
@@ -682,11 +694,14 @@ impl ApiClient {
             .bind(weight_min)
             .bind(weight_max)
             .bind(gender)
+            .bind(sport_id)
             .bind(sport_name)
             .bind(bracket_type)
             .bind(total_rounds)
             .bind(status)
             .bind(is_published)
+            .bind(characteristics_schema)
+            .bind(characteristic_filters)
             .execute(self.db.as_ref())
             .await?;
 

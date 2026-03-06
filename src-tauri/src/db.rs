@@ -69,11 +69,14 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
             weight_min REAL,
             weight_max REAL,
             gender TEXT,
+            sport_id INTEGER,
             sport_name TEXT,
             bracket_type TEXT,
             total_rounds INTEGER,
             status TEXT NOT NULL DEFAULT 'not_started',
             is_published INTEGER NOT NULL DEFAULT 0,
+            characteristics_schema TEXT,
+            characteristic_filters TEXT,
             updated_at TEXT NOT NULL
         )"
     )
@@ -99,16 +102,37 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
                     weight_min REAL,
                     weight_max REAL,
                     gender TEXT,
+                    sport_id INTEGER,
                     sport_name TEXT,
                     bracket_type TEXT,
                     total_rounds INTEGER,
                     status TEXT NOT NULL DEFAULT 'not_started',
                     is_published INTEGER NOT NULL DEFAULT 0,
+                    characteristics_schema TEXT,
+                    characteristic_filters TEXT,
                     updated_at TEXT NOT NULL
                 )"
             )
             .execute(pool)
             .await?;
+        }
+    }
+
+    // Миграция: добавить sport_id, characteristics_schema, characteristic_filters если их нет
+    let has_sport_id: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('brackets_cache') WHERE name = 'sport_id'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_sport_id {
+        if count == 0 {
+            println!("[DB] Adding sport_id, characteristics_schema, characteristic_filters to brackets_cache");
+            sqlx::query("ALTER TABLE brackets_cache ADD COLUMN sport_id INTEGER")
+                .execute(pool).await?;
+            sqlx::query("ALTER TABLE brackets_cache ADD COLUMN characteristics_schema TEXT")
+                .execute(pool).await?;
+            sqlx::query("ALTER TABLE brackets_cache ADD COLUMN characteristic_filters TEXT")
+                .execute(pool).await?;
         }
     }
 

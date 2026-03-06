@@ -702,11 +702,12 @@ async fn get_tournament_brackets_handler(
     // 1. Получить сетки (плоская схема)
     state.logger.info("Querying brackets_cache table...");
     let bracket_records = sqlx::query_as::<_, (i32, i32, Option<i32>, Option<String>,
-        Option<f64>, Option<f64>, Option<String>, Option<String>,
-        Option<String>, Option<i32>, String, i32)>(
+        Option<f64>, Option<f64>, Option<String>, Option<i32>, Option<String>,
+        Option<String>, Option<i32>, String, i32, Option<String>, Option<String>)>(
         "SELECT bracket_id, tournament_id, category_id, category_name,
-                weight_min, weight_max, gender, sport_name,
-                bracket_type, total_rounds, status, is_published
+                weight_min, weight_max, gender, sport_id, sport_name,
+                bracket_type, total_rounds, status, is_published,
+                characteristics_schema, characteristic_filters
          FROM brackets_cache WHERE tournament_id = ?"
     )
     .bind(tournament_id)
@@ -800,13 +801,23 @@ async fn get_tournament_brackets_handler(
     let mut brackets_with_matches: Vec<serde_json::Value> = Vec::new();
 
     for (bracket_id, tournament_id_val, category_id, category_name,
-         weight_min, weight_max, gender, sport_name,
-         bracket_type, total_rounds, status, is_published) in bracket_records
+         weight_min, weight_max, gender, sport_id, sport_name,
+         bracket_type, total_rounds, status, is_published,
+         characteristics_schema_str, characteristic_filters_str) in bracket_records
     {
         state.logger.info(&format!("Processing bracket_id: {}", bracket_id));
 
         let matches = matches_by_bracket.get(&bracket_id).cloned().unwrap_or_default();
         state.logger.info(&format!("Found {} matches for bracket {}", matches.len(), bracket_id));
+
+        let characteristics_schema: serde_json::Value = characteristics_schema_str
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let characteristic_filters: serde_json::Value = characteristic_filters_str
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(serde_json::Value::Null);
 
         let bracket_json = serde_json::json!({
             "id": bracket_id,
@@ -817,11 +828,14 @@ async fn get_tournament_brackets_handler(
             "weight_min": weight_min,
             "weight_max": weight_max,
             "gender": gender,
+            "sport_id": sport_id,
             "sport_name": sport_name,
             "bracket_type": bracket_type,
             "total_rounds": total_rounds,
             "status": status,
             "is_published": is_published != 0,
+            "characteristics_schema": characteristics_schema,
+            "characteristic_filters": characteristic_filters,
             "matches": matches,
         });
 
