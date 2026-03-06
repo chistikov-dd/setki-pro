@@ -59,24 +59,80 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
-    // Таблица для кэша сеток
+    // Таблица для кэша сеток (плоская схема)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS brackets_cache (
             bracket_id INTEGER PRIMARY KEY,
             tournament_id INTEGER NOT NULL,
-            data TEXT NOT NULL,
+            category_id INTEGER,
+            category_name TEXT,
+            weight_min REAL,
+            weight_max REAL,
+            gender TEXT,
+            sport_name TEXT,
+            bracket_type TEXT,
+            total_rounds INTEGER,
+            status TEXT NOT NULL DEFAULT 'not_started',
+            is_published INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         )"
     )
     .execute(pool)
     .await?;
 
-    // Таблица для кэша поединков
+    // Миграция: если таблица была старого формата (с полем data) — пересоздаём
+    let old_brackets_format: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('brackets_cache') WHERE name = 'data'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = old_brackets_format {
+        if count > 0 {
+            println!("[DB] Migrating brackets_cache from JSON blob to flat schema");
+            sqlx::query("DROP TABLE brackets_cache").execute(pool).await?;
+            sqlx::query(
+                "CREATE TABLE brackets_cache (
+                    bracket_id INTEGER PRIMARY KEY,
+                    tournament_id INTEGER NOT NULL,
+                    category_id INTEGER,
+                    category_name TEXT,
+                    weight_min REAL,
+                    weight_max REAL,
+                    gender TEXT,
+                    sport_name TEXT,
+                    bracket_type TEXT,
+                    total_rounds INTEGER,
+                    status TEXT NOT NULL DEFAULT 'not_started',
+                    is_published INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )"
+            )
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    // Таблица для кэша поединков (плоская схема)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS matches_cache (
             match_id INTEGER PRIMARY KEY,
             bracket_id INTEGER NOT NULL,
-            data TEXT NOT NULL,
+            tournament_id INTEGER,
+            round_number INTEGER NOT NULL DEFAULT 1,
+            match_number INTEGER NOT NULL DEFAULT 1,
+            p1_id INTEGER,
+            p1_name TEXT,
+            p1_club TEXT,
+            p2_id INTEGER,
+            p2_name TEXT,
+            p2_club TEXT,
+            score_p1 INTEGER NOT NULL DEFAULT 0,
+            score_p2 INTEGER NOT NULL DEFAULT 0,
+            warnings_p1 INTEGER NOT NULL DEFAULT 0,
+            warnings_p2 INTEGER NOT NULL DEFAULT 0,
+            winner_id INTEGER,
+            result_type TEXT,
+            status TEXT NOT NULL DEFAULT 'scheduled',
             updated_at TEXT NOT NULL,
             version INTEGER NOT NULL DEFAULT 1
         )"
@@ -84,20 +140,42 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
-    // Добавить колонку version если её нет (для существующих БД)
-    // PRAGMA table_info возвращает пустой результат если колонки нет
-    let column_exists: Option<(i64,)> = sqlx::query_as(
-        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'version'"
+    // Миграция: если таблица была старого формата (с полем data) — пересоздаём
+    let old_matches_format: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'data'"
     )
     .fetch_optional(pool)
     .await?;
-
-    if let Some((count,)) = column_exists {
-        if count == 0 {
-            println!("[DB] Adding version column to matches_cache for optimistic locking");
-            sqlx::query("ALTER TABLE matches_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
-                .execute(pool)
-                .await?;
+    if let Some((count,)) = old_matches_format {
+        if count > 0 {
+            println!("[DB] Migrating matches_cache from JSON blob to flat schema");
+            sqlx::query("DROP TABLE matches_cache").execute(pool).await?;
+            sqlx::query(
+                "CREATE TABLE matches_cache (
+                    match_id INTEGER PRIMARY KEY,
+                    bracket_id INTEGER NOT NULL,
+                    tournament_id INTEGER,
+                    round_number INTEGER NOT NULL DEFAULT 1,
+                    match_number INTEGER NOT NULL DEFAULT 1,
+                    p1_id INTEGER,
+                    p1_name TEXT,
+                    p1_club TEXT,
+                    p2_id INTEGER,
+                    p2_name TEXT,
+                    p2_club TEXT,
+                    score_p1 INTEGER NOT NULL DEFAULT 0,
+                    score_p2 INTEGER NOT NULL DEFAULT 0,
+                    warnings_p1 INTEGER NOT NULL DEFAULT 0,
+                    warnings_p2 INTEGER NOT NULL DEFAULT 0,
+                    winner_id INTEGER,
+                    result_type TEXT,
+                    status TEXT NOT NULL DEFAULT 'scheduled',
+                    updated_at TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1
+                )"
+            )
+            .execute(pool)
+            .await?;
         }
     }
 

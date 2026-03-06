@@ -651,105 +651,112 @@ impl ApiClient {
         let brackets = data["brackets"].as_array()
             .ok_or_else(|| anyhow::anyhow!("Неверный формат ответа"))?;
 
-        // Сохраняем сетки и матчи
+        // Сохраняем сетки и матчи (плоская схема)
         println!("[downloadTournament] Начинаем сохранение {} сеток", brackets.len());
         for bracket in brackets {
             let bracket_id = bracket["id"].as_i64().unwrap() as i32;
             println!("[downloadTournament] Обработка сетки ID: {}", bracket_id);
 
-            // Сохранить сетку (без вложенных matches)
-            let mut bracket_copy = bracket.clone();
-            bracket_copy.as_object_mut().unwrap().remove("matches");
-            let bracket_data = serde_json::to_string(&bracket_copy)?;
+            // Извлекаем поля сетки
+            let category_id = bracket["category_id"].as_i64().map(|v| v as i32);
+            let category_name = bracket["category_name"].as_str().unwrap_or("").to_string();
+            let weight_min = bracket["min_weight"].as_f64();
+            let weight_max = bracket["max_weight"].as_f64();
+            let gender = bracket["gender"].as_str().unwrap_or("").to_string();
+            let sport_name = bracket["sport_name"].as_str().unwrap_or("").to_string();
+            let bracket_type = bracket["bracket_type"].as_str().unwrap_or("single_elimination").to_string();
+            let total_rounds = bracket["total_rounds"].as_i64().map(|v| v as i32);
+            let status = bracket["status"].as_str().unwrap_or("not_started").to_string();
+            let is_published = if bracket["is_published"].as_bool().unwrap_or(false) { 1 } else { 0 };
 
             sqlx::query(
-                "INSERT OR REPLACE INTO brackets_cache (bracket_id, data, tournament_id, updated_at)
-                 VALUES (?, ?, ?, datetime('now'))"
+                "INSERT OR REPLACE INTO brackets_cache
+                 (bracket_id, tournament_id, category_id, category_name, weight_min, weight_max,
+                  gender, sport_name, bracket_type, total_rounds, status, is_published, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
             )
             .bind(bracket_id)
-            .bind(bracket_data)
             .bind(tournament_id)
+            .bind(category_id)
+            .bind(category_name)
+            .bind(weight_min)
+            .bind(weight_max)
+            .bind(gender)
+            .bind(sport_name)
+            .bind(bracket_type)
+            .bind(total_rounds)
+            .bind(status)
+            .bind(is_published)
             .execute(self.db.as_ref())
             .await?;
 
             // Сохранить все матчи этой сетки
             if let Some(matches) = bracket["matches"].as_array() {
                 println!("[downloadTournament] Сетка {} содержит {} матчей", bracket_id, matches.len());
-                for (idx, match_data) in matches.iter().enumerate() {
+                for match_data in matches.iter() {
                     let match_id = match_data["id"].as_i64().unwrap_or(0) as i32;
 
-                    // DEBUG: Выводим ПОЛНЫЙ JSON первого матча
-                    if idx == 0 {
-                        println!("[downloadTournament] === ПОЛНЫЙ JSON ПЕРВОГО МАТЧА (bracket {}) ===", bracket_id);
-                        println!("{}", serde_json::to_string_pretty(&match_data).unwrap_or_default());
-                        println!("[downloadTournament] === КОНЕЦ JSON ===");
-                    }
+                    // Извлекаем participant1 (поддержка нового и legacy форматов)
+                    let (p1_id, p1_name, p1_club) = if let Some(p1) = match_data.get("participant1").filter(|v| v.is_object()) {
+                        (
+                            p1["id"].as_i64().map(|v| v as i32),
+                            p1["full_name"].as_str().map(String::from),
+                            p1["club_name"].as_str().map(String::from),
+                        )
+                    } else {
+                        (
+                            match_data["participant1_id"].as_i64().map(|v| v as i32),
+                            match_data["fighter1_name"].as_str().map(String::from),
+                            match_data["fighter1_club"].as_str().map(String::from),
+                        )
+                    };
 
-                    // DEBUG: Проверяем наличие данных участников
-                    let p1_name = match_data.get("participant1")
-                        .and_then(|p| p.get("full_name"))
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("null");
-                    let p2_name = match_data.get("participant2")
-                        .and_then(|p| p.get("full_name"))
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("null");
+                    // Извлекаем participant2
+                    let (p2_id, p2_name, p2_club) = if let Some(p2) = match_data.get("participant2").filter(|v| v.is_object()) {
+                        (
+                            p2["id"].as_i64().map(|v| v as i32),
+                            p2["full_name"].as_str().map(String::from),
+                            p2["club_name"].as_str().map(String::from),
+                        )
+                    } else {
+                        (
+                            match_data["participant2_id"].as_i64().map(|v| v as i32),
+                            match_data["fighter2_name"].as_str().map(String::from),
+                            match_data["fighter2_club"].as_str().map(String::from),
+                        )
+                    };
 
-                    // DEBUG: Также проверяем fighter1_name/fighter2_name
-                    let f1_name = match_data.get("fighter1_name").and_then(|n| n.as_str()).unwrap_or("null");
-                    let f2_name = match_data.get("fighter2_name").and_then(|n| n.as_str()).unwrap_or("null");
-
-                    println!("[downloadTournament]   Матч {} (bracket={}): participant1={}, participant2={}, fighter1_name={}, fighter2_name={}",
-                        match_id, bracket_id, p1_name, p2_name, f1_name, f2_name);
-
-                    // КРИТИЧНО: Создаём объекты participant1/participant2 из legacy полей если их нет
-                    let mut match_obj = match_data.clone();
-
-                    // Если participant1 объект отсутствует, но есть legacy поля - создаём объект
-                    if match_obj.get("participant1").is_none() || match_obj["participant1"].is_null() {
-                        if let Some(fighter1_name) = match_obj.get("fighter1_name").and_then(|v| v.as_str()) {
-                            if !fighter1_name.is_empty() {
-                                let participant1_id = match_obj.get("participant1_id").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let fighter1_club = match_obj.get("fighter1_club").and_then(|v| v.as_str()).unwrap_or("");
-
-                                match_obj["participant1"] = serde_json::json!({
-                                    "id": participant1_id,
-                                    "fighter_id": participant1_id,
-                                    "full_name": fighter1_name,
-                                    "club_name": fighter1_club
-                                });
-                                println!("[downloadTournament]   ✓ Создан объект participant1 для матча {}", match_id);
-                            }
-                        }
-                    }
-
-                    // Если participant2 объект отсутствует, но есть legacy поля - создаём объект
-                    if match_obj.get("participant2").is_none() || match_obj["participant2"].is_null() {
-                        if let Some(fighter2_name) = match_obj.get("fighter2_name").and_then(|v| v.as_str()) {
-                            if !fighter2_name.is_empty() {
-                                let participant2_id = match_obj.get("participant2_id").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let fighter2_club = match_obj.get("fighter2_club").and_then(|v| v.as_str()).unwrap_or("");
-
-                                match_obj["participant2"] = serde_json::json!({
-                                    "id": participant2_id,
-                                    "fighter_id": participant2_id,
-                                    "full_name": fighter2_name,
-                                    "club_name": fighter2_club
-                                });
-                                println!("[downloadTournament]   ✓ Создан объект participant2 для матча {}", match_id);
-                            }
-                        }
-                    }
-
-                    let match_json = serde_json::to_string(&match_obj)?;
+                    let round_number = match_data["round_number"].as_i64().unwrap_or(1) as i32;
+                    let match_number = match_data["match_number"].as_i64().unwrap_or(1) as i32;
+                    let score_p1 = match_data["score_participant1"].as_i64().unwrap_or(0) as i32;
+                    let score_p2 = match_data["score_participant2"].as_i64().unwrap_or(0) as i32;
+                    let winner_id = match_data["winner_id"].as_i64().map(|v| v as i32);
+                    let result_type = match_data["result_type"].as_str().map(String::from);
+                    let status = match_data["status"].as_str().unwrap_or("scheduled").to_string();
 
                     sqlx::query(
-                        "INSERT OR REPLACE INTO matches_cache (match_id, bracket_id, data, updated_at)
-                         VALUES (?, ?, ?, datetime('now'))"
+                        "INSERT OR REPLACE INTO matches_cache
+                         (match_id, bracket_id, tournament_id, round_number, match_number,
+                          p1_id, p1_name, p1_club, p2_id, p2_name, p2_club,
+                          score_p1, score_p2, winner_id, result_type, status, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
                     )
                     .bind(match_id)
                     .bind(bracket_id)
-                    .bind(match_json)
+                    .bind(tournament_id)
+                    .bind(round_number)
+                    .bind(match_number)
+                    .bind(p1_id)
+                    .bind(p1_name)
+                    .bind(p1_club)
+                    .bind(p2_id)
+                    .bind(p2_name)
+                    .bind(p2_club)
+                    .bind(score_p1)
+                    .bind(score_p2)
+                    .bind(winner_id)
+                    .bind(result_type)
+                    .bind(status)
                     .execute(self.db.as_ref())
                     .await?;
                 }
@@ -855,8 +862,10 @@ impl ApiClient {
         } else {
             // Читаем из локального кэша (offline режим для setki.pro)
             println!("[ApiClient::get_cached_brackets] Reading from local cache");
-            let records = sqlx::query_as::<_, (String,)>(
-                "SELECT data FROM brackets_cache WHERE tournament_id = ?"
+            let records = sqlx::query_as::<_, (i32, i32, Option<i32>, Option<String>, Option<f64>, Option<f64>, Option<String>, Option<String>, Option<String>, Option<i32>, String, i32)>(
+                "SELECT bracket_id, tournament_id, category_id, category_name, weight_min, weight_max,
+                        gender, sport_name, bracket_type, total_rounds, status, is_published
+                 FROM brackets_cache WHERE tournament_id = ?"
             )
             .bind(tournament_id)
             .fetch_all(self.db.as_ref())
@@ -864,7 +873,22 @@ impl ApiClient {
 
             let brackets: Vec<serde_json::Value> = records
                 .into_iter()
-                .filter_map(|r| serde_json::from_str(&r.0).ok())
+                .map(|(bracket_id, tournament_id, category_id, category_name, weight_min, weight_max, gender, sport_name, bracket_type, total_rounds, status, is_published)| {
+                    serde_json::json!({
+                        "id": bracket_id,
+                        "tournament_id": tournament_id,
+                        "category_id": category_id,
+                        "category_name": category_name,
+                        "min_weight": weight_min,
+                        "max_weight": weight_max,
+                        "gender": gender,
+                        "sport_name": sport_name,
+                        "bracket_type": bracket_type,
+                        "total_rounds": total_rounds,
+                        "status": status,
+                        "is_published": is_published == 1,
+                    })
+                })
                 .collect();
 
             println!("[ApiClient::get_cached_brackets] Found {} brackets in local cache", brackets.len());
@@ -1605,18 +1629,76 @@ impl ApiClient {
             self.logger.info("========== ApiClient::get_bracket_matches END ==========");
             Ok(matches)
         } else {
-            // Читаем из локального кэша
+            // Читаем из локального кэша (плоская схема)
             self.logger.info("Reading from local cache");
-            let records = sqlx::query_as::<_, (String,)>(
-                "SELECT data FROM matches_cache WHERE bracket_id = ?"
+            let records = sqlx::query(
+                "SELECT match_id, bracket_id, tournament_id, round_number, match_number,
+                        p1_id, p1_name, p1_club,
+                        p2_id, p2_name, p2_club,
+                        score_p1, score_p2, warnings_p1, warnings_p2,
+                        winner_id, result_type, status, version
+                 FROM matches_cache WHERE bracket_id = ?
+                 ORDER BY round_number, match_number"
             )
             .bind(bracket_id)
             .fetch_all(self.db.as_ref())
             .await?;
 
             let matches: Vec<serde_json::Value> = records
-                .into_iter()
-                .filter_map(|r| serde_json::from_str(&r.0).ok())
+                .iter()
+                .map(|row| {
+                    use sqlx::Row;
+                    let match_id:    i32            = row.get("match_id");
+                    let b_id:        i32            = row.get("bracket_id");
+                    let t_id:        Option<i32>    = row.get("tournament_id");
+                    let round:       i32            = row.get("round_number");
+                    let match_num:   i32            = row.get("match_number");
+                    let p1_id:       Option<i32>    = row.get("p1_id");
+                    let p1_name:     Option<String> = row.get("p1_name");
+                    let p1_club:     Option<String> = row.get("p1_club");
+                    let p2_id:       Option<i32>    = row.get("p2_id");
+                    let p2_name:     Option<String> = row.get("p2_name");
+                    let p2_club:     Option<String> = row.get("p2_club");
+                    let score_p1:    i32            = row.get("score_p1");
+                    let score_p2:    i32            = row.get("score_p2");
+                    let warnings_p1: i32            = row.get("warnings_p1");
+                    let warnings_p2: i32            = row.get("warnings_p2");
+                    let winner_id:   Option<i32>    = row.get("winner_id");
+                    let result_type: Option<String> = row.get("result_type");
+                    let status:      String         = row.get("status");
+                    let version:     i32            = row.get("version");
+
+                    let participant1 = if p1_id.is_some() || p1_name.is_some() {
+                        serde_json::json!({ "id": p1_id, "fighter_id": p1_id, "full_name": p1_name, "club_name": p1_club })
+                    } else { serde_json::Value::Null };
+                    let participant2 = if p2_id.is_some() || p2_name.is_some() {
+                        serde_json::json!({ "id": p2_id, "fighter_id": p2_id, "full_name": p2_name, "club_name": p2_club })
+                    } else { serde_json::Value::Null };
+
+                    serde_json::json!({
+                        "id": match_id,
+                        "bracket_id": b_id,
+                        "tournament_id": t_id,
+                        "round_number": round,
+                        "match_number": match_num,
+                        "participant1": participant1,
+                        "participant2": participant2,
+                        "participant1_id": p1_id,
+                        "fighter1_name": p1_name,
+                        "fighter1_club": p1_club,
+                        "participant2_id": p2_id,
+                        "fighter2_name": p2_name,
+                        "fighter2_club": p2_club,
+                        "score_participant1": score_p1,
+                        "score_participant2": score_p2,
+                        "warnings_participant1": warnings_p1,
+                        "warnings_participant2": warnings_p2,
+                        "winner_id": winner_id,
+                        "result_type": result_type,
+                        "status": status,
+                        "version": version,
+                    })
+                })
                 .collect();
 
             self.logger.info(&format!("Found {} matches in local cache", matches.len()));
@@ -1629,10 +1711,9 @@ impl ApiClient {
 
     // Начать матч (изменить статус на in_progress)
     pub async fn start_match(&self, match_id: i32) -> Result<()> {
-        // Обновить статус в кэше
         sqlx::query(
             "UPDATE matches_cache
-             SET data = json_set(data, '$.status', 'in_progress'),
+             SET status = 'in_progress',
                  updated_at = datetime('now')
              WHERE match_id = ?"
         )
@@ -1672,13 +1753,10 @@ impl ApiClient {
         // Обновляем только если version совпадает (optimistic locking)
         let rows_affected = sqlx::query(
             "UPDATE matches_cache
-             SET data = json_set(
-                 json_set(
-                     json_set(
-                         json_set(data, '$.score_participant1', ?),
-                         '$.score_participant2', ?),
-                     '$.warnings_participant1', ?),
-                 '$.warnings_participant2', ?),
+             SET score_p1 = ?,
+                 score_p2 = ?,
+                 warnings_p1 = ?,
+                 warnings_p2 = ?,
                  version = version + 1,
                  updated_at = datetime('now')
              WHERE match_id = ? AND version = ?"
@@ -1750,11 +1828,10 @@ impl ApiClient {
         // 2. Получить статусы только тех матчей, где есть участники
         // (пустые матчи не учитываются при определении статуса сетки)
         let matches: Vec<(String,)> = sqlx::query_as(
-            "SELECT json_extract(data, '$.status')
+            "SELECT status
              FROM matches_cache
              WHERE bracket_id = ?
-             AND (json_extract(data, '$.participant1_id') IS NOT NULL
-                  OR json_extract(data, '$.participant2_id') IS NOT NULL)"
+             AND (p1_id IS NOT NULL OR p2_id IS NOT NULL)"
         )
         .bind(bracket_id)
         .fetch_all(&mut **tx)
@@ -1801,7 +1878,7 @@ impl ApiClient {
         // 4. Обновить статус сетки в brackets_cache
         sqlx::query(
             "UPDATE brackets_cache
-             SET data = json_set(data, '$.status', ?),
+             SET status = ?,
                  updated_at = datetime('now')
              WHERE bracket_id = ?"
         )
@@ -1923,13 +2000,10 @@ impl ApiClient {
         // Обновляем только если version совпадает (optimistic locking)
         let rows_affected = sqlx::query(
             "UPDATE matches_cache
-             SET data = json_set(
-                 json_set(
-                     json_set(
-                         json_set(data, '$.score_participant1', ?),
-                         '$.score_participant2', ?),
-                     '$.warnings_participant1', ?),
-                 '$.warnings_participant2', ?),
+             SET score_p1 = ?,
+                 score_p2 = ?,
+                 warnings_p1 = ?,
+                 warnings_p2 = ?,
                  version = version + 1,
                  updated_at = datetime('now')
              WHERE match_id = ? AND version = ?"
@@ -2218,10 +2292,7 @@ impl ApiClient {
 
         // 1. Получить информацию о текущем матче (раунд, номер матча, bracket_id)
         let match_info: (i32, i32, i32) = sqlx::query_as(
-            "SELECT
-                CAST(json_extract(data, '$.round_number') AS INTEGER) as round_number,
-                CAST(json_extract(data, '$.match_number') AS INTEGER) as match_number,
-                CAST(json_extract(data, '$.bracket_id') AS INTEGER) as bracket_id
+            "SELECT round_number, match_number, bracket_id
              FROM matches_cache
              WHERE match_id = ?"
         )
@@ -2240,25 +2311,25 @@ impl ApiClient {
         } else {
             // Определяем по счету (для вручную добавленных участников без ID)
             if final_red_score > final_blue_score {
-                // Красный победил - нужно получить его ID из participant2
-                let red_id: Option<i64> = sqlx::query_scalar(
-                    "SELECT CAST(json_extract(data, '$.participant2.id') AS INTEGER) FROM matches_cache WHERE match_id = ?"
+                // Красный победил - p2_id
+                let red_id: Option<i32> = sqlx::query_scalar(
+                    "SELECT p2_id FROM matches_cache WHERE match_id = ?"
                 )
                 .bind(match_id)
                 .fetch_optional(self.db.as_ref())
                 .await?
                 .flatten();
-                red_id.map(|id| id as i32)
+                red_id
             } else if final_blue_score > final_red_score {
-                // Синий победил - нужно получить его ID из participant1
-                let blue_id: Option<i64> = sqlx::query_scalar(
-                    "SELECT CAST(json_extract(data, '$.participant1.id') AS INTEGER) FROM matches_cache WHERE match_id = ?"
+                // Синий победил - p1_id
+                let blue_id: Option<i32> = sqlx::query_scalar(
+                    "SELECT p1_id FROM matches_cache WHERE match_id = ?"
                 )
                 .bind(match_id)
                 .fetch_optional(self.db.as_ref())
                 .await?
                 .flatten();
-                blue_id.map(|id| id as i32)
+                blue_id
             } else {
                 None // Ничья
             }
@@ -2275,18 +2346,14 @@ impl ApiClient {
 
         // Если произойдёт ошибка ниже, транзакция автоматически откатится при drop
         let transaction_result: Result<(), anyhow::Error> = async {
-            // 3. Обновить статус текущего матча в кэше
+            // 3. Обновить статус текущего матча в кэше (плоские колонки)
             sqlx::query(
             "UPDATE matches_cache
-             SET data = json_set(
-                 json_set(
-                     json_set(
-                         json_set(
-                             json_set(data, '$.status', 'completed'),
-                             '$.winner_id', ?),
-                         '$.result_type', ?),
-                     '$.score_participant1', ?),
-                 '$.score_participant2', ?),
+             SET status = 'completed',
+                 winner_id = ?,
+                 result_type = ?,
+                 score_p1 = ?,
+                 score_p2 = ?,
                  updated_at = datetime('now')
              WHERE match_id = ?"
         )
@@ -2298,146 +2365,63 @@ impl ApiClient {
         .execute(&mut *tx)
         .await?;
 
-        // 4. Продвинуть победителя в следующий матч (определяем по счету если нет winner_id)
-        // Получить данные матча для определения победителя
-        let match_data_json: String = sqlx::query_scalar(
-            "SELECT data FROM matches_cache WHERE match_id = ?"
+        // 4. Продвинуть победителя в следующий матч
+        // Читаем плоские данные текущего матча для определения победителя
+        let match_flat: Option<(Option<i32>, Option<String>, Option<String>,
+                                Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT p1_id, p1_name, p1_club, p2_id, p2_name, p2_club
+             FROM matches_cache WHERE match_id = ?"
         )
         .bind(match_id)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        let match_data: serde_json::Value = serde_json::from_str(&match_data_json)
-            .map_err(|e| anyhow::anyhow!("Failed to parse match data: {}", e))?;
+        // Определить объект победителя
+        let winner_participant_json = if let Some((p1_id, p1_name, p1_club, p2_id, p2_name, p2_club)) = match_flat {
+            let winner = final_winner_id;
 
-        // Проверяем формат данных (новый vs старый)
-        let has_participant_objects = match_data.get("participant1").is_some()
-            && match_data["participant1"].is_object();
+            let make_participant = |id: Option<i32>, name: Option<String>, club: Option<String>| {
+                serde_json::json!({
+                    "id": id,
+                    "fighter_id": id,
+                    "full_name": name,
+                    "club_name": club,
+                })
+            };
 
-        // Определить победителя по счету если winner_id не указан
-        let winner_participant_json = if final_winner_id.is_some() {
-            // Если winner_id указан, ищем по ID или fighter_id
-            let winner = final_winner_id.unwrap();
-
-            if has_participant_objects {
-                // НОВЫЙ формат: participant1/participant2 - объекты
-                let p1_id = match_data["participant1"]["id"].as_i64();
-                let p2_id = match_data["participant2"]["id"].as_i64();
-                let p1_fighter_id = match_data["participant1"]["fighter_id"].as_i64();
-                let p2_fighter_id = match_data["participant2"]["fighter_id"].as_i64();
-
-                println!("[finish_match] NEW format - Looking for winner_id={}, participant1: id={:?}, fighter_id={:?}, participant2: id={:?}, fighter_id={:?}",
-                         winner, p1_id, p1_fighter_id, p2_id, p2_fighter_id);
-
-                if p1_id == Some(winner as i64) || p1_fighter_id == Some(winner as i64) {
-                    println!("[finish_match] Winner matched: participant1 (by id or fighter_id)");
-                    match_data["participant1"].clone()
-                } else if p2_id == Some(winner as i64) || p2_fighter_id == Some(winner as i64) {
-                    println!("[finish_match] Winner matched: participant2 (by id or fighter_id)");
-                    match_data["participant2"].clone()
+            if let Some(w) = winner {
+                if p1_id == Some(w) {
+                    println!("[finish_match] Winner matched: p1 (blue) id={}", w);
+                    make_participant(p1_id, p1_name, p1_club)
+                } else if p2_id == Some(w) {
+                    println!("[finish_match] Winner matched: p2 (red) id={}", w);
+                    make_participant(p2_id, p2_name, p2_club)
                 } else {
-                    println!("[finish_match] Winner ID {} not found in participants - falling back to score", winner);
+                    println!("[finish_match] Winner ID {} not found - fallback to score", w);
                     if final_blue_score > final_red_score {
-                        println!("[finish_match] Fallback winner: participant1 (blue)");
-                        match_data["participant1"].clone()
+                        make_participant(p1_id, p1_name, p1_club)
                     } else if final_red_score > final_blue_score {
-                        println!("[finish_match] Fallback winner: participant2 (red)");
-                        match_data["participant2"].clone()
+                        make_participant(p2_id, p2_name, p2_club)
                     } else {
-                        println!("[finish_match] Fallback: draw (scores are equal: {}:{})", final_blue_score, final_red_score);
                         serde_json::Value::Null
                     }
                 }
             } else {
-                // СТАРЫЙ формат: participant1_id, participant2_id - прямые поля
-                let p1_id = match_data["participant1_id"].as_i64();
-                let p2_id = match_data["participant2_id"].as_i64();
-
-                println!("[finish_match] OLD format - Looking for winner_id={}, participant1_id={:?}, participant2_id={:?}",
-                         winner, p1_id, p2_id);
-
-                // В старом формате создаём объект победителя вручную
-                if p1_id == Some(winner as i64) {
-                    println!("[finish_match] Winner matched: participant1 (blue) id={}", winner);
-                    serde_json::json!({
-                        "id": winner,
-                        "fighter_id": winner,
-                        "full_name": match_data["fighter1_name"].clone(),
-                        "club_name": match_data["fighter1_club"].clone()
-                    })
-                } else if p2_id == Some(winner as i64) {
-                    println!("[finish_match] Winner matched: participant2 (red) id={}", winner);
-                    serde_json::json!({
-                        "id": winner,
-                        "fighter_id": winner,
-                        "full_name": match_data["fighter2_name"].clone(),
-                        "club_name": match_data["fighter2_club"].clone()
-                    })
+                println!("[finish_match] No winner_id, determining by score: blue={}, red={}", final_blue_score, final_red_score);
+                if final_blue_score > final_red_score {
+                    make_participant(p1_id, p1_name, p1_club)
+                } else if final_red_score > final_blue_score {
+                    make_participant(p2_id, p2_name, p2_club)
                 } else {
-                    println!("[finish_match] Winner ID {} not found - fallback to score", winner);
-                    if final_blue_score > final_red_score {
-                        println!("[finish_match] Fallback winner: participant1 (blue)");
-                        serde_json::json!({
-                            "id": p1_id,
-                            "fighter_id": p1_id,
-                            "full_name": match_data["fighter1_name"].clone(),
-                            "club_name": match_data["fighter1_club"].clone()
-                        })
-                    } else if final_red_score > final_blue_score {
-                        println!("[finish_match] Fallback winner: participant2 (red)");
-                        serde_json::json!({
-                            "id": p2_id,
-                            "fighter_id": p2_id,
-                            "full_name": match_data["fighter2_name"].clone(),
-                            "club_name": match_data["fighter2_club"].clone()
-                        })
-                    } else {
-                        println!("[finish_match] Fallback: draw");
-                        serde_json::Value::Null
-                    }
+                    serde_json::Value::Null
                 }
             }
         } else {
-            // Если winner_id не указан, определяем по счету
-            let score1 = match_data["score_participant1"].as_i64().unwrap_or(0);
-            let score2 = match_data["score_participant2"].as_i64().unwrap_or(0);
-
-            println!("[finish_match] No winner_id provided, determining by score: p1={}, p2={}", score1, score2);
-
-            if has_participant_objects {
-                // Новый формат
-                if score1 > score2 {
-                    match_data["participant1"].clone()
-                } else if score2 > score1 {
-                    match_data["participant2"].clone()
-                } else {
-                    serde_json::Value::Null
-                }
-            } else {
-                // Старый формат - создаём объект
-                if score1 > score2 {
-                    serde_json::json!({
-                        "id": match_data["participant1_id"].clone(),
-                        "fighter_id": match_data["participant1_id"].clone(),
-                        "full_name": match_data["fighter1_name"].clone(),
-                        "club_name": match_data["fighter1_club"].clone()
-                    })
-                } else if score2 > score1 {
-                    serde_json::json!({
-                        "id": match_data["participant2_id"].clone(),
-                        "fighter_id": match_data["participant2_id"].clone(),
-                        "full_name": match_data["fighter2_name"].clone(),
-                        "club_name": match_data["fighter2_club"].clone()
-                    })
-                } else {
-                    serde_json::Value::Null
-                }
-            }
+            serde_json::Value::Null
         };
 
         if !winner_participant_json.is_null() {
-            let winner_json = winner_participant_json.to_string();
-            println!("[finish_match] Winner participant data: {}", winner_json);
+            println!("[finish_match] Winner participant data: {}", winner_participant_json);
 
             // Вычислить параметры следующего матча
                 let next_round = current_round + 1;
@@ -2449,9 +2433,7 @@ impl ApiClient {
                 // Проверить существует ли следующий матч
                 let next_match_exists: Option<i32> = sqlx::query_scalar(
                     "SELECT match_id FROM matches_cache
-                     WHERE CAST(json_extract(data, '$.bracket_id') AS INTEGER) = ?
-                       AND CAST(json_extract(data, '$.round_number') AS INTEGER) = ?
-                       AND CAST(json_extract(data, '$.match_number') AS INTEGER) = ?"
+                     WHERE bracket_id = ? AND round_number = ? AND match_number = ?"
                 )
                 .bind(bracket_id)
                 .bind(next_round)
@@ -2462,58 +2444,32 @@ impl ApiClient {
                 if let Some(next_match_id) = next_match_exists {
                     println!("[finish_match] Found next match_id: {}, checking free slots...", next_match_id);
 
-                    // Получаем данные следующего матча
-                    let next_match_data_row = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
-                        .bind(next_match_id)
-                        .fetch_one(&mut *tx)
-                        .await?;
-                    let next_match_data_str: String = sqlx::Row::get(&next_match_data_row, "data");
-                    let next_match_data: serde_json::Value = serde_json::from_str(&next_match_data_str)?;
+                    // Читаем текущие слоты следующего матча (плоские колонки)
+                    let next_slots: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
+                        "SELECT p1_id, p2_id FROM matches_cache WHERE match_id = ?"
+                    )
+                    .bind(next_match_id)
+                    .fetch_optional(&mut *tx)
+                    .await?;
 
-                    // Проверяем свободные слоты
-                    let p1 = next_match_data.get("participant1");
-                    let p2 = next_match_data.get("participant2");
+                    let (next_p1_id, next_p2_id) = next_slots.unwrap_or((None, None));
 
-                    let p1_empty = p1.is_none() || p1 == Some(&serde_json::Value::Null);
-                    let p2_empty = p2.is_none() || p2 == Some(&serde_json::Value::Null);
+                    let winner_id_val = winner_participant_json.get("id").and_then(|v| v.as_i64()).map(|v| v as i32);
 
-                    // Проверяем, нет ли уже этого участника в следующем матче
-                    let winner_id = winner_participant_json.get("id").and_then(|v| v.as_i64());
-                    let winner_fighter_id = winner_participant_json.get("fighter_id").and_then(|v| v.as_i64());
-
-                    let already_in_p1 = if let Some(p1_obj) = p1 {
-                        if p1_obj.is_object() {
-                            let p1_id = p1_obj.get("id").and_then(|v| v.as_i64());
-                            let p1_fighter_id = p1_obj.get("fighter_id").and_then(|v| v.as_i64());
-                            (winner_id.is_some() && p1_id == winner_id) || (winner_fighter_id.is_some() && p1_fighter_id == winner_fighter_id)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    let already_in_p2 = if let Some(p2_obj) = p2 {
-                        if p2_obj.is_object() {
-                            let p2_id = p2_obj.get("id").and_then(|v| v.as_i64());
-                            let p2_fighter_id = p2_obj.get("fighter_id").and_then(|v| v.as_i64());
-                            (winner_id.is_some() && p2_id == winner_id) || (winner_fighter_id.is_some() && p2_fighter_id == winner_fighter_id)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    let already_in_p1 = winner_id_val.is_some() && next_p1_id == winner_id_val;
+                    let already_in_p2 = winner_id_val.is_some() && next_p2_id == winner_id_val;
 
                     if already_in_p1 || already_in_p2 {
                         println!("[finish_match] ⚠️ Winner already in next match {}, skipping advancement", next_match_id);
                     } else {
+                    let p1_empty = next_p1_id.is_none();
+                    let p2_empty = next_p2_id.is_none();
 
-                    // Выбираем первый свободный слот
-                    let target_slot = if p1_empty {
-                        Some("$.participant1")
+                    // Выбираем первый свободный слот (1 = participant1, 2 = participant2)
+                    let target_slot: Option<u8> = if p1_empty {
+                        Some(1)
                     } else if p2_empty {
-                        Some("$.participant2")
+                        Some(2)
                     } else {
                         None
                     };
@@ -2522,86 +2478,49 @@ impl ApiClient {
                         println!("[finish_match] ⚠️ Both slots occupied in match {}, cannot advance winner", next_match_id);
                     }
 
-                    if let Some(target_slot) = target_slot {
-                        println!("[finish_match] Free slot found: {}, updating with winner data", target_slot);
+                    if let Some(slot) = target_slot {
+                        let w_id = winner_participant_json.get("id").and_then(|v| v.as_i64()).map(|v| v as i32);
+                        let w_name = winner_participant_json.get("full_name").and_then(|v| v.as_str()).map(String::from);
+                        let w_club = winner_participant_json.get("club_name").and_then(|v| v.as_str()).map(String::from);
 
-                    let next_has_participant_objects = next_match_data.get("participant1").is_some()
-                        && next_match_data["participant1"].is_object();
+                        println!("[finish_match] Free slot {} found in match {}, advancing winner: id={:?}, name={:?}",
+                                 slot, next_match_id, w_id, w_name);
 
-                    if next_has_participant_objects {
-                        println!("[finish_match] Next match uses NEW format - updating participant object");
-                        // НОВЫЙ формат - обновляем participant object целиком
-                        sqlx::query(&format!(
-                            "UPDATE matches_cache
-                             SET data = json_set(data, '{}', json(?)),
-                                 updated_at = datetime('now')
-                             WHERE match_id = ?",
-                            target_slot
-                        ))
-                        .bind(winner_json.clone())
-                        .bind(next_match_id)
-                        .execute(&mut *tx)
-                        .await?;
-                    } else {
-                        println!("[finish_match] Next match uses OLD format - updating individual fields");
-                        // СТАРЫЙ формат - обновляем отдельные поля
-                        let winner_data: serde_json::Value = serde_json::from_str(&winner_json)?;
-                        let winner_id = winner_data["fighter_id"].as_i64();
-                        let winner_name = winner_data["full_name"].as_str().unwrap_or("");
-                        let winner_club = winner_data["club_name"].as_str().unwrap_or("");
-
-                        println!("[finish_match] Updating OLD format fields: id={:?}, name={}, club={}", winner_id, winner_name, winner_club);
-
-                        if target_slot == "$.participant1" {
-                            // Обновляем participant1 поля
+                        if slot == 1 {
                             sqlx::query(
                                 "UPDATE matches_cache
-                                 SET data = json_set(
-                                     json_set(
-                                         json_set(data, '$.participant1_id', ?),
-                                         '$.fighter1_name', ?
-                                     ),
-                                     '$.fighter1_club', ?
-                                 ),
-                                 updated_at = datetime('now')
+                                 SET p1_id = ?, p1_name = ?, p1_club = ?,
+                                     updated_at = datetime('now')
                                  WHERE match_id = ?"
                             )
-                            .bind(winner_id)
-                            .bind(winner_name)
-                            .bind(winner_club)
+                            .bind(w_id)
+                            .bind(&w_name)
+                            .bind(&w_club)
                             .bind(next_match_id)
                             .execute(&mut *tx)
                             .await?;
                         } else {
-                            // Обновляем participant2 поля
                             sqlx::query(
                                 "UPDATE matches_cache
-                                 SET data = json_set(
-                                     json_set(
-                                         json_set(data, '$.participant2_id', ?),
-                                         '$.fighter2_name', ?
-                                     ),
-                                     '$.fighter2_club', ?
-                                 ),
-                                 updated_at = datetime('now')
+                                 SET p2_id = ?, p2_name = ?, p2_club = ?,
+                                     updated_at = datetime('now')
                                  WHERE match_id = ?"
                             )
-                            .bind(winner_id)
-                            .bind(winner_name)
-                            .bind(winner_club)
+                            .bind(w_id)
+                            .bind(&w_name)
+                            .bind(&w_club)
                             .bind(next_match_id)
                             .execute(&mut *tx)
                             .await?;
                         }
-                    }
 
                     // Добавить в sync_queue для синхронизации с сервером
                     let next_match_sync_data = serde_json::json!({
                         "match_id": next_match_id,
                         "action": "update_participant",
-                        "participant_slot": if current_match_number % 2 == 0 { 1 } else { 2 },
+                        "participant_slot": slot,
                         "participant_id": final_winner_id,
-                        "participant_data": serde_json::from_str::<serde_json::Value>(&winner_json).ok()
+                        "participant_data": winner_participant_json.clone()
                     });
 
                     sqlx::query(
@@ -2616,15 +2535,10 @@ impl ApiClient {
                 println!("[finish_match] Successfully advanced winner to next match_id: {}", next_match_id);
 
                 // Сохранить данные для отправки на локальный сервер после коммита транзакции
-                let participant_slot = if target_slot == "$.participant1" { 1 } else { 2 };
-                let participant_id = winner_participant_json["id"].as_i64().map(|id| id as i32);
-                let participant_name = winner_participant_json["full_name"].as_str().map(String::from);
-                let club = winner_participant_json["club_name"].as_str().map(String::from);
-
-                advancement_data = Some((next_match_id, participant_slot, participant_id, participant_name, club));
+                advancement_data = Some((next_match_id, slot, w_id, w_name, w_club));
                 println!("[finish_match] Saved advancement data for local server sync: match_id={}, slot={}, participant_id={:?}",
-                         next_match_id, participant_slot, participant_id);
-                    } // Закрываем if let Some(target_slot)
+                         next_match_id, slot, w_id);
+                    } // Закрываем if let Some(slot)
                     } // Закрываем else (для if already_in_p1 || already_in_p2)
                 } else {
                     println!("[finish_match] WARNING: No next match found for bracket_id: {}, round: {}, match_number: {} - this might be the final match or data issue",

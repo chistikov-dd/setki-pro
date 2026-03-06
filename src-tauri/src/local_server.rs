@@ -599,9 +599,15 @@ async fn get_bracket_matches_handler(
         println!("[LOCAL SERVER] Bracket ID: {}", bracket_id);
     }
 
-    // Получить матчи для этой сетки
-    let match_records = sqlx::query_as::<_, (String,)>(
-        "SELECT data FROM matches_cache WHERE bracket_id = ?"
+    // Получить матчи для этой сетки (плоская схема)
+    let match_records = sqlx::query(
+        "SELECT match_id, bracket_id, tournament_id, round_number, match_number,
+                p1_id, p1_name, p1_club,
+                p2_id, p2_name, p2_club,
+                score_p1, score_p2, warnings_p1, warnings_p2,
+                winner_id, result_type, status, version
+         FROM matches_cache WHERE bracket_id = ?
+         ORDER BY round_number, match_number"
     )
     .bind(bracket_id)
     .fetch_all(&*state.db)
@@ -609,23 +615,61 @@ async fn get_bracket_matches_handler(
 
     println!("[LOCAL SERVER] Found {} matches for bracket {}", match_records.len(), bracket_id);
 
-    // Парсить матчи в JSON
     let matches: Vec<serde_json::Value> = match_records
-        .into_iter()
-        .filter_map(|(data,)| {
-            if let Ok(match_json) = serde_json::from_str::<serde_json::Value>(&data) {
-                // Логируем матчи для отладки
-                if let Some(match_id) = match_json.get("id") {
-                    println!("[LOCAL SERVER] Match {}: score_p1={:?}, score_p2={:?} (p1=blue, p2=red)",
-                        match_id,
-                        match_json.get("score_participant1"),
-                        match_json.get("score_participant2")
-                    );
-                }
-                Some(match_json)
-            } else {
-                None
-            }
+        .iter()
+        .map(|row| {
+            use sqlx::Row;
+            let match_id:    i32            = row.get("match_id");
+            let b_id:        i32            = row.get("bracket_id");
+            let t_id:        Option<i32>    = row.get("tournament_id");
+            let round:       i32            = row.get("round_number");
+            let match_num:   i32            = row.get("match_number");
+            let p1_id:       Option<i32>    = row.get("p1_id");
+            let p1_name:     Option<String> = row.get("p1_name");
+            let p1_club:     Option<String> = row.get("p1_club");
+            let p2_id:       Option<i32>    = row.get("p2_id");
+            let p2_name:     Option<String> = row.get("p2_name");
+            let p2_club:     Option<String> = row.get("p2_club");
+            let score_p1:    i32            = row.get("score_p1");
+            let score_p2:    i32            = row.get("score_p2");
+            let warnings_p1: i32            = row.get("warnings_p1");
+            let warnings_p2: i32            = row.get("warnings_p2");
+            let winner_id:   Option<i32>    = row.get("winner_id");
+            let result_type: Option<String> = row.get("result_type");
+            let status:      String         = row.get("status");
+            let version:     i32            = row.get("version");
+
+            println!("[LOCAL SERVER] Match {}: score_p1={}, score_p2={} (p1=blue, p2=red)",
+                match_id, score_p1, score_p2);
+            let participant1 = if p1_id.is_some() || p1_name.is_some() {
+                serde_json::json!({ "id": p1_id, "fighter_id": p1_id, "full_name": p1_name, "club_name": p1_club })
+            } else { serde_json::Value::Null };
+            let participant2 = if p2_id.is_some() || p2_name.is_some() {
+                serde_json::json!({ "id": p2_id, "fighter_id": p2_id, "full_name": p2_name, "club_name": p2_club })
+            } else { serde_json::Value::Null };
+            serde_json::json!({
+                "id": match_id,
+                "bracket_id": b_id,
+                "tournament_id": t_id,
+                "round_number": round,
+                "match_number": match_num,
+                "participant1": participant1,
+                "participant2": participant2,
+                "participant1_id": p1_id,
+                "fighter1_name": p1_name,
+                "fighter1_club": p1_club,
+                "participant2_id": p2_id,
+                "fighter2_name": p2_name,
+                "fighter2_club": p2_club,
+                "score_participant1": score_p1,
+                "score_participant2": score_p2,
+                "warnings_participant1": warnings_p1,
+                "warnings_participant2": warnings_p2,
+                "winner_id": winner_id,
+                "result_type": result_type,
+                "status": status,
+                "version": version,
+            })
         })
         .collect();
 
@@ -642,10 +686,15 @@ async fn get_tournament_brackets_handler(
     state.logger.info("========== get_tournament_brackets_handler START ==========");
     state.logger.info(&format!("Tournament ID: {}", tournament_id));
 
-    // 1. Получить сетки
+    // 1. Получить сетки (плоская схема)
     state.logger.info("Querying brackets_cache table...");
-    let bracket_records = sqlx::query_as::<_, (i32, String)>(
-        "SELECT bracket_id, data FROM brackets_cache WHERE tournament_id = ?"
+    let bracket_records = sqlx::query_as::<_, (i32, i32, Option<i32>, Option<String>,
+        Option<f64>, Option<f64>, Option<String>, Option<String>,
+        Option<String>, Option<i32>, String, i32)>(
+        "SELECT bracket_id, tournament_id, category_id, category_name,
+                weight_min, weight_max, gender, sport_name,
+                bracket_type, total_rounds, status, is_published
+         FROM brackets_cache WHERE tournament_id = ?"
     )
     .bind(tournament_id)
     .fetch_all(&*state.db)
@@ -653,60 +702,117 @@ async fn get_tournament_brackets_handler(
 
     state.logger.info(&format!("Found {} bracket records in cache", bracket_records.len()));
 
-    // 2. Получить ВСЕ матчи для всех сеток одним запросом (оптимизация производительности)
-    let bracket_ids: Vec<i32> = bracket_records.iter().map(|(id, _)| *id).collect();
+    let bracket_ids: Vec<i32> = bracket_records.iter().map(|(id, ..)| *id).collect();
 
-    state.logger.info(&format!("Fetching all matches for {} brackets in single query...", bracket_ids.len()));
+    // 2. Получить ВСЕ матчи одним запросом
+    state.logger.info(&format!("Fetching all matches for {} brackets...", bracket_ids.len()));
 
-    // Создаём плейсхолдеры для IN clause: (?, ?, ?, ...)
     let placeholders = bracket_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let query_str = format!("SELECT bracket_id, data FROM matches_cache WHERE bracket_id IN ({})", placeholders);
+    let query_str = format!(
+        "SELECT match_id, bracket_id, tournament_id, round_number, match_number,
+                p1_id, p1_name, p1_club, p2_id, p2_name, p2_club,
+                score_p1, score_p2, warnings_p1, warnings_p2,
+                winner_id, result_type, status, version
+         FROM matches_cache WHERE bracket_id IN ({})
+         ORDER BY bracket_id, round_number, match_number", placeholders
+    );
 
-    // Строим запрос динамически
-    let mut query = sqlx::query_as::<_, (i32, String)>(&query_str);
-    for bracket_id in &bracket_ids {
-        query = query.bind(bracket_id);
-    }
+    let mut q = sqlx::query(&query_str);
+    for bid in &bracket_ids { q = q.bind(bid); }
 
-    let all_matches = query.fetch_all(&*state.db).await.unwrap_or_default();
+    let all_matches = q.fetch_all(&*state.db).await.unwrap_or_default();
     state.logger.info(&format!("Fetched {} total matches", all_matches.len()));
 
-    // 3. Группируем матчи по bracket_id в HashMap для быстрого поиска
+    // 3. Группируем матчи по bracket_id в HashMap
     use std::collections::HashMap;
+    use sqlx::Row as _;
     let mut matches_by_bracket: HashMap<i32, Vec<serde_json::Value>> = HashMap::new();
 
-    for (bracket_id, match_data) in all_matches {
-        if let Ok(match_json) = serde_json::from_str::<serde_json::Value>(&match_data) {
-            matches_by_bracket.entry(bracket_id).or_insert_with(Vec::new).push(match_json);
-        }
+    for row in &all_matches {
+        let match_id:    i32            = row.get("match_id");
+        let b_id:        i32            = row.get("bracket_id");
+        let t_id:        Option<i32>    = row.get("tournament_id");
+        let round:       i32            = row.get("round_number");
+        let match_num:   i32            = row.get("match_number");
+        let p1_id:       Option<i32>    = row.get("p1_id");
+        let p1_name:     Option<String> = row.get("p1_name");
+        let p1_club:     Option<String> = row.get("p1_club");
+        let p2_id:       Option<i32>    = row.get("p2_id");
+        let p2_name:     Option<String> = row.get("p2_name");
+        let p2_club:     Option<String> = row.get("p2_club");
+        let score_p1:    i32            = row.get("score_p1");
+        let score_p2:    i32            = row.get("score_p2");
+        let warnings_p1: i32            = row.get("warnings_p1");
+        let warnings_p2: i32            = row.get("warnings_p2");
+        let winner_id:   Option<i32>    = row.get("winner_id");
+        let result_type: Option<String> = row.get("result_type");
+        let status:      String         = row.get("status");
+        let version:     i32            = row.get("version");
+
+        let participant1 = if p1_id.is_some() || p1_name.is_some() {
+            serde_json::json!({ "id": p1_id, "fighter_id": p1_id, "full_name": p1_name, "club_name": p1_club })
+        } else { serde_json::Value::Null };
+        let participant2 = if p2_id.is_some() || p2_name.is_some() {
+            serde_json::json!({ "id": p2_id, "fighter_id": p2_id, "full_name": p2_name, "club_name": p2_club })
+        } else { serde_json::Value::Null };
+        let match_json = serde_json::json!({
+            "id": match_id,
+            "bracket_id": b_id,
+            "tournament_id": t_id,
+            "round_number": round,
+            "match_number": match_num,
+            "participant1": participant1,
+            "participant2": participant2,
+            "participant1_id": p1_id,
+            "fighter1_name": p1_name,
+            "fighter1_club": p1_club,
+            "participant2_id": p2_id,
+            "fighter2_name": p2_name,
+            "fighter2_club": p2_club,
+            "score_participant1": score_p1,
+            "score_participant2": score_p2,
+            "warnings_participant1": warnings_p1,
+            "warnings_participant2": warnings_p2,
+            "winner_id": winner_id,
+            "result_type": result_type,
+            "status": status,
+            "version": version,
+        });
+        matches_by_bracket.entry(b_id).or_insert_with(Vec::new).push(match_json);
     }
 
     state.logger.info(&format!("Grouped matches into {} brackets", matches_by_bracket.len()));
 
-    // 4. Для каждой сетки добавить соответствующие матчи
+    // 4. Собираем финальный ответ
     let mut brackets_with_matches: Vec<serde_json::Value> = Vec::new();
 
-    for (bracket_id, bracket_data) in bracket_records {
-        match serde_json::from_str::<serde_json::Value>(&bracket_data) {
-            Ok(mut bracket_json) => {
-                state.logger.info(&format!("Processing bracket_id: {}", bracket_id));
+    for (bracket_id, tournament_id_val, category_id, category_name,
+         weight_min, weight_max, gender, sport_name,
+         bracket_type, total_rounds, status, is_published) in bracket_records
+    {
+        state.logger.info(&format!("Processing bracket_id: {}", bracket_id));
 
-                // Получить матчи из HashMap
-                let matches = matches_by_bracket.get(&bracket_id).cloned().unwrap_or_default();
-                state.logger.info(&format!("Found {} matches for bracket {}", matches.len(), bracket_id));
+        let matches = matches_by_bracket.get(&bracket_id).cloned().unwrap_or_default();
+        state.logger.info(&format!("Found {} matches for bracket {}", matches.len(), bracket_id));
 
-                // Добавить матчи в сетку
-                if let Some(obj) = bracket_json.as_object_mut() {
-                    obj.insert("matches".to_string(), serde_json::json!(matches));
-                    state.logger.info(&format!("Added {} matches to bracket {}", matches.len(), bracket_id));
-                }
+        let bracket_json = serde_json::json!({
+            "id": bracket_id,
+            "bracket_id": bracket_id,
+            "tournament_id": tournament_id_val,
+            "category_id": category_id,
+            "category_name": category_name,
+            "weight_min": weight_min,
+            "weight_max": weight_max,
+            "gender": gender,
+            "sport_name": sport_name,
+            "bracket_type": bracket_type,
+            "total_rounds": total_rounds,
+            "status": status,
+            "is_published": is_published != 0,
+            "matches": matches,
+        });
 
-                brackets_with_matches.push(bracket_json);
-            }
-            Err(e) => {
-                state.logger.error(&format!("Failed to parse bracket JSON: {}", e));
-            }
-        }
+        brackets_with_matches.push(bracket_json);
     }
 
     state.logger.info(&format!("Returning {} brackets with matches to client", brackets_with_matches.len()));
@@ -719,14 +825,54 @@ async fn sync_matches_handler(
     State(state): State<LocalServerState>,
     Json(payload): Json<SyncMatchRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Update match in matches_cache
+    let d = &payload.data;
+    let bracket_id   = d.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let tournament_id = d.get("tournament_id").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let round_number = d.get("round_number").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let match_number = d.get("match_number").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let p1_id   = d.get("participant1").and_then(|p| p.get("id").or_else(|| p.get("fighter_id"))).and_then(|v| v.as_i64()).map(|v| v as i32);
+    let p1_name = d.get("participant1").and_then(|p| p.get("full_name")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let p1_club = d.get("participant1").and_then(|p| p.get("club_name")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let p2_id   = d.get("participant2").and_then(|p| p.get("id").or_else(|| p.get("fighter_id"))).and_then(|v| v.as_i64()).map(|v| v as i32);
+    let p2_name = d.get("participant2").and_then(|p| p.get("full_name")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let p2_club = d.get("participant2").and_then(|p| p.get("club_name")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let score_p1    = d.get("score_participant1").or_else(|| d.get("score_p1")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let score_p2    = d.get("score_participant2").or_else(|| d.get("score_p2")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let warnings_p1 = d.get("warnings_participant1").or_else(|| d.get("warnings_p1")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let warnings_p2 = d.get("warnings_participant2").or_else(|| d.get("warnings_p2")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let winner_id   = d.get("winner_id").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let result_type = d.get("result_type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let status      = d.get("status").and_then(|v| v.as_str()).unwrap_or("scheduled").to_string();
+
+    // Обновить матч в matches_cache (плоская схема)
     sqlx::query(
-        "INSERT OR REPLACE INTO matches_cache (match_id, bracket_id, data, updated_at)
-         VALUES (?, ?, ?, datetime('now'))"
+        "INSERT OR REPLACE INTO matches_cache
+         (match_id, bracket_id, tournament_id, round_number, match_number,
+          p1_id, p1_name, p1_club, p2_id, p2_name, p2_club,
+          score_p1, score_p2, warnings_p1, warnings_p2,
+          winner_id, result_type, status, updated_at, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
+                 COALESCE((SELECT version FROM matches_cache WHERE match_id = ?), 0) + 1)"
     )
     .bind(payload.match_id)
-    .bind(payload.data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0))
-    .bind(payload.data.to_string())
+    .bind(bracket_id)
+    .bind(tournament_id)
+    .bind(round_number)
+    .bind(match_number)
+    .bind(p1_id)
+    .bind(&p1_name)
+    .bind(&p1_club)
+    .bind(p2_id)
+    .bind(&p2_name)
+    .bind(&p2_club)
+    .bind(score_p1)
+    .bind(score_p2)
+    .bind(warnings_p1)
+    .bind(warnings_p2)
+    .bind(winner_id)
+    .bind(&result_type)
+    .bind(&status)
+    .bind(payload.match_id)
     .execute(&*state.db)
     .await?;
 
@@ -756,59 +902,39 @@ async fn update_match_score_handler(
     State(state): State<LocalServerState>,
     Json(payload): Json<UpdateMatchScoreRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // 1. Получить текущие данные матча и версию из БД (optimistic locking)
-    let current_data: Option<(String, i64)> = sqlx::query_as(
-        "SELECT data, version FROM matches_cache WHERE match_id = ?"
+    // 1. Получить текущую версию матча (optimistic locking)
+    let current_version: Option<i64> = sqlx::query_scalar(
+        "SELECT version FROM matches_cache WHERE match_id = ?"
     )
     .bind(payload.match_id)
     .fetch_optional(&*state.db)
     .await?;
 
-    let (mut match_data, version) = if let Some((data_str, ver)) = current_data {
-        (serde_json::from_str(&data_str).unwrap_or(serde_json::json!({})), ver)
+    let version = if let Some(ver) = current_version {
+        ver
     } else {
-        // Матч не найден - это ошибка, так как админ должен был скачать турнир
         println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
         return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
     };
 
-    // 2. Обновить поля
-    // КРИТИЧНО: Фронтенд ожидает score_participant1/score_participant2 (participant1=blue, participant2=red)
-    match_data["score_participant1"] = serde_json::json!(payload.blue_score);  // participant1 = blue
-    match_data["score_participant2"] = serde_json::json!(payload.red_score);   // participant2 = red
-    match_data["warnings_participant1"] = serde_json::json!(payload.blue_warnings);
-    match_data["warnings_participant2"] = serde_json::json!(payload.red_warnings);
-
-    // Сохраняем также red_/blue_ для обратной совместимости
-    match_data["red_score"] = serde_json::json!(payload.red_score);
-    match_data["blue_score"] = serde_json::json!(payload.blue_score);
-    match_data["red_warnings"] = serde_json::json!(payload.red_warnings);
-    match_data["blue_warnings"] = serde_json::json!(payload.blue_warnings);
-    match_data["status"] = serde_json::json!(payload.status);
-
-    if let Some(duration) = payload.duration {
-        match_data["duration"] = serde_json::json!(duration);
-    }
-
-    if let Some(winner_id) = payload.winner_id {
-        match_data["winner_id"] = serde_json::json!(winner_id);
-    }
-
-    if let Some(ref result_type) = payload.result_type {
-        match_data["result_type"] = serde_json::json!(result_type);
-    }
-
     println!("[LOCAL SERVER] Updated match data: red={}, blue={}, red_warnings={}, blue_warnings={}",
         payload.red_score, payload.blue_score, payload.red_warnings, payload.blue_warnings);
 
-    // 3. Сохранить в БД с optimistic locking (обновить только если version совпадает)
-    let _bracket_id = match_data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0);
+    // 2. Сохранить в БД с optimistic locking (плоская схема)
     let rows_affected = sqlx::query(
         "UPDATE matches_cache
-         SET data = ?, version = version + 1, updated_at = datetime('now')
+         SET score_p1 = ?, score_p2 = ?, warnings_p1 = ?, warnings_p2 = ?,
+             status = ?, winner_id = ?, result_type = ?,
+             version = version + 1, updated_at = datetime('now')
          WHERE match_id = ? AND version = ?"
     )
-    .bind(match_data.to_string())
+    .bind(payload.blue_score)
+    .bind(payload.red_score)
+    .bind(payload.blue_warnings)
+    .bind(payload.red_warnings)
+    .bind(&payload.status)
+    .bind(payload.winner_id)
+    .bind(&payload.result_type)
     .bind(payload.match_id)
     .bind(version)
     .execute(&*state.db)
@@ -883,70 +1009,47 @@ async fn undo_match_handler(
     println!("[LOCAL SERVER] ========== undo_match_handler START ==========");
     println!("[LOCAL SERVER] match_id: {}", payload.match_id);
 
-    // 1. Получить текущие данные матча
-    let current_data: Option<String> = sqlx::query_scalar(
-        "SELECT data FROM matches_cache WHERE match_id = ?"
+    // 1. Получить данные матча (плоская схема)
+    let current_row: Option<(String, Option<i32>, i32, i32, i32)> = sqlx::query_as(
+        "SELECT status, winner_id, bracket_id, round_number, match_number FROM matches_cache WHERE match_id = ?"
     )
     .bind(payload.match_id)
     .fetch_optional(&*state.db)
     .await?;
 
-    let mut match_data = if let Some(data_str) = current_data {
-        serde_json::from_str(&data_str).unwrap_or(serde_json::json!({}))
+    let (status, winner_id, bracket_id, current_round, current_match_number) = if let Some(row) = current_row {
+        row
     } else {
         println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
         return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
     };
 
     // 2. Проверить что матч завершён
-    let status = match_data.get("status").and_then(|s| s.as_str()).unwrap_or("");
     if status != "completed" {
         println!("[LOCAL SERVER] ERROR: Match {} is not completed (status: {})", payload.match_id, status);
-        return Err(AppError::BadRequest(format!("Can only undo completed matches")));
+        return Err(AppError::BadRequest("Can only undo completed matches".to_string()));
     }
-
-    // 3. Сохранить данные для отката продвижения
-    let winner_id = match_data.get("winner_id").and_then(|w| w.as_i64()).map(|w| w as i32);
-    let bracket_id = match_data.get("bracket_id").and_then(|b| b.as_i64()).unwrap_or(0) as i32;
-    let current_round = match_data.get("round_number").and_then(|r| r.as_i64()).unwrap_or(1) as i32;
-    let current_match_number = match_data.get("match_number").and_then(|n| n.as_i64()).unwrap_or(1) as i32;
 
     println!("[LOCAL SERVER] Match info - winner_id: {:?}, bracket: {}, round: {}, number: {}",
         winner_id, bracket_id, current_round, current_match_number);
 
-    // 4. Откатить данные матча
-    match_data["status"] = serde_json::json!("scheduled");
-    match_data["score_participant1"] = serde_json::json!(0);
-    match_data["score_participant2"] = serde_json::json!(0);
-    match_data["warnings_participant1"] = serde_json::json!(0);
-    match_data["warnings_participant2"] = serde_json::json!(0);
-    match_data["winner_id"] = serde_json::json!(null);
-    match_data["result_type"] = serde_json::json!(null);
-    match_data["started_at"] = serde_json::json!(null);
-    match_data["finished_at"] = serde_json::json!(null);
-    match_data["duration_seconds"] = serde_json::json!(null);
-    match_data["red_score"] = serde_json::json!(0);
-    match_data["blue_score"] = serde_json::json!(0);
-    match_data["red_warnings"] = serde_json::json!(0);
-    match_data["blue_warnings"] = serde_json::json!(0);
-
-    println!("[LOCAL SERVER] Match data reset to initial state");
-
-    // 5. Сохранить в БД
+    // 3. Откатить данные матча (плоские колонки)
     sqlx::query(
         "UPDATE matches_cache
-         SET data = ?, version = version + 1, updated_at = datetime('now')
+         SET status = 'scheduled', score_p1 = 0, score_p2 = 0,
+             warnings_p1 = 0, warnings_p2 = 0,
+             winner_id = NULL, result_type = NULL,
+             version = version + 1, updated_at = datetime('now')
          WHERE match_id = ?"
     )
-    .bind(match_data.to_string())
     .bind(payload.match_id)
     .execute(&*state.db)
     .await?;
 
     println!("[LOCAL SERVER] ✅ Match {} successfully reverted in DB", payload.match_id);
 
-    // 6. Откатить продвижение победителя в следующий раунд
-    if winner_id.is_some() {
+    // 4. Откатить продвижение победителя в следующий раунд
+    if let Some(winner_id_value) = winner_id {
         let next_round = current_round + 1;
         let next_match_number = (current_match_number + 1) / 2;
 
@@ -954,10 +1057,9 @@ async fn undo_match_handler(
             next_round, next_match_number);
 
         // Найти следующий матч
-        let next_match: Option<(i32, String)> = sqlx::query_as(
-            "SELECT match_id, data FROM matches_cache
-             WHERE bracket_id = ? AND CAST(json_extract(data, '$.round_number') AS INTEGER) = ?
-             AND CAST(json_extract(data, '$.match_number') AS INTEGER) = ?"
+        let next_match_id: Option<i32> = sqlx::query_scalar(
+            "SELECT match_id FROM matches_cache
+             WHERE bracket_id = ? AND round_number = ? AND match_number = ?"
         )
         .bind(bracket_id)
         .bind(next_round)
@@ -965,97 +1067,40 @@ async fn undo_match_handler(
         .fetch_optional(&*state.db)
         .await?;
 
-        if let Some((next_match_id, next_match_data_str)) = next_match {
+        if let Some(next_match_id) = next_match_id {
             println!("[LOCAL SERVER] Found next match: {}", next_match_id);
 
-            let mut next_match_data: serde_json::Value = serde_json::from_str(&next_match_data_str)
-                .unwrap_or(serde_json::json!({}));
-
-            // Определить, в каком слоте находится победитель (проверяем по ID)
-            let winner_id_value = winner_id.unwrap();
-            let mut target_slot: Option<&str> = None;
-
-            // Проверяем participant1
-            if let Some(p1) = next_match_data.get("participant1") {
-                if let Some(p1_obj) = p1.as_object() {
-                    // NEW format - объект с id
-                    if let Some(id) = p1_obj.get("id").and_then(|v| v.as_i64()) {
-                        if id == winner_id_value as i64 {
-                            target_slot = Some("participant1");
-                        }
-                    }
-                }
-            }
-
-            // Проверяем participant2 если не нашли в participant1
-            if target_slot.is_none() {
-                if let Some(p2) = next_match_data.get("participant2") {
-                    if let Some(p2_obj) = p2.as_object() {
-                        // NEW format - объект с id
-                        if let Some(id) = p2_obj.get("id").and_then(|v| v.as_i64()) {
-                            if id == winner_id_value as i64 {
-                                target_slot = Some("participant2");
-                            }
-                        }
-                    }
-                }
-            }
-
-            // OLD format fallback - проверяем participant1_id и participant2_id
-            if target_slot.is_none() {
-                if let Some(p1_id) = next_match_data.get("participant1_id").and_then(|v| v.as_i64()) {
-                    if p1_id == winner_id_value as i64 {
-                        target_slot = Some("participant1");
-                    }
-                }
-            }
-
-            if target_slot.is_none() {
-                if let Some(p2_id) = next_match_data.get("participant2_id").and_then(|v| v.as_i64()) {
-                    if p2_id == winner_id_value as i64 {
-                        target_slot = Some("participant2");
-                    }
-                }
-            }
-
-            if let Some(slot) = target_slot {
-                println!("[LOCAL SERVER] Removing winner (ID: {}) from slot: {}", winner_id_value, slot);
-
-                // Проверить формат данных (NEW или OLD)
-                if next_match_data.get(slot).and_then(|p| p.as_object()).is_some() {
-                    // NEW format - объект участника
-                    next_match_data[slot] = serde_json::json!(null);
-                } else {
-                    // OLD format - отдельные поля
-                    let id_field = format!("{}_id", slot);
-                    let name_field = format!("{}_name", slot);
-                    let club_field = format!("{}_club", slot);
-
-                    next_match_data[id_field] = serde_json::json!(null);
-                    next_match_data[name_field] = serde_json::json!(null);
-                    next_match_data[club_field] = serde_json::json!(null);
-                }
-
-                // Очистить legacy поля (fighter1_name, fighter2_name, fighter1_club, fighter2_club)
-                if slot == "participant1" {
-                    next_match_data["fighter1_name"] = serde_json::json!(null);
-                    next_match_data["fighter1_club"] = serde_json::json!(null);
-                } else if slot == "participant2" {
-                    next_match_data["fighter2_name"] = serde_json::json!(null);
-                    next_match_data["fighter2_club"] = serde_json::json!(null);
-                }
-            } else {
-                println!("[LOCAL SERVER] ⚠️ Winner ID {} not found in next match {}", winner_id_value, next_match_id);
-            }
-
-            // Обновить следующий матч
-            sqlx::query(
-                "UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?"
+            // Определить, в каком слоте находится победитель (проверяем по ID из плоских колонок)
+            let next_slots: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
+                "SELECT p1_id, p2_id FROM matches_cache WHERE match_id = ?"
             )
-            .bind(next_match_data.to_string())
             .bind(next_match_id)
-            .execute(&*state.db)
+            .fetch_optional(&*state.db)
             .await?;
+
+            if let Some((next_p1_id, next_p2_id)) = next_slots {
+                if next_p1_id == Some(winner_id_value) {
+                    println!("[LOCAL SERVER] Removing winner (ID: {}) from p1 slot", winner_id_value);
+                    sqlx::query(
+                        "UPDATE matches_cache SET p1_id = NULL, p1_name = NULL, p1_club = NULL,
+                         updated_at = datetime('now') WHERE match_id = ?"
+                    )
+                    .bind(next_match_id)
+                    .execute(&*state.db)
+                    .await?;
+                } else if next_p2_id == Some(winner_id_value) {
+                    println!("[LOCAL SERVER] Removing winner (ID: {}) from p2 slot", winner_id_value);
+                    sqlx::query(
+                        "UPDATE matches_cache SET p2_id = NULL, p2_name = NULL, p2_club = NULL,
+                         updated_at = datetime('now') WHERE match_id = ?"
+                    )
+                    .bind(next_match_id)
+                    .execute(&*state.db)
+                    .await?;
+                } else {
+                    println!("[LOCAL SERVER] ⚠️ Winner ID {} not found in next match {}", winner_id_value, next_match_id);
+                }
+            }
 
             println!("[LOCAL SERVER] ✅ Winner removed from next match {} successfully", next_match_id);
         } else {
@@ -1107,67 +1152,65 @@ async fn update_match_participant_handler(
     println!("[LOCAL SERVER] match_id: {}, slot: {}, participant_id: {:?}, name: {:?}",
         payload.match_id, payload.participant_slot, payload.participant_id, payload.participant_name);
 
-    // 1. Получить текущие данные матча и версию (optimistic locking)
-    let current_data: Option<(String, i64)> = sqlx::query_as(
-        "SELECT data, version FROM matches_cache WHERE match_id = ?"
+    // 1. Проверить наличие матча и получить версию
+    let current_version: Option<i64> = sqlx::query_scalar(
+        "SELECT version FROM matches_cache WHERE match_id = ?"
     )
     .bind(payload.match_id)
     .fetch_optional(&*state.db)
     .await?;
 
-    // 2. Обновить данные участника
-    let (mut match_data, version) = if let Some((data_str, ver)) = current_data {
-        (serde_json::from_str(&data_str).unwrap_or(serde_json::json!({})), ver)
+    let version = if let Some(ver) = current_version {
+        ver
     } else {
         println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
         return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
     };
 
-    // Обновить поля участника в зависимости от slot
-    if payload.participant_slot == 1 {
-        if let Some(id) = payload.participant_id {
-            match_data["participant1_id"] = serde_json::json!(id);
-        }
-        if let Some(name) = &payload.participant_name {
-            match_data["fighter1_name"] = serde_json::json!(name);
-        }
-        if let Some(club) = &payload.club {
-            match_data["participant1_club"] = serde_json::json!(club);
-        }
+    // 2. Обновить данные участника (плоская схема)
+    let rows_affected = if payload.participant_slot == 1 {
         println!("[LOCAL SERVER] Updated participant1: id={:?}, name={:?}",
             payload.participant_id, payload.participant_name);
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p1_id = COALESCE(?, p1_id),
+                 p1_name = COALESCE(?, p1_name),
+                 p1_club = COALESCE(?, p1_club),
+                 version = version + 1, updated_at = datetime('now')
+             WHERE match_id = ? AND version = ?"
+        )
+        .bind(payload.participant_id)
+        .bind(&payload.participant_name)
+        .bind(&payload.club)
+        .bind(payload.match_id)
+        .bind(version)
+        .execute(&*state.db)
+        .await?
+        .rows_affected()
     } else if payload.participant_slot == 2 {
-        if let Some(id) = payload.participant_id {
-            match_data["participant2_id"] = serde_json::json!(id);
-        }
-        if let Some(name) = &payload.participant_name {
-            match_data["fighter2_name"] = serde_json::json!(name);
-        }
-        if let Some(club) = &payload.club {
-            match_data["participant2_club"] = serde_json::json!(club);
-        }
         println!("[LOCAL SERVER] Updated participant2: id={:?}, name={:?}",
             payload.participant_id, payload.participant_name);
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p2_id = COALESCE(?, p2_id),
+                 p2_name = COALESCE(?, p2_name),
+                 p2_club = COALESCE(?, p2_club),
+                 version = version + 1, updated_at = datetime('now')
+             WHERE match_id = ? AND version = ?"
+        )
+        .bind(payload.participant_id)
+        .bind(&payload.participant_name)
+        .bind(&payload.club)
+        .bind(payload.match_id)
+        .bind(version)
+        .execute(&*state.db)
+        .await?
+        .rows_affected()
     } else {
         println!("[LOCAL SERVER] ERROR: Invalid participant_slot: {}", payload.participant_slot);
         return Err(AppError::BadRequest("Invalid participant_slot (must be 1 or 2)".to_string()));
-    }
+    };
 
-    // 3. Сохранить в БД с optimistic locking
-    let _bracket_id = match_data.get("bracket_id").and_then(|v| v.as_i64()).unwrap_or(0);
-    let rows_affected = sqlx::query(
-        "UPDATE matches_cache
-         SET data = ?, version = version + 1, updated_at = datetime('now')
-         WHERE match_id = ? AND version = ?"
-    )
-    .bind(match_data.to_string())
-    .bind(payload.match_id)
-    .bind(version)
-    .execute(&*state.db)
-    .await?
-    .rows_affected();
-
-    // Если rows_affected = 0, значит версия изменилась (конкурентное обновление)
     if rows_affected == 0 {
         println!("[LOCAL SERVER] WARNING: Optimistic lock failed for match_id={}, version={}", payload.match_id, version);
         return Err(AppError::Conflict("Match was updated by another judge, please retry".to_string()));
@@ -1212,49 +1255,39 @@ async fn swap_bracket_participants_handler(
     let mut tx = state.db.begin().await
         .map_err(|e| AppError::Internal(format!("Failed to start transaction: {}", e)))?;
 
+    // Вспомогательная функция: читает p1_id, p1_name, p1_club, p2_id, p2_name, p2_club
+    // Возвращает (p1_id, p1_name, p1_club, p2_id, p2_name, p2_club)
+    type SlotData = (Option<i32>, Option<String>, Option<String>, Option<i32>, Option<String>, Option<String>);
+
     // Swap внутри одного матча
     if payload.match1_id == payload.match2_id {
-        let match_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
-            .bind(payload.match1_id)
-            .fetch_one(&mut *tx)
-            .await?;
+        let row: SlotData = sqlx::query_as(
+            "SELECT p1_id, p1_name, p1_club, p2_id, p2_name, p2_club
+             FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(payload.match1_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
-        let data_str: String = sqlx::Row::get(&match_data, "data");
-        let mut match_obj: serde_json::Value = serde_json::from_str(&data_str)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let (p1_id, p1_name, p1_club, p2_id, p2_name, p2_club) = row;
 
-        let slot1_value = match_obj.get(&payload.match1_slot).cloned().unwrap_or(serde_json::Value::Null);
-        let slot2_value = match_obj.get(&payload.match2_slot).cloned().unwrap_or(serde_json::Value::Null);
-
-        match_obj[&payload.match1_slot] = slot2_value;
-        match_obj[&payload.match2_slot] = slot1_value;
-
-        // Обновить legacy поля
-        if !match_obj["participant1"].is_null() && match_obj["participant1"].is_object() {
-            match_obj["fighter1_name"] = match_obj["participant1"]["full_name"].clone();
-            match_obj["participant1_id"] = match_obj["participant1"]["fighter_id"].clone();
-            match_obj["fighter1_club"] = match_obj["participant1"]["club_name"].clone();
-        } else {
-            match_obj["fighter1_name"] = serde_json::Value::Null;
-            match_obj["participant1_id"] = serde_json::Value::Null;
-            match_obj["fighter1_club"] = serde_json::Value::Null;
-        }
-
-        if !match_obj["participant2"].is_null() && match_obj["participant2"].is_object() {
-            match_obj["fighter2_name"] = match_obj["participant2"]["full_name"].clone();
-            match_obj["participant2_id"] = match_obj["participant2"]["fighter_id"].clone();
-            match_obj["fighter2_club"] = match_obj["participant2"]["club_name"].clone();
-        } else {
-            match_obj["fighter2_name"] = serde_json::Value::Null;
-            match_obj["participant2_id"] = serde_json::Value::Null;
-            match_obj["fighter2_club"] = serde_json::Value::Null;
-        }
-
-        sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
-            .bind(serde_json::to_string(&match_obj).unwrap())
-            .bind(payload.match1_id)
-            .execute(&mut *tx)
-            .await?;
+        // Swap: participant1 ↔ participant2
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p1_id = ?, p1_name = ?, p1_club = ?,
+                 p2_id = ?, p2_name = ?, p2_club = ?,
+                 updated_at = datetime('now')
+             WHERE match_id = ?"
+        )
+        .bind(p2_id)
+        .bind(&p2_name)
+        .bind(&p2_club)
+        .bind(p1_id)
+        .bind(&p1_name)
+        .bind(&p1_club)
+        .bind(payload.match1_id)
+        .execute(&mut *tx)
+        .await?;
 
         // COMMIT транзакции
         tx.commit().await
@@ -1265,129 +1298,93 @@ async fn swap_bracket_participants_handler(
     }
 
     // Swap между разными матчами
-    let match1_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
-        .bind(payload.match1_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let row1: SlotData = sqlx::query_as(
+        "SELECT p1_id, p1_name, p1_club, p2_id, p2_name, p2_club
+         FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(payload.match1_id)
+    .fetch_one(&mut *tx)
+    .await?;
 
-    let match2_data = sqlx::query("SELECT data FROM matches_cache WHERE match_id = ?")
-        .bind(payload.match2_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let row2: SlotData = sqlx::query_as(
+        "SELECT p1_id, p1_name, p1_club, p2_id, p2_name, p2_club
+         FROM matches_cache WHERE match_id = ?"
+    )
+    .bind(payload.match2_id)
+    .fetch_one(&mut *tx)
+    .await?;
 
-    let data1_str: String = sqlx::Row::get(&match1_data, "data");
-    let data2_str: String = sqlx::Row::get(&match2_data, "data");
-
-    let mut match1_obj: serde_json::Value = serde_json::from_str(&data1_str)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let mut match2_obj: serde_json::Value = serde_json::from_str(&data2_str)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    // DEBUG: Логируем данные ДО swap
-    println!("[LOCAL SERVER] === BEFORE SWAP ===");
-    println!("[LOCAL SERVER] match1 (id={}): participant1={}, participant2={}",
-        payload.match1_id,
-        match1_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
-        match1_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
-    );
-    println!("[LOCAL SERVER] match2 (id={}): participant1={}, participant2={}",
-        payload.match2_id,
-        match2_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
-        match2_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
-    );
-
-    // Swap участников
-    let slot1_value = match1_obj.get(&payload.match1_slot).cloned().unwrap_or(serde_json::Value::Null);
-    let slot2_value = match2_obj.get(&payload.match2_slot).cloned().unwrap_or(serde_json::Value::Null);
+    let (m1_p1_id, m1_p1_name, m1_p1_club, m1_p2_id, m1_p2_name, m1_p2_club) = row1;
+    let (m2_p1_id, m2_p1_name, m2_p1_club, m2_p2_id, m2_p2_name, m2_p2_club) = row2;
 
     println!("[LOCAL SERVER] Swapping: match1[{}] <-> match2[{}]", payload.match1_slot, payload.match2_slot);
-    println!("[LOCAL SERVER] slot1_value (from match1): {}", serde_json::to_string(&slot1_value).unwrap_or_default());
-    println!("[LOCAL SERVER] slot2_value (from match2): {}", serde_json::to_string(&slot2_value).unwrap_or_default());
 
-    match1_obj[&payload.match1_slot] = slot2_value;
-    match2_obj[&payload.match2_slot] = slot1_value;
-
-    println!("[LOCAL SERVER] === AFTER SWAP (before legacy update) ===");
-    println!("[LOCAL SERVER] match1 (id={}): participant1={}, participant2={}",
-        payload.match1_id,
-        match1_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
-        match1_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
-    );
-    println!("[LOCAL SERVER] match2 (id={}): participant1={}, participant2={}",
-        payload.match2_id,
-        match2_obj.get("participant1").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null"),
-        match2_obj.get("participant2").and_then(|v| v.get("full_name")).and_then(|v| v.as_str()).unwrap_or("null")
-    );
-
-    // КРИТИЧНО: Обновить legacy поля для match1
-    if !match1_obj["participant1"].is_null() && match1_obj["participant1"].is_object() {
-        match1_obj["fighter1_name"] = match1_obj["participant1"]["full_name"].clone();
-        match1_obj["participant1_id"] = match1_obj["participant1"]["fighter_id"].clone();
-        match1_obj["fighter1_club"] = match1_obj["participant1"]["club_name"].clone();
+    // Извлечь значение переставляемого слота из каждого матча
+    let (slot1_id, slot1_name, slot1_club) = if payload.match1_slot == "participant1" {
+        (m1_p1_id, m1_p1_name.clone(), m1_p1_club.clone())
     } else {
-        match1_obj["fighter1_name"] = serde_json::Value::Null;
-        match1_obj["participant1_id"] = serde_json::Value::Null;
-        match1_obj["fighter1_club"] = serde_json::Value::Null;
-    }
+        (m1_p2_id, m1_p2_name.clone(), m1_p2_club.clone())
+    };
 
-    if !match1_obj["participant2"].is_null() && match1_obj["participant2"].is_object() {
-        match1_obj["fighter2_name"] = match1_obj["participant2"]["full_name"].clone();
-        match1_obj["participant2_id"] = match1_obj["participant2"]["fighter_id"].clone();
-        match1_obj["fighter2_club"] = match1_obj["participant2"]["club_name"].clone();
+    let (slot2_id, slot2_name, slot2_club) = if payload.match2_slot == "participant1" {
+        (m2_p1_id, m2_p1_name.clone(), m2_p1_club.clone())
     } else {
-        match1_obj["fighter2_name"] = serde_json::Value::Null;
-        match1_obj["participant2_id"] = serde_json::Value::Null;
-        match1_obj["fighter2_club"] = serde_json::Value::Null;
-    }
+        (m2_p2_id, m2_p2_name.clone(), m2_p2_club.clone())
+    };
 
-    // КРИТИЧНО: Обновить legacy поля для match2
-    if !match2_obj["participant1"].is_null() && match2_obj["participant1"].is_object() {
-        match2_obj["fighter1_name"] = match2_obj["participant1"]["full_name"].clone();
-        match2_obj["participant1_id"] = match2_obj["participant1"]["fighter_id"].clone();
-        match2_obj["fighter1_club"] = match2_obj["participant1"]["club_name"].clone();
-    } else {
-        match2_obj["fighter1_name"] = serde_json::Value::Null;
-        match2_obj["participant1_id"] = serde_json::Value::Null;
-        match2_obj["fighter1_club"] = serde_json::Value::Null;
-    }
-
-    if !match2_obj["participant2"].is_null() && match2_obj["participant2"].is_object() {
-        match2_obj["fighter2_name"] = match2_obj["participant2"]["full_name"].clone();
-        match2_obj["participant2_id"] = match2_obj["participant2"]["fighter_id"].clone();
-        match2_obj["fighter2_club"] = match2_obj["participant2"]["club_name"].clone();
-    } else {
-        match2_obj["fighter2_name"] = serde_json::Value::Null;
-        match2_obj["participant2_id"] = serde_json::Value::Null;
-        match2_obj["fighter2_club"] = serde_json::Value::Null;
-    }
-
-    println!("[LOCAL SERVER] Updated legacy fields for both matches");
-
-    // DEBUG: Логируем финальное состояние перед сохранением
-    println!("[LOCAL SERVER] === FINAL STATE (after legacy update) ===");
-    println!("[LOCAL SERVER] match1 (id={}): fighter1_name={}, fighter2_name={}",
-        payload.match1_id,
-        match1_obj.get("fighter1_name").and_then(|v| v.as_str()).unwrap_or("null"),
-        match1_obj.get("fighter2_name").and_then(|v| v.as_str()).unwrap_or("null")
-    );
-    println!("[LOCAL SERVER] match2 (id={}): fighter1_name={}, fighter2_name={}",
-        payload.match2_id,
-        match2_obj.get("fighter1_name").and_then(|v| v.as_str()).unwrap_or("null"),
-        match2_obj.get("fighter2_name").and_then(|v| v.as_str()).unwrap_or("null")
-    );
-
-    // Сохранить оба матча атомарно
-    sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
-        .bind(serde_json::to_string(&match1_obj).unwrap())
+    // Записать slot2 в нужный слот match1
+    if payload.match1_slot == "participant1" {
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p1_id = ?, p1_name = ?, p1_club = ?, updated_at = datetime('now')
+             WHERE match_id = ?"
+        )
+        .bind(slot2_id)
+        .bind(&slot2_name)
+        .bind(&slot2_club)
         .bind(payload.match1_id)
         .execute(&mut *tx)
         .await?;
+    } else {
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p2_id = ?, p2_name = ?, p2_club = ?, updated_at = datetime('now')
+             WHERE match_id = ?"
+        )
+        .bind(slot2_id)
+        .bind(&slot2_name)
+        .bind(&slot2_club)
+        .bind(payload.match1_id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
-    sqlx::query("UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?")
-        .bind(serde_json::to_string(&match2_obj).unwrap())
+    // Записать slot1 в нужный слот match2
+    if payload.match2_slot == "participant1" {
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p1_id = ?, p1_name = ?, p1_club = ?, updated_at = datetime('now')
+             WHERE match_id = ?"
+        )
+        .bind(slot1_id)
+        .bind(&slot1_name)
+        .bind(&slot1_club)
         .bind(payload.match2_id)
         .execute(&mut *tx)
         .await?;
+    } else {
+        sqlx::query(
+            "UPDATE matches_cache
+             SET p2_id = ?, p2_name = ?, p2_club = ?, updated_at = datetime('now')
+             WHERE match_id = ?"
+        )
+        .bind(slot1_id)
+        .bind(&slot1_name)
+        .bind(&slot1_club)
+        .bind(payload.match2_id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     // COMMIT транзакции (либо оба матча обновлены, либо ни один)
     tx.commit().await
@@ -1431,69 +1428,86 @@ async fn update_bracket_participant_handler(
         payload.operation_type, payload.bracket_id, payload.match_id,
         payload.participant_slot, payload.fighter_id, payload.fighter_name);
 
-    // Получить текущие данные матча
-    let current_data: Option<String> = sqlx::query_scalar(
-        "SELECT data FROM matches_cache WHERE match_id = ?"
+    // Проверить существование матча
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM matches_cache WHERE match_id = ?"
     )
     .bind(payload.match_id)
     .fetch_optional(&*state.db)
     .await?;
 
-    let mut match_data = if let Some(data_str) = current_data {
-        serde_json::from_str(&data_str).unwrap_or(serde_json::json!({}))
-    } else {
+    if exists.is_none() {
         println!("[LOCAL SERVER] ERROR: Match {} not found in cache", payload.match_id);
         return Err(AppError::BadRequest(format!("Match {} not found", payload.match_id)));
-    };
+    }
 
-    // Определить, какие поля обновлять в зависимости от slot
-    let (id_field, name_field, club_field, participant_field) = if payload.participant_slot == "participant1" {
-        ("participant1_id", "fighter1_name", "fighter1_club", "participant1")
-    } else if payload.participant_slot == "participant2" {
-        ("participant2_id", "fighter2_name", "fighter2_club", "participant2")
-    } else {
+    // Валидация слота
+    if payload.participant_slot != "participant1" && payload.participant_slot != "participant2" {
         println!("[LOCAL SERVER] ERROR: Invalid participant_slot: {}", payload.participant_slot);
         return Err(AppError::BadRequest("Invalid participant_slot (must be participant1 or participant2)".to_string()));
-    };
+    }
+
+    let is_p1 = payload.participant_slot == "participant1";
 
     // Обработка операций
     match payload.operation_type.as_str() {
         "add" | "update" => {
-            // Добавление или обновление участника
-            if let Some(fighter_id) = payload.fighter_id {
-                match_data[id_field] = serde_json::json!(fighter_id);
+            if is_p1 {
+                sqlx::query(
+                    "UPDATE matches_cache
+                     SET p1_id = COALESCE(?, p1_id),
+                         p1_name = COALESCE(?, p1_name),
+                         p1_club = COALESCE(?, p1_club),
+                         updated_at = datetime('now')
+                     WHERE match_id = ?"
+                )
+                .bind(payload.fighter_id)
+                .bind(&payload.fighter_name)
+                .bind(&payload.club_name)
+                .bind(payload.match_id)
+                .execute(&*state.db)
+                .await?;
+            } else {
+                sqlx::query(
+                    "UPDATE matches_cache
+                     SET p2_id = COALESCE(?, p2_id),
+                         p2_name = COALESCE(?, p2_name),
+                         p2_club = COALESCE(?, p2_club),
+                         updated_at = datetime('now')
+                     WHERE match_id = ?"
+                )
+                .bind(payload.fighter_id)
+                .bind(&payload.fighter_name)
+                .bind(&payload.club_name)
+                .bind(payload.match_id)
+                .execute(&*state.db)
+                .await?;
             }
-            if let Some(ref fighter_name) = payload.fighter_name {
-                match_data[name_field] = serde_json::json!(fighter_name);
-
-                // Обновить participant объект
-                if match_data[participant_field].is_null() || !match_data[participant_field].is_object() {
-                    match_data[participant_field] = serde_json::json!({});
-                }
-                match_data[participant_field]["full_name"] = serde_json::json!(fighter_name);
-
-                if let Some(fighter_id) = payload.fighter_id {
-                    match_data[participant_field]["id"] = serde_json::json!(fighter_id);
-                    match_data[participant_field]["fighter_id"] = serde_json::json!(fighter_id);
-                }
-            }
-            if let Some(ref club_name) = payload.club_name {
-                match_data[club_field] = serde_json::json!(club_name);
-                if match_data[participant_field].is_object() {
-                    match_data[participant_field]["club_name"] = serde_json::json!(club_name);
-                }
-            }
-
             println!("[LOCAL SERVER] Updated {}: id={:?}, name={:?}, club={:?}",
                 payload.participant_slot, payload.fighter_id, payload.fighter_name, payload.club_name);
         },
         "remove" => {
-            // Удаление участника
-            match_data[id_field] = serde_json::Value::Null;
-            match_data[name_field] = serde_json::Value::Null;
-            match_data[club_field] = serde_json::Value::Null;
-            match_data[participant_field] = serde_json::Value::Null;
-
+            if is_p1 {
+                sqlx::query(
+                    "UPDATE matches_cache
+                     SET p1_id = NULL, p1_name = NULL, p1_club = NULL,
+                         updated_at = datetime('now')
+                     WHERE match_id = ?"
+                )
+                .bind(payload.match_id)
+                .execute(&*state.db)
+                .await?;
+            } else {
+                sqlx::query(
+                    "UPDATE matches_cache
+                     SET p2_id = NULL, p2_name = NULL, p2_club = NULL,
+                         updated_at = datetime('now')
+                     WHERE match_id = ?"
+                )
+                .bind(payload.match_id)
+                .execute(&*state.db)
+                .await?;
+            }
             println!("[LOCAL SERVER] Removed {}", payload.participant_slot);
         },
         _ => {
@@ -1501,15 +1515,6 @@ async fn update_bracket_participant_handler(
             return Err(AppError::BadRequest(format!("Unknown operation_type: {}", payload.operation_type)));
         }
     }
-
-    // Сохранить в БД
-    sqlx::query(
-        "UPDATE matches_cache SET data = ?, updated_at = datetime('now') WHERE match_id = ?"
-    )
-    .bind(match_data.to_string())
-    .bind(payload.match_id)
-    .execute(&*state.db)
-    .await?;
 
     println!("[LOCAL SERVER] Participant data saved to matches_cache");
 
@@ -1705,115 +1710,74 @@ async fn create_empty_bracket_handler(
     let timestamp = chrono::Utc::now().timestamp_millis();
     let bracket_id = -((timestamp & 0x7FFFFFFF) as i32);
 
-    // Получить characteristics_schema из существующей сетки того же вида спорта
-    let characteristics_schema = sqlx::query_scalar::<_, String>(
-        "SELECT data FROM brackets_cache
-         WHERE tournament_id = ?
-         AND json_extract(data, '$.sport_id') = ?
-         AND json_extract(data, '$.characteristics_schema') IS NOT NULL
-         LIMIT 1"
-    )
-    .bind(payload.tournament_id)
-    .bind(payload.sport_id)
-    .fetch_optional(&*state.db)
-    .await?
-    .and_then(|data_str| {
-        let data: serde_json::Value = serde_json::from_str(&data_str).ok()?;
-        data.get("characteristics_schema").cloned()
-    });
+    // characteristics_schema не хранится в плоской схеме — пропускаем
+    let characteristics_schema: Option<serde_json::Value> = None;
 
     // Создаем sport_name запросом (берем из существующей сетки)
-    let sport_name = sqlx::query_scalar::<_, String>(
-        "SELECT json_extract(data, '$.sport_name') FROM brackets_cache
+    let sport_name: String = sqlx::query_scalar(
+        "SELECT sport_name FROM brackets_cache
          WHERE tournament_id = ?
-         AND json_extract(data, '$.sport_id') = ?
          LIMIT 1"
     )
     .bind(payload.tournament_id)
-    .bind(payload.sport_id)
     .fetch_optional(&*state.db)
     .await?
+    .flatten()
     .unwrap_or_else(|| "Unknown Sport".to_string());
 
-    // Создать JSON для bracket
-    let mut bracket_data = serde_json::json!({
-        "id": bracket_id,
-        "category_id": null,
-        "category_name": payload.bracket_name,
-        "bracket_type": "single_elimination",
-        "total_rounds": (payload.participant_count as f64).log2() as i32,
-        "current_round": 1,
-        "status": "not_started",
-        "is_published": true,
-        "sport_id": payload.sport_id,
-        "sport_name": sport_name,
-        "gender": payload.gender,
-        "characteristic_filters": characteristic_filters,
-        "min_age": payload.min_age,
-        "max_age": payload.max_age,
-        "min_weight": payload.min_weight,
-        "max_weight": payload.max_weight,
-    });
+    let total_rounds_calc = (payload.participant_count as f64).log2() as i32;
+    let weight_min = payload.min_weight;
+    let weight_max = payload.max_weight;
 
-    // Добавить characteristics_schema, если найдена
-    if let Some(schema) = characteristics_schema {
-        bracket_data["characteristics_schema"] = schema;
-    }
-
-    // Сохранить сетку в brackets_cache
+    // Сохранить сетку в brackets_cache (плоская схема)
     sqlx::query(
-        "INSERT INTO brackets_cache (bracket_id, tournament_id, data, updated_at)
-         VALUES (?, ?, ?, datetime('now'))"
+        "INSERT INTO brackets_cache
+         (bracket_id, tournament_id, category_id, category_name,
+          weight_min, weight_max, gender, sport_name, bracket_type,
+          total_rounds, status, is_published, updated_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'single_elimination', ?, 'not_started', 1, datetime('now'))"
     )
     .bind(bracket_id)
     .bind(payload.tournament_id)
-    .bind(serde_json::to_string(&bracket_data).unwrap())
+    .bind(&payload.bracket_name)
+    .bind(weight_min)
+    .bind(weight_max)
+    .bind(&payload.gender)
+    .bind(&sport_name)
+    .bind(total_rounds_calc)
     .execute(&*state.db)
     .await?;
+
+    // Подавляем warning о неиспользуемых переменных
+    let _ = characteristics_schema;
+    let _ = characteristic_filters;
 
     println!("[LOCAL SERVER] Bracket created with ID: {}", bracket_id);
 
     // Генерация пустых матчей для турнирной сетки
-    let total_rounds = (payload.participant_count as f64).log2() as i32;
     let timestamp_for_matches = chrono::Utc::now().timestamp_millis();
     let mut match_id_counter = -((timestamp_for_matches & 0x7FFFFFFF) as i32);
 
-    for round in 1..=total_rounds {
+    for round in 1..=total_rounds_calc {
         let matches_in_round = payload.participant_count / (2_i32.pow(round as u32));
 
         for match_num in 1..=matches_in_round {
             match_id_counter -= 1;
 
-            let match_data = serde_json::json!({
-                "id": match_id_counter,
-                "bracket_id": bracket_id,
-                "round_number": round,
-                "match_number": match_num,
-                "participant1": null,
-                "participant2": null,
-                "participant1_id": null,
-                "participant2_id": null,
-                "fighter1_name": null,
-                "fighter2_name": null,
-                "fighter1_club": null,
-                "fighter2_club": null,
-                "winner_id": null,
-                "status": "scheduled",
-                "score_participant1": 0,
-                "score_participant2": 0,
-                "warnings_participant1": 0,
-                "warnings_participant2": 0,
-                "result_type": null,
-            });
-
-            // Сохранить матч в matches_cache
+            // Сохранить матч в matches_cache (плоская схема)
             sqlx::query(
-                "INSERT INTO matches_cache (match_id, bracket_id, data, updated_at, version)
-                 VALUES (?, ?, ?, datetime('now'), 1)"
+                "INSERT INTO matches_cache
+                 (match_id, bracket_id, tournament_id, round_number, match_number,
+                  p1_id, p1_name, p1_club, p2_id, p2_name, p2_club,
+                  score_p1, score_p2, warnings_p1, warnings_p2,
+                  winner_id, result_type, status, updated_at, version)
+                 VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, NULL, NULL, 'scheduled', datetime('now'), 1)"
             )
             .bind(match_id_counter)
             .bind(bracket_id)
-            .bind(serde_json::to_string(&match_data).unwrap())
+            .bind(payload.tournament_id)
+            .bind(round)
+            .bind(match_num)
             .execute(&*state.db)
             .await?;
         }
@@ -1890,24 +1854,41 @@ async fn get_my_bracket_assignments_handler(
 
     println!("[LOCAL SERVER] Found {} assigned brackets", bracket_ids.len());
 
-    // Получить полные данные сеток из кэша
+    // Получить полные данные сеток из кэша (плоские поля)
     let mut brackets = Vec::new();
-    for bracket_id in bracket_ids {
-        let bracket_data: Option<String> = sqlx::query_scalar(
-            "SELECT data FROM brackets_cache WHERE bracket_id = ?"
+    for bid in bracket_ids {
+        type BracketRow = (i32, i32, Option<i32>, Option<String>, Option<f64>, Option<f64>, Option<String>, Option<String>, Option<String>, Option<i32>, String, i32);
+        let row: Option<BracketRow> = sqlx::query_as(
+            "SELECT bracket_id, tournament_id, category_id, category_name,
+                    weight_min, weight_max, gender, sport_name, bracket_type,
+                    total_rounds, status, is_published
+             FROM brackets_cache WHERE bracket_id = ?"
         )
-        .bind(bracket_id)
+        .bind(bid)
         .fetch_optional(&*state.db)
         .await?;
 
-        if let Some(data_str) = bracket_data {
-            if let Ok(bracket) = serde_json::from_str::<serde_json::Value>(&data_str) {
-                brackets.push(bracket);
-            } else {
-                eprintln!("[LOCAL SERVER] Failed to parse bracket data for bracket_id {}", bracket_id);
-            }
+        if let Some((bracket_id, tournament_id, category_id, category_name,
+                     weight_min, weight_max, gender, sport_name, bracket_type,
+                     total_rounds, status, is_published)) = row
+        {
+            let bracket = serde_json::json!({
+                "id": bracket_id,
+                "tournament_id": tournament_id,
+                "category_id": category_id,
+                "category_name": category_name,
+                "weight_min": weight_min,
+                "weight_max": weight_max,
+                "gender": gender,
+                "sport_name": sport_name,
+                "bracket_type": bracket_type,
+                "total_rounds": total_rounds,
+                "status": status,
+                "is_published": is_published != 0,
+            });
+            brackets.push(bracket);
         } else {
-            eprintln!("[LOCAL SERVER] Bracket {} not found in cache", bracket_id);
+            eprintln!("[LOCAL SERVER] Bracket {} not found in cache", bid);
         }
     }
 
@@ -2258,11 +2239,10 @@ async fn update_bracket_status_from_matches(
     // 2. Получить статусы только тех матчей, где есть участники
     // (пустые матчи не учитываются при определении статуса сетки)
     let matches: Vec<(String,)> = sqlx::query_as(
-        "SELECT json_extract(data, '$.status')
+        "SELECT status
          FROM matches_cache
          WHERE bracket_id = ?
-         AND (json_extract(data, '$.participant1_id') IS NOT NULL
-              OR json_extract(data, '$.participant2_id') IS NOT NULL)"
+         AND (p1_id IS NOT NULL OR p2_id IS NOT NULL)"
     )
     .bind(bracket_id)
     .fetch_all(db)
@@ -2309,7 +2289,7 @@ async fn update_bracket_status_from_matches(
     // 4. Обновить статус сетки в brackets_cache
     sqlx::query(
         "UPDATE brackets_cache
-         SET data = json_set(data, '$.status', ?),
+         SET status = ?,
              updated_at = datetime('now')
          WHERE bracket_id = ?"
     )
@@ -2335,85 +2315,70 @@ async fn advance_winner_to_next_match(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("[advance_winner] START - match: {}, winner: {:?}", match_id, winner_id);
 
-    // Получить информацию о текущем матче
-    let match_data_json: String = sqlx::query_scalar(
-        "SELECT data FROM matches_cache WHERE match_id = ?"
-    )
-    .bind(match_id)
-    .fetch_one(db)
-    .await?;
+    // Получить информацию о текущем матче (плоские поля)
+    let match_row: Option<(i32, i32, i32, Option<i32>, Option<String>, Option<String>, Option<i32>, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT bracket_id, round_number, match_number,
+                    p1_id, p1_name, p1_club,
+                    p2_id, p2_name, p2_club
+             FROM matches_cache WHERE match_id = ?"
+        )
+        .bind(match_id)
+        .fetch_optional(db)
+        .await?;
 
-    let match_data: serde_json::Value = serde_json::from_str(&match_data_json)?;
-
-    let current_round = match_data["round_number"].as_i64().ok_or("Missing round_number")? as i32;
-    let current_match_number = match_data["match_number"].as_i64().ok_or("Missing match_number")? as i32;
-    let bracket_id = match_data["bracket_id"].as_i64().ok_or("Missing bracket_id")? as i32;
+    let (bracket_id, current_round, current_match_number,
+         p1_id, p1_name, p1_club, p2_id, p2_name, p2_club) = match match_row {
+        Some(r) => r,
+        None => return Ok(()),
+    };
 
     println!("[advance_winner] Current match - round: {}, number: {}, bracket: {}",
              current_round, current_match_number, bracket_id);
 
-    // Определить победителя
-    // Приоритет 1: winner_id если передан
-    // Приоритет 2: по счету
-    let winner_participant = if let Some(winner_id) = winner_id {
-        // Найти участника по winner_id
-        let p1 = match_data.get("participant1");
-        let p2 = match_data.get("participant2");
-
-        if let Some(p1_obj) = p1 {
-            if p1_obj.get("id").and_then(|v| v.as_i64()) == Some(winner_id as i64)
-               || p1_obj.get("fighter_id").and_then(|v| v.as_i64()) == Some(winner_id as i64) {
-                Some(p1_obj.clone())
-            } else if let Some(p2_obj) = p2 {
-                if p2_obj.get("id").and_then(|v| v.as_i64()) == Some(winner_id as i64)
-                   || p2_obj.get("fighter_id").and_then(|v| v.as_i64()) == Some(winner_id as i64) {
-                    Some(p2_obj.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+    // Определить победителя (id, name, club)
+    let winner_data: Option<(i32, Option<String>, Option<String>)> = if let Some(wid) = winner_id {
+        // По winner_id
+        if p1_id == Some(wid) {
+            Some((wid, p1_name.clone(), p1_club.clone()))
+        } else if p2_id == Some(wid) {
+            Some((wid, p2_name.clone(), p2_club.clone()))
         } else {
             None
         }
     } else {
-        // Определяем по счету
+        // По счету
         if blue_score > red_score {
-            match_data.get("participant1").cloned()
+            p1_id.map(|id| (id, p1_name.clone(), p1_club.clone()))
         } else if red_score > blue_score {
-            match_data.get("participant2").cloned()
+            p2_id.map(|id| (id, p2_name.clone(), p2_club.clone()))
         } else {
             None // Ничья
         }
     };
 
-    if winner_participant.is_none() || winner_participant == Some(serde_json::Value::Null) {
-        println!("[advance_winner] No winner (draw or missing data)");
-        return Ok(());
-    }
+    let (winner_fid, winner_name, winner_club) = match winner_data {
+        Some(d) => d,
+        None => {
+            println!("[advance_winner] No winner (draw or missing data)");
+            return Ok(());
+        }
+    };
 
-    let winner = winner_participant.unwrap();
-    println!("[advance_winner] Winner: {}", winner.get("full_name").and_then(|v| v.as_str()).unwrap_or("unknown"));
+    println!("[advance_winner] Winner: id={}, name={:?}", winner_fid, winner_name);
 
     // Вычислить следующий матч
     let next_round = current_round + 1;
     let next_match_number = current_match_number / 2;
-    let target_slot = if current_match_number % 2 == 0 {
-        "$.participant1"
-    } else {
-        "$.participant2"
-    };
 
-    println!("[advance_winner] Next match - round: {}, number: {}, slot: {}",
-             next_round, next_match_number, target_slot);
+    println!("[advance_winner] Next match - round: {}, number: {}, bracket: {}",
+             next_round, next_match_number, bracket_id);
 
-    // Проверить существование следующего матча
-    let next_match_id: Option<i32> = sqlx::query_scalar(
-        "SELECT match_id FROM matches_cache
-         WHERE CAST(json_extract(data, '$.bracket_id') AS INTEGER) = ?
-           AND CAST(json_extract(data, '$.round_number') AS INTEGER) = ?
-           AND CAST(json_extract(data, '$.match_number') AS INTEGER) = ?"
+    // Найти следующий матч по плоским полям
+    let next_row: Option<(i32, Option<i32>, Option<i32>)> = sqlx::query_as(
+        "SELECT match_id, p1_id, p2_id
+         FROM matches_cache
+         WHERE bracket_id = ? AND round_number = ? AND match_number = ?"
     )
     .bind(bracket_id)
     .bind(next_round)
@@ -2421,85 +2386,44 @@ async fn advance_winner_to_next_match(
     .fetch_optional(db)
     .await?;
 
-    if let Some(next_id) = next_match_id {
+    if let Some((next_id, next_p1_id, next_p2_id)) = next_row {
         println!("[advance_winner] Found next match: {}, checking free slots...", next_id);
 
-        // Получить данные следующего матча
-        let next_match_data_json: String = sqlx::query_scalar(
-            "SELECT data FROM matches_cache WHERE match_id = ?"
-        )
-        .bind(next_id)
-        .fetch_one(db)
-        .await?;
-
-        let next_match_data: serde_json::Value = serde_json::from_str(&next_match_data_json)?;
-
-        // Проверяем свободные слоты
-        let p1 = next_match_data.get("participant1");
-        let p2 = next_match_data.get("participant2");
-
-        let p1_empty = p1.is_none() || p1 == Some(&serde_json::Value::Null);
-        let p2_empty = p2.is_none() || p2 == Some(&serde_json::Value::Null);
-
-        // Проверяем, нет ли уже этого участника в следующем матче
-        let winner_id = winner.get("id").and_then(|v| v.as_i64());
-        let winner_fighter_id = winner.get("fighter_id").and_then(|v| v.as_i64());
-
-        let already_in_p1 = if let Some(p1_obj) = p1 {
-            if p1_obj.is_object() {
-                let p1_id = p1_obj.get("id").and_then(|v| v.as_i64());
-                let p1_fighter_id = p1_obj.get("fighter_id").and_then(|v| v.as_i64());
-                (winner_id.is_some() && p1_id == winner_id) || (winner_fighter_id.is_some() && p1_fighter_id == winner_fighter_id)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        let already_in_p2 = if let Some(p2_obj) = p2 {
-            if p2_obj.is_object() {
-                let p2_id = p2_obj.get("id").and_then(|v| v.as_i64());
-                let p2_fighter_id = p2_obj.get("fighter_id").and_then(|v| v.as_i64());
-                (winner_id.is_some() && p2_id == winner_id) || (winner_fighter_id.is_some() && p2_fighter_id == winner_fighter_id)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if already_in_p1 || already_in_p2 {
+        // Проверяем, нет ли уже победителя в следующем матче
+        if next_p1_id == Some(winner_fid) || next_p2_id == Some(winner_fid) {
             println!("[advance_winner] ⚠️ Winner already in next match {}, skipping", next_id);
             return Ok(());
         }
 
         // Выбираем первый свободный слот
-        let free_slot = if p1_empty {
-            Some("$.participant1")
-        } else if p2_empty {
-            Some("$.participant2")
-        } else {
-            None
-        };
-
-        if let Some(slot) = free_slot {
-            println!("[advance_winner] Free slot found: {}, advancing winner", slot);
-
-            let winner_json = winner.to_string();
-            sqlx::query(&format!(
+        if next_p1_id.is_none() {
+            println!("[advance_winner] Free slot: p1, advancing winner");
+            sqlx::query(
                 "UPDATE matches_cache
-                 SET data = json_set(data, '{}', json(?)),
-                     updated_at = datetime('now')
-                 WHERE match_id = ?",
-                slot
-            ))
-            .bind(winner_json)
+                 SET p1_id = ?, p1_name = ?, p1_club = ?, updated_at = datetime('now')
+                 WHERE match_id = ?"
+            )
+            .bind(winner_fid)
+            .bind(&winner_name)
+            .bind(&winner_club)
             .bind(next_id)
             .execute(db)
             .await?;
-
-            println!("[advance_winner] ✅ Winner advanced successfully to match {} slot {}", next_id, slot);
+            println!("[advance_winner] ✅ Winner advanced to match {} p1 slot", next_id);
+        } else if next_p2_id.is_none() {
+            println!("[advance_winner] Free slot: p2, advancing winner");
+            sqlx::query(
+                "UPDATE matches_cache
+                 SET p2_id = ?, p2_name = ?, p2_club = ?, updated_at = datetime('now')
+                 WHERE match_id = ?"
+            )
+            .bind(winner_fid)
+            .bind(&winner_name)
+            .bind(&winner_club)
+            .bind(next_id)
+            .execute(db)
+            .await?;
+            println!("[advance_winner] ✅ Winner advanced to match {} p2 slot", next_id);
         } else {
             println!("[advance_winner] ⚠️ Both slots occupied in match {}, cannot advance", next_id);
         }
