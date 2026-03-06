@@ -2679,6 +2679,7 @@ impl ApiClient {
             .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
 
         let url = format!("{}/fighters/", self.base_url);
+        println!("[download_fighters] Requesting URL: {}", url);
         let response = self.client
             .get(&url)
             .bearer_auth(&token)
@@ -2688,7 +2689,8 @@ impl ApiClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("HTTP {}: {}", status, text));
+            println!("[download_fighters] ERROR: HTTP {} at URL: {}", status, url);
+            return Err(anyhow::anyhow!("HTTP {} (URL: {}): {}", status, url, text));
         }
 
         let fighters: Vec<serde_json::Value> = response.json().await?;

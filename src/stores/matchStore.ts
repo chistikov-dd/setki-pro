@@ -40,7 +40,7 @@ interface MatchStoreState {
   addWarning: (participant: 'red' | 'blue') => Promise<void>;
   removeWarning: (participant: 'red' | 'blue') => Promise<void>;
   undoLastAction: () => Promise<void>;
-  finishMatch: (resultType: 'points' | 'submission' | 'disqualification', winnerId?: number) => Promise<void>;
+  finishMatch: (resultType: 'points' | 'submission' | 'disqualification', winnerId?: number, elapsedSeconds?: number) => Promise<void>;
   applyRemoteUpdate: (data: RemoteUpdateData, timestamp: string) => boolean;
   setTimerDuration: (seconds: number) => void;
   loadNextMatch: () => Promise<void>;
@@ -519,7 +519,8 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
   // Note: Timer is now managed by useMatchTimer hook in MatchScreen
   finishMatch: async (
     resultType: 'points' | 'submission' | 'disqualification',
-    winnerId?: number
+    winnerId?: number,
+    elapsedSeconds?: number
   ) => {
     const { match, redScore, blueScore, redFighter, blueFighter } = get();
     if (!match) return;
@@ -575,6 +576,7 @@ export const useMatchStore = create<MatchStoreState>((set, get) => ({
         blueWarnings: get().blueWarnings,
         status: 'completed',
         winnerId: finalWinnerId,
+        duration: elapsedSeconds,
       }, serverMode);
 
       console.log('[matchStore.finishMatch] Step 2 complete');

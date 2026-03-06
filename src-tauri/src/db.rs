@@ -133,6 +133,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
             winner_id INTEGER,
             result_type TEXT,
             status TEXT NOT NULL DEFAULT 'scheduled',
+            duration INTEGER,
             updated_at TEXT NOT NULL,
             version INTEGER NOT NULL DEFAULT 1
         )"
@@ -170,12 +171,28 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
                     winner_id INTEGER,
                     result_type TEXT,
                     status TEXT NOT NULL DEFAULT 'scheduled',
+                    duration INTEGER,
                     updated_at TEXT NOT NULL,
                     version INTEGER NOT NULL DEFAULT 1
                 )"
             )
             .execute(pool)
             .await?;
+        }
+    }
+
+    // Миграция: добавить поле duration если его нет
+    let has_duration: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'duration'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_duration {
+        if count == 0 {
+            println!("[DB] Adding duration column to matches_cache");
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN duration INTEGER")
+                .execute(pool)
+                .await?;
         }
     }
 

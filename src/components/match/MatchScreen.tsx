@@ -762,7 +762,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     winnerId?: number
   ) => {
     try {
-      await actions.finishMatch(resultType, winnerId);
+      const elapsed = (initialTimerSeconds || 300) - timerRef.current.remainingSeconds;
+      await actions.finishMatch(resultType, winnerId, elapsed > 0 ? elapsed : undefined);
 
       // Отправляем match_end через WebSocket
       if (wsConnected && sendMatchEnd) {

@@ -28,7 +28,13 @@ npm run test          # Unit tests (221 тестов)
 
 **Сборка установщиков:**
 - Windows: `SETKI-PRO-KEEPER_0.1.0_x64-setup.exe` (NSIS)
-- Linux: `setki-keeper_0.1.0_amd64.AppImage`
+- Linux: `setki-keeper_0.1.0_amd64.AppImage` (**только AppImage для совместимости**)
+
+**ВАЖНО для Linux:**
+- **Всегда используйте AppImage** для дистрибуции
+- Обычный бинарник требует GLIBC 2.28+ и не работает на старых системах
+- AppImage содержит все зависимости и работает на любой Linux системе с GLIBC 2.23+
+- См. `docs/LINUX_COMPATIBILITY.md` для деталей
 
 ## Концепция
 
@@ -614,6 +620,42 @@ ws.onclose = () => {
 // При выходе ВСЕГДА вызывайте
 authStore.logout(); // Освобождает стол автоматически
 ```
+
+### Linux: "GLIBC version not found"
+
+**Проблема:**
+```
+/lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.29' not found
+/lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.33' not found
+```
+
+**Причина:** Приложение собрано на новой системе, требует более новый GLIBC, чем есть на старой системе (Linux Mint 19.3, Ubuntu 18.04).
+
+**❌ НЕ РАБОТАЕТ:**
+- Нельзя обновить GLIBC вручную (сломает систему)
+- Нельзя установить дополнительные библиотеки
+- Обычный бинарник `setki-keeper` не запустится
+
+**✅ РЕШЕНИЕ: Используйте AppImage**
+
+```bash
+# 1. Используйте AppImage из bundle
+chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
+./src-tauri/target/release/bundle/appimage/*.AppImage
+
+# 2. Или соберите заново
+./build-appimage.sh
+
+# 3. AppImage работает на любой Linux системе с GLIBC 2.23+
+```
+
+**Почему AppImage:**
+- Содержит все зависимости внутри
+- Работает на Ubuntu 18.04+, Linux Mint 19.3+, Debian 10+
+- Не требует установки системных библиотек
+- Portable - можно запускать с USB
+
+**Подробности:** См. `docs/LINUX_COMPATIBILITY.md`
 
 ## Связанные проекты
 

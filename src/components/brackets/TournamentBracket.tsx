@@ -385,7 +385,7 @@ function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryNam
 
       {/* Кнопка «Вызвать администратора» — только для судей в local-client режиме */}
       {user?.role === 'referee' && serverMode === 'local-client' && (
-        <div className="fixed bottom-6 right-52 z-50">
+        <div className="fixed z-50" style={{ bottom: bracketId && user ? '5.5rem' : '1.5rem', right: '1.5rem' }}>
           <CallAdminButton />
         </div>
       )}

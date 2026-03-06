@@ -647,6 +647,7 @@ async fn get_bracket_matches_handler(
             let winner_id:   Option<i32>    = row.get("winner_id");
             let result_type: Option<String> = row.get("result_type");
             let status:      String         = row.get("status");
+            let duration:    Option<i32>    = row.try_get("duration").unwrap_or(None);
             let version:     i32            = row.get("version");
 
             println!("[LOCAL SERVER] Match {}: score_p1={}, score_p2={} (p1=blue, p2=red)",
@@ -678,6 +679,7 @@ async fn get_bracket_matches_handler(
                 "winner_id": winner_id,
                 "result_type": result_type,
                 "status": status,
+                "duration": duration,
                 "version": version,
             })
         })
@@ -853,6 +855,7 @@ async fn sync_matches_handler(
     let winner_id   = d.get("winner_id").and_then(|v| v.as_i64()).map(|v| v as i32);
     let result_type = d.get("result_type").and_then(|v| v.as_str()).map(|s| s.to_string());
     let status      = d.get("status").and_then(|v| v.as_str()).unwrap_or("scheduled").to_string();
+    let duration    = d.get("duration").and_then(|v| v.as_i64()).map(|v| v as i32);
 
     // Обновить матч в matches_cache (плоская схема)
     sqlx::query(
@@ -860,8 +863,8 @@ async fn sync_matches_handler(
          (match_id, bracket_id, tournament_id, round_number, match_number,
           p1_id, p1_name, p1_club, p2_id, p2_name, p2_club,
           score_p1, score_p2, warnings_p1, warnings_p2,
-          winner_id, result_type, status, updated_at, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
+          winner_id, result_type, status, duration, updated_at, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'),
                  COALESCE((SELECT version FROM matches_cache WHERE match_id = ?), 0) + 1)"
     )
     .bind(payload.match_id)
@@ -882,6 +885,7 @@ async fn sync_matches_handler(
     .bind(winner_id)
     .bind(&result_type)
     .bind(&status)
+    .bind(duration)
     .bind(payload.match_id)
     .execute(&*state.db)
     .await?;
@@ -935,6 +939,7 @@ async fn update_match_score_handler(
         "UPDATE matches_cache
          SET score_p1 = ?, score_p2 = ?, warnings_p1 = ?, warnings_p2 = ?,
              status = ?, winner_id = ?, result_type = ?,
+             duration = COALESCE(?, duration),
              version = version + 1, updated_at = datetime('now')
          WHERE match_id = ? AND version = ?"
     )
@@ -945,6 +950,7 @@ async fn update_match_score_handler(
     .bind(&payload.status)
     .bind(payload.winner_id)
     .bind(&payload.result_type)
+    .bind(payload.duration)
     .bind(payload.match_id)
     .bind(version)
     .execute(&*state.db)
