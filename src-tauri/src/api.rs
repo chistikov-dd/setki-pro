@@ -996,7 +996,59 @@ impl ApiClient {
             }
         }
 
-        println!("[sync_changes] Synced {} matches to server", synced_count);
+        // Выгрузить завершённые матчи из matches_cache (для LAN режима)
+        // match_id > 0 — серверный ID, match_id < 0 — локальный (не выгружаем)
+        let cache_records = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, Option<i32>, i32, i32)>(
+            "SELECT match_id, p1_id, p2_id, winner_id, score_p1, score_p2
+             FROM matches_cache
+             WHERE status = 'completed' AND match_id > 0
+               AND (synced_to_server IS NULL OR synced_to_server = 0)"
+        )
+        .fetch_all(self.db.as_ref())
+        .await?;
+
+        println!("[sync_changes] Found {} completed matches in cache to sync", cache_records.len());
+
+        let url = format!("{}/desktop/sync/matches", self.base_url);
+        for (match_id, _p1_id, _p2_id, winner_id, score_p1, score_p2) in cache_records {
+            let data = serde_json::json!({
+                "match_id": match_id,
+                "fighter1_score": score_p1,
+                "fighter2_score": score_p2,
+                "winner_id": winner_id,
+                "status": "completed"
+            });
+
+            let response = self.client
+                .post(&url)
+                .bearer_auth(&token)
+                .header("Content-Type", "application/json")
+                .json(&data)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {
+                    sqlx::query(
+                        "UPDATE matches_cache SET synced_to_server = 1 WHERE match_id = ?"
+                    )
+                    .bind(match_id)
+                    .execute(self.db.as_ref())
+                    .await?;
+                    synced_count += 1;
+                },
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    println!("[sync_changes] ERROR: Server returned {} for match_id={}. Body: {}", status, match_id, body);
+                },
+                Err(e) => {
+                    println!("[sync_changes] ERROR: Network error for match_id={}: {}", match_id, e);
+                }
+            }
+        }
+
+        println!("[sync_changes] Total synced: {} matches", synced_count);
         Ok(synced_count)
     }
 

@@ -220,6 +220,21 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         }
     }
 
+    // Миграция: добавить поле synced_to_server если его нет
+    let has_synced: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'synced_to_server'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_synced {
+        if count == 0 {
+            println!("[DB] Adding synced_to_server column to matches_cache");
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN synced_to_server INTEGER DEFAULT 0")
+                .execute(pool)
+                .await?;
+        }
+    }
+
     // Очередь синхронизации
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_queue (
@@ -555,6 +570,21 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
                 .execute(pool)
                 .await?;
             sqlx::query("UPDATE fighters_cache SET full_name_lower = lower(full_name)")
+                .execute(pool)
+                .await?;
+        }
+    }
+
+    // Миграция: добавить birth_date в fighters_cache если нет
+    let has_birth_date: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('fighters_cache') WHERE name = 'birth_date'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_birth_date {
+        if count == 0 {
+            println!("[DB] Adding birth_date column to fighters_cache");
+            sqlx::query("ALTER TABLE fighters_cache ADD COLUMN birth_date TEXT")
                 .execute(pool)
                 .await?;
         }
