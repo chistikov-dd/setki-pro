@@ -6,6 +6,8 @@ import { useServerModeStore } from '../../stores/serverModeStore';
 import { useBracketEditorStore } from '../../stores/bracketEditorStore';
 import { useSyncWorker } from '../../hooks/useSyncWorker';
 import { downloadTournament, isTournamentDownloaded, clearTournamentCache, getBracketMatches } from '../../services/api';
+import { generateProtocolPdf } from '../../utils/pdfReport';
+import type { ReportData } from '../../utils/pdfReport';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/Dialog';
@@ -57,6 +59,7 @@ export const AdminDashboard = () => {
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [serverIp, setServerIp] = useState<string | null>(null);
   const [adminCalls, setAdminCalls] = useState<AdminCall[]>([]);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
   const addAdminCall = useCallback((event: { table_number: number; judge_name: string | null; message: string | null; timestamp: string }) => {
     setAdminCalls(prev => {
@@ -105,38 +108,41 @@ export const AdminDashboard = () => {
 
   // Загрузить IP локального сервера
   useEffect(() => {
+    let mounted = true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
-    const maxAttempts = 10; // Максимум 10 попыток (10 секунд)
+    const maxAttempts = 10;
 
     const loadServerIp = async () => {
-      if (serverMode === 'local-server' && attempts < maxAttempts) {
-        attempts++;
-        try {
-          console.log(`[AdminDashboard] Attempting to get server IP (attempt ${attempts}/${maxAttempts})...`);
-          const url = await invoke<string | null>('get_local_server_url');
-          console.log('[AdminDashboard] Got server URL:', url);
-          if (url) {
-            // Извлекаем только IP из URL (http://192.168.1.10:8081 -> 192.168.1.10)
-            const match = url.match(/\/\/([^:]+)/);
-            if (match) {
-              console.log('[AdminDashboard] Extracted IP:', match[1]);
-              setServerIp(match[1]);
-            } else {
-              console.warn('[AdminDashboard] Failed to extract IP from URL:', url);
-            }
+      if (!mounted || serverMode !== 'local-server' || attempts >= maxAttempts) return;
+      attempts++;
+      try {
+        console.log(`[AdminDashboard] Attempting to get server IP (attempt ${attempts}/${maxAttempts})...`);
+        const url = await invoke<string | null>('get_local_server_url');
+        if (!mounted) return;
+        console.log('[AdminDashboard] Got server URL:', url);
+        if (url) {
+          const match = url.match(/\/\/([^:]+)/);
+          if (match) {
+            console.log('[AdminDashboard] Extracted IP:', match[1]);
+            setServerIp(match[1]);
           } else {
-            console.warn('[AdminDashboard] Server URL is null, retrying in 1 second...');
-            // Если URL еще не готов, повторяем попытку через 1 секунду
-            setTimeout(loadServerIp, 1000);
+            console.warn('[AdminDashboard] Failed to extract IP from URL:', url);
           }
-        } catch (error) {
-          console.error('[AdminDashboard] Failed to get server IP:', error);
+        } else {
+          console.warn('[AdminDashboard] Server URL is null, retrying in 1 second...');
+          timeoutId = setTimeout(loadServerIp, 1000);
         }
-      } else if (attempts >= maxAttempts) {
-        console.error('[AdminDashboard] Failed to get server IP after 10 attempts. Server may not have started.');
+      } catch (error) {
+        console.error('[AdminDashboard] Failed to get server IP:', error);
       }
     };
+
     loadServerIp();
+    return () => {
+      mounted = false;
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    };
   }, [serverMode]);
 
   // WebSocket для административных событий (подключение/отключение судей, вызовы)
@@ -262,6 +268,24 @@ export const AdminDashboard = () => {
       showToast(`Ошибка: ${msg}`, 'error', 8000);
     } finally {
       setIsDownloadingFighters(false);
+    }
+  };
+
+  // Сформировать PDF-протокол
+  const handleGenerateReport = async () => {
+    if (!currentSession) return;
+    setIsGeneratingReport(true);
+    try {
+      // Вычисляем места перед генерацией
+      await invoke('compute_tournament_places', { tournamentId: currentSession.tournament_id }).catch(() => {});
+      const reportData = await invoke<ReportData>('get_report_data', { tournamentId: currentSession.tournament_id });
+      generateProtocolPdf(reportData);
+      showToast('Протокол сформирован', 'success', 3000);
+    } catch (error) {
+      console.error('Ошибка формирования протокола:', error);
+      showToast(`Ошибка: ${String(error)}`, 'error', 5000);
+    } finally {
+      setIsGeneratingReport(false);
     }
   };
 
@@ -555,6 +579,17 @@ export const AdminDashboard = () => {
                   >
                     {isDownloadingFighters ? 'Загрузка спортсменов...' : 'Скачать базу спортсменов'}
                   </Button>
+
+                  {isTournamentCached && (
+                    <Button
+                      variant="secondary"
+                      onClick={handleGenerateReport}
+                      disabled={isGeneratingReport}
+                      className="w-full"
+                    >
+                      {isGeneratingReport ? 'Формирование протокола...' : 'Сформировать протокол (PDF)'}
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>

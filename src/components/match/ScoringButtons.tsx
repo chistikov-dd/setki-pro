@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ScoringConfig } from '../../types';
 import { Button } from '../ui/Button';
 
@@ -10,6 +10,11 @@ interface ScoringButtonsProps {
   blueWarnings: number;
 }
 
+const RED_HOTKEY_CODES = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'];
+const BLUE_HOTKEY_CODES = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO'];
+const RED_DISPLAY_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+const BLUE_DISPLAY_KEYS = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O'];
+
 export function ScoringButtons({
   config,
   onAddScore,
@@ -18,6 +23,13 @@ export function ScoringButtons({
   blueWarnings,
 }: ScoringButtonsProps) {
   const maxWarnings = config.warnings.max_count;
+
+  const redWarningsRef = useRef(redWarnings);
+  const blueWarningsRef = useRef(blueWarnings);
+  useEffect(() => {
+    redWarningsRef.current = redWarnings;
+    blueWarningsRef.current = blueWarnings;
+  });
 
   // Hotkeys for scoring
   useEffect(() => {
@@ -29,8 +41,7 @@ export function ScoringButtons({
       }
 
       // Red corner: 1-9
-      const redKeys = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'];
-      const redIndex = redKeys.indexOf(e.code);
+      const redIndex = RED_HOTKEY_CODES.indexOf(e.code);
       if (redIndex !== -1 && redIndex < config.actions.length) {
         e.preventDefault();
         const action = config.actions[redIndex];
@@ -39,8 +50,7 @@ export function ScoringButtons({
       }
 
       // Blue corner: Q-Y
-      const blueKeys = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO'];
-      const blueIndex = blueKeys.indexOf(e.code);
+      const blueIndex = BLUE_HOTKEY_CODES.indexOf(e.code);
       if (blueIndex !== -1 && blueIndex < config.actions.length) {
         e.preventDefault();
         const action = config.actions[blueIndex];
@@ -49,10 +59,10 @@ export function ScoringButtons({
       }
 
       // Warnings
-      if (e.code === 'KeyZ' && redWarnings < maxWarnings) {
+      if (e.code === 'KeyZ' && redWarningsRef.current < maxWarnings) {
         e.preventDefault();
         onAddWarning('red');
-      } else if (e.code === 'KeyX' && blueWarnings < maxWarnings) {
+      } else if (e.code === 'KeyX' && blueWarningsRef.current < maxWarnings) {
         e.preventDefault();
         onAddWarning('blue');
       }
@@ -60,11 +70,11 @@ export function ScoringButtons({
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [config, onAddScore, onAddWarning, redWarnings, blueWarnings, maxWarnings]);
+  }, [config, onAddScore, onAddWarning, maxWarnings]);
 
   // Keys for display
-  const redKeys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
-  const blueKeys = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O'];
+  const redKeys = RED_DISPLAY_KEYS;
+  const blueKeys = BLUE_DISPLAY_KEYS;
 
   return (
     <div className="grid grid-cols-2 gap-6">

@@ -90,7 +90,7 @@ function useMatchUpdateEmitter(
       // Обновляем ref после отправки
       prevDataRef.current = { redScore, blueScore, remainingSeconds, isRunning };
     }
-  }, [redFighter, blueFighter, redScore, blueScore, remainingSeconds, isRunning]);
+  }, [redFighter?.id, blueFighter?.id, redScore, blueScore, remainingSeconds, isRunning]);
 }
 
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {

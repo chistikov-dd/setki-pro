@@ -2355,17 +2355,23 @@ impl ApiClient {
 
         println!("[finish_match] Online/local-server mode - processing locally");
 
-        // 1. Получить информацию о текущем матче (раунд, номер матча, bracket_id)
-        let match_info: (i32, i32, i32) = sqlx::query_as(
-            "SELECT round_number, match_number, bracket_id
-             FROM matches_cache
-             WHERE match_id = ?"
-        )
-        .bind(match_id)
-        .fetch_one(self.db.as_ref())
-        .await?;
+        // 1. Получить все данные о текущем матче одним запросом
+        let (current_round, current_match_number, bracket_id,
+             p1_id, p1_name, p1_club,
+             p2_id, p2_name, p2_club):
+            (i32, i32, i32,
+             Option<i32>, Option<String>, Option<String>,
+             Option<i32>, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT round_number, match_number, bracket_id,
+                         p1_id, p1_name, p1_club,
+                         p2_id, p2_name, p2_club
+                 FROM matches_cache WHERE match_id = ?"
+            )
+            .bind(match_id)
+            .fetch_one(self.db.as_ref())
+            .await?;
 
-        let (current_round, current_match_number, bracket_id) = match_info;
         println!("[finish_match] Current match info - round: {}, number: {}, bracket: {}",
                  current_round, current_match_number, bracket_id);
         println!("[finish_match] Scores received - final_blue_score: {}, final_red_score: {}", final_blue_score, final_red_score);
@@ -2373,31 +2379,12 @@ impl ApiClient {
         // 2. Определить winner_id по счету если не указан
         let final_winner_id = if winner_id.is_some() {
             winner_id
+        } else if final_red_score > final_blue_score {
+            p2_id // Красный победил - p2
+        } else if final_blue_score > final_red_score {
+            p1_id // Синий победил - p1
         } else {
-            // Определяем по счету (для вручную добавленных участников без ID)
-            if final_red_score > final_blue_score {
-                // Красный победил - p2_id
-                let red_id: Option<i32> = sqlx::query_scalar(
-                    "SELECT p2_id FROM matches_cache WHERE match_id = ?"
-                )
-                .bind(match_id)
-                .fetch_optional(self.db.as_ref())
-                .await?
-                .flatten();
-                red_id
-            } else if final_blue_score > final_red_score {
-                // Синий победил - p1_id
-                let blue_id: Option<i32> = sqlx::query_scalar(
-                    "SELECT p1_id FROM matches_cache WHERE match_id = ?"
-                )
-                .bind(match_id)
-                .fetch_optional(self.db.as_ref())
-                .await?
-                .flatten();
-                blue_id
-            } else {
-                None // Ничья
-            }
+            None // Ничья
         };
 
         println!("[finish_match] Final winner_id: {:?}", final_winner_id);
@@ -2430,59 +2417,42 @@ impl ApiClient {
         .execute(&mut *tx)
         .await?;
 
-        // 4. Продвинуть победителя в следующий матч
-        // Читаем плоские данные текущего матча для определения победителя
-        let match_flat: Option<(Option<i32>, Option<String>, Option<String>,
-                                Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT p1_id, p1_name, p1_club, p2_id, p2_name, p2_club
-             FROM matches_cache WHERE match_id = ?"
-        )
-        .bind(match_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        // 4. Определить объект победителя (используем данные, прочитанные до транзакции)
+        let make_participant = |id: Option<i32>, name: Option<String>, club: Option<String>| {
+            serde_json::json!({
+                "id": id,
+                "fighter_id": id,
+                "full_name": name,
+                "club_name": club,
+            })
+        };
 
-        // Определить объект победителя
-        let winner_participant_json = if let Some((p1_id, p1_name, p1_club, p2_id, p2_name, p2_club)) = match_flat {
-            let winner = final_winner_id;
-
-            let make_participant = |id: Option<i32>, name: Option<String>, club: Option<String>| {
-                serde_json::json!({
-                    "id": id,
-                    "fighter_id": id,
-                    "full_name": name,
-                    "club_name": club,
-                })
-            };
-
-            if let Some(w) = winner {
-                if p1_id == Some(w) {
-                    println!("[finish_match] Winner matched: p1 (blue) id={}", w);
-                    make_participant(p1_id, p1_name, p1_club)
-                } else if p2_id == Some(w) {
-                    println!("[finish_match] Winner matched: p2 (red) id={}", w);
-                    make_participant(p2_id, p2_name, p2_club)
-                } else {
-                    println!("[finish_match] Winner ID {} not found - fallback to score", w);
-                    if final_blue_score > final_red_score {
-                        make_participant(p1_id, p1_name, p1_club)
-                    } else if final_red_score > final_blue_score {
-                        make_participant(p2_id, p2_name, p2_club)
-                    } else {
-                        serde_json::Value::Null
-                    }
-                }
+        let winner_participant_json = if let Some(w) = final_winner_id {
+            if p1_id == Some(w) {
+                println!("[finish_match] Winner matched: p1 (blue) id={}", w);
+                make_participant(p1_id, p1_name.clone(), p1_club.clone())
+            } else if p2_id == Some(w) {
+                println!("[finish_match] Winner matched: p2 (red) id={}", w);
+                make_participant(p2_id, p2_name.clone(), p2_club.clone())
             } else {
-                println!("[finish_match] No winner_id, determining by score: blue={}, red={}", final_blue_score, final_red_score);
+                println!("[finish_match] Winner ID {} not found - fallback to score", w);
                 if final_blue_score > final_red_score {
-                    make_participant(p1_id, p1_name, p1_club)
+                    make_participant(p1_id, p1_name.clone(), p1_club.clone())
                 } else if final_red_score > final_blue_score {
-                    make_participant(p2_id, p2_name, p2_club)
+                    make_participant(p2_id, p2_name.clone(), p2_club.clone())
                 } else {
                     serde_json::Value::Null
                 }
             }
         } else {
-            serde_json::Value::Null
+            println!("[finish_match] No winner_id, determining by score: blue={}, red={}", final_blue_score, final_red_score);
+            if final_blue_score > final_red_score {
+                make_participant(p1_id, p1_name.clone(), p1_club.clone())
+            } else if final_red_score > final_blue_score {
+                make_participant(p2_id, p2_name.clone(), p2_club.clone())
+            } else {
+                serde_json::Value::Null
+            }
         };
 
         if !winner_participant_json.is_null() {
@@ -2722,16 +2692,18 @@ impl ApiClient {
             let full_name_lower = full_name.to_lowercase();
             let club_name = f["club_name"].as_str().map(String::from);
             let gender = f["gender"].as_str().map(String::from);
+            let birth_date = f["birth_date"].as_str().map(String::from);
 
             sqlx::query(
-                "INSERT INTO fighters_cache (fighter_id, full_name, full_name_lower, club_name, gender)
-                 VALUES (?, ?, ?, ?, ?)"
+                "INSERT INTO fighters_cache (fighter_id, full_name, full_name_lower, club_name, gender, birth_date)
+                 VALUES (?, ?, ?, ?, ?, ?)"
             )
             .bind(id)
             .bind(&full_name)
             .bind(&full_name_lower)
             .bind(&club_name)
             .bind(&gender)
+            .bind(&birth_date)
             .execute(self.db.as_ref())
             .await?;
         }
