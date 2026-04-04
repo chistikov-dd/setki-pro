@@ -13,6 +13,7 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [syncedCount, setSyncedCount] = useState<number>(0);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -20,7 +21,8 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
     setErrorMessage('');
 
     try {
-      await syncChanges();
+      const count = await syncChanges();
+      setSyncedCount(count);
       setSyncStatus('success');
       setLastSyncTime(new Date());
     } catch (error) {
@@ -55,7 +57,9 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
               <CheckCircle className="w-5 h-5 text-green-600" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-green-900">
-                  Синхронизация завершена
+                  {syncedCount > 0
+                    ? `Выгружено матчей: ${syncedCount}`
+                    : 'Нет новых данных для выгрузки'}
                 </p>
                 <p className="text-xs text-green-700">
                   Последняя синхронизация: {formatTime(lastSyncTime)}

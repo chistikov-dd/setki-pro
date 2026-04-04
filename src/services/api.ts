@@ -164,8 +164,8 @@ export async function getCachedBracketsWithMatches(tournamentId: number): Promis
 /**
  * Синхронизировать изменения с сервером (setki.pro)
  */
-export async function syncChanges(): Promise<void> {
-  return await invoke('sync_changes');
+export async function syncChanges(): Promise<number> {
+  return await invoke<number>('sync_changes');
 }
 
 /**

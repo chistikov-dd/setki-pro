@@ -60,9 +60,9 @@ export function useSyncWorker({
         onSyncStart?.();
 
         // Определяем какую функцию синхронизации использовать
-        const syncFn = serverMode?.mode === 'local-client' && serverMode.serverUrl
+        const syncFn: () => Promise<void> = serverMode?.mode === 'local-client' && serverMode.serverUrl
           ? () => syncToLocalServer(serverMode.serverUrl!)
-          : () => syncChanges();
+          : async () => { await syncChanges(); };
 
         // Вызываем с retry logic
         await retrySync(syncFn, {
@@ -118,9 +118,9 @@ export function useSyncWorker({
       onSyncStart?.();
 
       // Определяем какую функцию синхронизации использовать
-      const syncFn = serverMode?.mode === 'local-client' && serverMode?.serverUrl
+      const syncFn: () => Promise<void> = serverMode?.mode === 'local-client' && serverMode?.serverUrl
         ? () => syncToLocalServer(serverMode.serverUrl!)
-        : () => syncChanges();
+        : async () => { await syncChanges(); };
 
       await retrySync(syncFn, {
         shouldRetry: (error) => isRetryableError(error),

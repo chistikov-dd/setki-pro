@@ -924,7 +924,7 @@ impl ApiClient {
     }
 
     // Синхронизировать изменения с сервером
-    pub async fn sync_changes(&self) -> Result<()> {
+    pub async fn sync_changes(&self) -> Result<u32> {
         let token = self.get_token().await?
             .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
 
@@ -935,20 +935,16 @@ impl ApiClient {
         .fetch_all(self.db.as_ref())
         .await?;
 
+        let mut synced_count: u32 = 0;
+
         for (id, _match_id, data) in records {
             // Проверить тип действия
             let data_json: serde_json::Value = serde_json::from_str(&data).unwrap_or(serde_json::json!({}));
             let action = data_json.get("action").and_then(|v| v.as_str());
 
             // TODO: Backend API не поддерживает синхронизацию продвижения участников и редактирований сеток
-            // Нужно добавить отдельные endpoints на backend:
-            // - /desktop/sync/participants для продвижения победителей
-            // - /desktop/sync/bracket_edits для редактирования участников
-            // Пока это критично только для online режима; в offline режиме всё работает через локальный сервер
             if action == Some("update_participant") {
-                println!("[sync_changes] WARNING: Participant advancement sync not supported in online mode (requires backend API update)");
-                println!("[sync_changes] Skipping sync for participant update, data: {}", data);
-                // Пометить как synced чтобы не пытаться бесконечно
+                println!("[sync_changes] Skipping participant advancement (not supported in online mode)");
                 sqlx::query(
                     "UPDATE sync_queue SET synced = 1, synced_at = datetime('now') WHERE id = ?"
                 )
@@ -959,9 +955,7 @@ impl ApiClient {
             }
 
             if data_json.get("type").and_then(|v| v.as_str()) == Some("bracket_edit") {
-                println!("[sync_changes] WARNING: Bracket edit sync not supported in online mode (requires backend API update)");
-                println!("[sync_changes] Skipping sync for bracket edit, data: {}", data);
-                // Пометить как synced чтобы не пытаться бесконечно
+                println!("[sync_changes] Skipping bracket edit (not supported in online mode)");
                 sqlx::query(
                     "UPDATE sync_queue SET synced = 1, synced_at = datetime('now') WHERE id = ?"
                 )
@@ -982,22 +976,28 @@ impl ApiClient {
 
             match response {
                 Ok(resp) if resp.status().is_success() => {
-                    // Пометить как синхронизированное
                     sqlx::query(
                         "UPDATE sync_queue SET synced = 1, synced_at = datetime('now') WHERE id = ?"
                     )
                     .bind(id)
                     .execute(self.db.as_ref())
                     .await?;
+                    synced_count += 1;
                 },
-                _ => {
-                    // Пропустить, попробуем позже
-                    continue;
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    println!("[sync_changes] ERROR: Server returned {} for match sync. Body: {}", status, body);
+                    // Не помечаем как synced — попробуем позже
+                },
+                Err(e) => {
+                    println!("[sync_changes] ERROR: Network error during match sync: {}", e);
                 }
             }
         }
 
-        Ok(())
+        println!("[sync_changes] Synced {} matches to server", synced_count);
+        Ok(synced_count)
     }
 
     // Синхронизация с локальным сервером админа (для local-client режима)
@@ -2460,8 +2460,8 @@ impl ApiClient {
 
             // Вычислить параметры следующего матча
                 let next_round = current_round + 1;
-                // Нумерация матчей начинается с 1, поэтому формула: (current_match_number + 1) / 2
-                let next_match_number = (current_match_number + 1) / 2;
+                // Нумерация match_number начинается с 0: матчи 0,1 → следующий 0; матчи 2,3 → следующий 1
+                let next_match_number = current_match_number / 2;
                 println!("[finish_match] Next match calculation - current_round: {}, current_match_number: {}, next_round: {}, next_match_number: {}",
                          current_round, current_match_number, next_round, next_match_number);
 

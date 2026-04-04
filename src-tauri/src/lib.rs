@@ -445,7 +445,7 @@ async fn is_tournament_downloaded(
 #[tauri::command]
 async fn sync_changes(
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     state.api_client
         .sync_changes()
         .await
@@ -3446,6 +3446,139 @@ async fn get_tournament_places_inner(
     Ok(result)
 }
 
+/// Получить все данные для формирования протокола турнира
+#[tauri::command]
+async fn get_report_data(
+    tournament_id: i32,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    use sqlx::Row;
+    let pool = &state.db_pool;
+
+    // 1. Информация о турнире из tournaments_cache (JSON blob)
+    let tournament_info: Option<(String,)> = sqlx::query_as(
+        "SELECT data FROM tournaments_cache WHERE tournament_id = ?"
+    )
+    .bind(tournament_id)
+    .fetch_optional(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let tournament_json: serde_json::Value = if let Some((data,)) = tournament_info {
+        serde_json::from_str(&data).unwrap_or(serde_json::Value::Null)
+    } else {
+        serde_json::Value::Null
+    };
+
+    // 2. PIN-код и название турнира из cached_pins (fallback)
+    let pin_info: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT pin_code, tournament_name FROM cached_pins WHERE tournament_id = ?"
+    )
+    .bind(tournament_id)
+    .fetch_optional(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 3. Все сетки турнира
+    let bracket_rows = sqlx::query(
+        "SELECT bracket_id, category_name, weight_min, weight_max, gender,
+                sport_name, bracket_type, total_rounds, status
+         FROM brackets_cache
+         WHERE tournament_id = ?
+         ORDER BY category_name"
+    )
+    .bind(tournament_id)
+    .fetch_all(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 4. Все матчи турнира
+    let match_rows = sqlx::query(
+        "SELECT m.match_id, m.bracket_id, m.round_number, m.match_number,
+                m.p1_id, m.p1_name, m.p1_club,
+                m.p2_id, m.p2_name, m.p2_club,
+                m.score_p1, m.score_p2, m.warnings_p1, m.warnings_p2,
+                m.winner_id, m.result_type, m.status
+         FROM matches_cache m
+         JOIN brackets_cache b ON m.bracket_id = b.bracket_id
+         WHERE b.tournament_id = ?
+         ORDER BY m.bracket_id, m.round_number, m.match_number"
+    )
+    .bind(tournament_id)
+    .fetch_all(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 5. Места участников
+    let places_rows = sqlx::query(
+        "SELECT bracket_id, bracket_name, place, fighter_id, fighter_name, club_name
+         FROM tournament_places
+         WHERE tournament_id = ?
+         ORDER BY bracket_id, place"
+    )
+    .bind(tournament_id)
+    .fetch_all(pool.as_ref())
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Формируем ответ
+    let brackets: Vec<serde_json::Value> = bracket_rows.iter().map(|row| {
+        serde_json::json!({
+            "bracket_id": row.get::<i32, _>("bracket_id"),
+            "category_name": row.get::<Option<String>, _>("category_name"),
+            "weight_min": row.get::<Option<f64>, _>("weight_min"),
+            "weight_max": row.get::<Option<f64>, _>("weight_max"),
+            "gender": row.get::<Option<String>, _>("gender"),
+            "sport_name": row.get::<Option<String>, _>("sport_name"),
+            "bracket_type": row.get::<Option<String>, _>("bracket_type"),
+            "total_rounds": row.get::<Option<i32>, _>("total_rounds"),
+            "status": row.get::<String, _>("status"),
+        })
+    }).collect();
+
+    let matches: Vec<serde_json::Value> = match_rows.iter().map(|row| {
+        serde_json::json!({
+            "match_id": row.get::<i32, _>("match_id"),
+            "bracket_id": row.get::<i32, _>("bracket_id"),
+            "round_number": row.get::<i32, _>("round_number"),
+            "match_number": row.get::<i32, _>("match_number"),
+            "p1_id": row.get::<Option<i32>, _>("p1_id"),
+            "p1_name": row.get::<Option<String>, _>("p1_name"),
+            "p1_club": row.get::<Option<String>, _>("p1_club"),
+            "p2_id": row.get::<Option<i32>, _>("p2_id"),
+            "p2_name": row.get::<Option<String>, _>("p2_name"),
+            "p2_club": row.get::<Option<String>, _>("p2_club"),
+            "score_p1": row.get::<i32, _>("score_p1"),
+            "score_p2": row.get::<i32, _>("score_p2"),
+            "warnings_p1": row.get::<i32, _>("warnings_p1"),
+            "warnings_p2": row.get::<i32, _>("warnings_p2"),
+            "winner_id": row.get::<Option<i32>, _>("winner_id"),
+            "result_type": row.get::<Option<String>, _>("result_type"),
+            "status": row.get::<String, _>("status"),
+        })
+    }).collect();
+
+    let places: Vec<serde_json::Value> = places_rows.iter().map(|row| {
+        serde_json::json!({
+            "bracket_id": row.get::<i32, _>("bracket_id"),
+            "bracket_name": row.get::<Option<String>, _>("bracket_name"),
+            "place": row.get::<i32, _>("place"),
+            "fighter_id": row.get::<Option<i32>, _>("fighter_id"),
+            "fighter_name": row.get::<String, _>("fighter_name"),
+            "club_name": row.get::<Option<String>, _>("club_name"),
+        })
+    }).collect();
+
+    Ok(serde_json::json!({
+        "tournament": tournament_json,
+        "pin_code": pin_info.as_ref().map(|(p, _)| p.clone()),
+        "tournament_name_cached": pin_info.as_ref().and_then(|(_, n)| n.clone()),
+        "brackets": brackets,
+        "matches": matches,
+        "places": places,
+    }))
+}
+
 /// Очистка синхронизированных записей из sync_queue
 /// Удаляет записи старше 7 дней, которые уже успешно синхронизированы с сервером
 #[tauri::command]
@@ -3613,7 +3746,8 @@ pub fn run() {
             search_fighters,
             cancel_match,
             compute_tournament_places,
-            get_tournament_places
+            get_tournament_places,
+            get_report_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
