@@ -453,6 +453,20 @@ async fn sync_changes(
 }
 
 #[tauri::command]
+async fn reset_sync_flags(
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let pool = state.api_client.db.as_ref();
+    let result = sqlx::query(
+        "UPDATE matches_cache SET synced_to_server = 0 WHERE status = 'completed' AND match_id > 0"
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(result.rows_affected() as u32)
+}
+
+#[tauri::command]
 async fn sync_to_local_server(
     server_url: String,
     state: State<'_, AppState>,
@@ -3701,6 +3715,7 @@ pub fn run() {
             get_cached_brackets_with_matches,
             is_tournament_downloaded,
             sync_changes,
+            reset_sync_flags,
             sync_to_local_server,
             get_tournaments,
             get_tournament_details,

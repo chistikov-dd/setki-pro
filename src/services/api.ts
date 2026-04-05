@@ -168,6 +168,10 @@ export async function syncChanges(): Promise<number> {
   return await invoke<number>('sync_changes');
 }
 
+export async function resetSyncFlags(): Promise<number> {
+  return await invoke<number>('reset_sync_flags');
+}
+
 /**
  * Синхронизировать изменения с локальным сервером админа
  */

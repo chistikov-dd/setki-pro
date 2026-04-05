@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle, Upload } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { syncChanges } from '../../services/api';
+import { syncChanges, resetSyncFlags } from '../../services/api';
 
 interface SyncProgressProps {
   tournamentId: number;
@@ -21,6 +21,25 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
     setErrorMessage('');
 
     try {
+      const count = await syncChanges();
+      setSyncedCount(count);
+      setSyncStatus('success');
+      setLastSyncTime(new Date());
+    } catch (error) {
+      setSyncStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Ошибка синхронизации');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleForceSync = async () => {
+    setIsSyncing(true);
+    setSyncStatus('idle');
+    setErrorMessage('');
+
+    try {
+      await resetSyncFlags();
       const count = await syncChanges();
       setSyncedCount(count);
       setSyncStatus('success');
@@ -122,6 +141,18 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
                 Выгрузить результаты
               </>
             )}
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={handleForceSync}
+            disabled={isSyncing}
+            fullWidth
+            size="sm"
+            className="mt-2"
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Выгрузить повторно
           </Button>
 
           {/* Last Sync Time (Idle state) */}
