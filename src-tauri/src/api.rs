@@ -1010,9 +1010,11 @@ impl ApiClient {
         println!("[sync_changes] Found {} completed matches in cache to sync", cache_records.len());
 
         if !cache_records.is_empty() {
-            let matches_payload: Vec<serde_json::Value> = cache_records.iter().map(|(match_id, _p1, _p2, winner_id, score_p1, score_p2)| {
+            let matches_payload: Vec<serde_json::Value> = cache_records.iter().map(|(match_id, p1_id, p2_id, winner_id, score_p1, score_p2)| {
                 serde_json::json!({
                     "match_id": match_id,
+                    "participant1_id": p1_id,
+                    "participant2_id": p2_id,
                     "fighter1_score": score_p1,
                     "fighter2_score": score_p2,
                     "winner_id": winner_id,
