@@ -456,14 +456,10 @@ async fn sync_changes(
 async fn reset_sync_flags(
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let pool = state.api_client.db.as_ref();
-    let result = sqlx::query(
-        "UPDATE matches_cache SET synced_to_server = 0 WHERE status = 'completed' AND match_id > 0"
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(result.rows_affected() as u32)
+    state.api_client
+        .reset_sync_flags()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -924,6 +924,15 @@ impl ApiClient {
     }
 
     // Синхронизировать изменения с сервером
+    pub async fn reset_sync_flags(&self) -> Result<u32> {
+        let result = sqlx::query(
+            "UPDATE matches_cache SET synced_to_server = 0 WHERE status = 'completed' AND match_id > 0"
+        )
+        .execute(self.db.as_ref())
+        .await?;
+        Ok(result.rows_affected() as u32)
+    }
+
     pub async fn sync_changes(&self) -> Result<u32> {
         let token = self.get_token().await?
             .ok_or_else(|| anyhow::anyhow!("Не авторизован"))?;
