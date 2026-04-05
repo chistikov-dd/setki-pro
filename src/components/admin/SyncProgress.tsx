@@ -144,7 +144,7 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
           </Button>
 
           <Button
-            variant="outline"
+            variant="secondary"
             onClick={handleForceSync}
             disabled={isSyncing}
             fullWidth
