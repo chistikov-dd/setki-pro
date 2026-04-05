@@ -90,6 +90,18 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
             </ul>
           </div>
 
+          {/* Progress bar */}
+          {isSyncing && (
+            <div className="w-full">
+              <div className="flex justify-between text-xs text-gray-600 mb-1">
+                <span>Выгрузка на сервер...</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div className="bg-blue-500 h-2 rounded-full animate-pulse w-full" />
+              </div>
+            </div>
+          )}
+
           {/* Sync Button */}
           <Button
             variant="primary"
@@ -102,7 +114,7 @@ export const SyncProgress = ({ tournamentId: _tournamentId }: SyncProgressProps)
             {isSyncing ? (
               <>
                 <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
-                Синхронизация...
+                Выгрузка...
               </>
             ) : (
               <>
