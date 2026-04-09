@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tauri::{Manager, State, AppHandle};
 use serde::{Deserialize, Serialize};
 use chrono::Utc;
+use reqwest;
 
 use tokio::sync::{RwLock, Mutex};
 use std::sync::Mutex as StdMutex;
@@ -209,6 +210,145 @@ async fn login_by_pin(
     state.logger.info("[login_by_pin] SUCCESS - returning response");
     state.logger.info("========== LOGIN_BY_PIN END ==========");
     Ok(response)
+}
+
+#[tauri::command]
+async fn login_as_secretary(
+    pin_code: String,
+    secretary_name: String,
+    server_url: String,
+    state: State<'_, AppState>,
+) -> Result<AuthResponse, String> {
+    let api_client = Arc::new(ApiClient::new(
+        server_url,
+        Arc::clone(&state.db_pool),
+        Arc::clone(&state.logger),
+    ));
+
+    let mut response = api_client
+        .login_as_secretary(pin_code.clone(), secretary_name.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Сохранить токен секретаря в judge_auth для последующего использования
+    api_client
+        .save_judge_session(&pin_code, &secretary_name, -1, response.tournament_id, &response.access_token)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    response.judge_name = Some(secretary_name);
+    Ok(response)
+}
+
+#[tauri::command]
+async fn download_secretary_data(
+    tournament_id: i32,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    state.api_client
+        .download_secretary_data(tournament_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_secretary_participants(
+    tournament_id: i32,
+    search: Option<String>,
+    server_url: String,
+    access_token: String,
+    _state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let token = access_token;
+
+    let search_param = search.as_deref().unwrap_or("");
+    let url = format!(
+        "{}/api/v1/secretary/participants?tournament_id={}{}",
+        server_url.trim_end_matches('/'),
+        tournament_id,
+        if search_param.chars().count() >= 3 {
+            format!("&search={}", search_param.replace(' ', "%20"))
+        } else {
+            String::new()
+        }
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Ошибка получения данных: {}", response.status()));
+    }
+
+    let data: Vec<serde_json::Value> = response.json().await.map_err(|e| e.to_string())?;
+    Ok(data)
+}
+
+#[tauri::command]
+async fn confirm_secretary_participant(
+    fighter_id: i32,
+    tournament_id: i32,
+    server_url: String,
+    access_token: String,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    let token = access_token;
+
+    let url = format!("{}/api/v1/secretary/confirm", server_url.trim_end_matches('/'));
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({
+            "fighter_id": fighter_id,
+            "tournament_id": tournament_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Ошибка подтверждения: {}", response.status()));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_secretary_stats(
+    tournament_id: i32,
+    server_url: String,
+    access_token: String,
+    _state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let token = access_token;
+
+    let url = format!(
+        "{}/api/v1/secretary/stats?tournament_id={}",
+        server_url.trim_end_matches('/'),
+        tournament_id
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Ошибка получения статистики: {}", response.status()));
+    }
+
+    let data: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok(data)
 }
 
 #[tauri::command]
@@ -3758,7 +3898,12 @@ pub fn run() {
             cancel_match,
             compute_tournament_places,
             get_tournament_places,
-            get_report_data
+            get_report_data,
+            login_as_secretary,
+            download_secretary_data,
+            get_secretary_participants,
+            confirm_secretary_participant,
+            get_secretary_stats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

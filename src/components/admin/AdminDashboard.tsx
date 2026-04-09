@@ -60,6 +60,7 @@ export const AdminDashboard = () => {
   const [serverIp, setServerIp] = useState<string | null>(null);
   const [adminCalls, setAdminCalls] = useState<AdminCall[]>([]);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isDownloadingSecretaryData, setIsDownloadingSecretaryData] = useState(false);
 
   const addAdminCall = useCallback((event: { table_number: number; judge_name: string | null; message: string | null; timestamp: string }) => {
     setAdminCalls(prev => {
@@ -268,6 +269,24 @@ export const AdminDashboard = () => {
       showToast(`Ошибка: ${msg}`, 'error', 8000);
     } finally {
       setIsDownloadingFighters(false);
+    }
+  };
+
+  // Скачать данные для секретаря (взвешивание)
+  const handleDownloadSecretaryData = async () => {
+    if (!currentSession) return;
+    setIsDownloadingSecretaryData(true);
+    try {
+      const count = await invoke<number>('download_secretary_data', {
+        tournamentId: currentSession.tournament_id,
+      });
+      showToast(`Данные секретаря загружены: ${count} участников`, 'success', 3000);
+    } catch (error) {
+      const msg = String(error);
+      console.error('Ошибка загрузки данных секретаря:', msg);
+      showToast(`Ошибка: ${msg}`, 'error', 8000);
+    } finally {
+      setIsDownloadingSecretaryData(false);
     }
   };
 
@@ -578,6 +597,15 @@ export const AdminDashboard = () => {
                     className="w-full text-sm text-gray-400 hover:text-gray-200"
                   >
                     {isDownloadingFighters ? 'Загрузка спортсменов...' : 'Скачать базу спортсменов'}
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    onClick={handleDownloadSecretaryData}
+                    disabled={isDownloadingSecretaryData}
+                    className="w-full text-sm text-teal-500 hover:text-teal-300"
+                  >
+                    {isDownloadingSecretaryData ? 'Загрузка данных...' : 'Скачать данные для секретаря'}
                   </Button>
 
                   {isTournamentCached && (

@@ -397,10 +397,25 @@ function TournamentBracketBase({ matches, onStartMatch, onUndoMatch, categoryNam
         {/* Категория турнирной сетки */}
         {categoryName && (
           <div className="mb-6 pb-4 border-b-2 border-gray-300">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <h3 className="text-2xl font-bold text-gray-900">
                 Категория: {categoryName}
               </h3>
+              {/* Легенда цветов */}
+              <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-4 rounded bg-red-50 border border-red-300 inline-block shrink-0" />
+                  Не прошёл регистрацию
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-4 rounded bg-green-50 border border-green-300 inline-block shrink-0" />
+                  Победитель
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-4 rounded bg-gray-200 border border-gray-300 inline-block shrink-0" />
+                  Проигравший
+                </span>
+              </div>
             </div>
             {isEditMode && (
               <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">

@@ -357,6 +357,12 @@ pub async fn start_server(
         .route("/api/v1/desktop/brackets/release", post(release_bracket_handler))
         .route("/api/v1/desktop/brackets/create", post(create_empty_bracket_handler))
 
+        // Secretary endpoints (взвешивание)
+        .route("/api/v1/secretary/participants", get(get_secretary_participants_handler))
+        .route("/api/v1/secretary/participants/:fighter_id", get(get_secretary_participant_handler))
+        .route("/api/v1/secretary/confirm", post(confirm_secretary_participant_handler))
+        .route("/api/v1/secretary/stats", get(get_secretary_stats_handler))
+
         // Применяем auth_middleware ко всем HTTP endpoints
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
 
@@ -2364,6 +2370,7 @@ pub enum AppError {
     Conflict(String),
     Internal(String),
     ValidationError(String),
+    NotFound(String),
 }
 
 impl From<sqlx::Error> for AppError {
@@ -2392,6 +2399,9 @@ impl IntoResponse for AppError {
             }
             AppError::ValidationError(msg) => {
                 (StatusCode::BAD_REQUEST, msg)
+            }
+            AppError::NotFound(msg) => {
+                (StatusCode::NOT_FOUND, msg)
             }
         };
 
@@ -2638,6 +2648,227 @@ async fn call_admin_handler(
     let _ = state.admin_events_channel.send(event.to_string());
 
     Ok(Json(serde_json::json!({ "status": "sent" })))
+}
+
+// ============================================================
+// Secretary handlers (взвешивание)
+// ============================================================
+
+#[derive(Deserialize)]
+struct SecretaryParticipantsQuery {
+    tournament_id: i32,
+    search: Option<String>,
+}
+
+async fn get_secretary_participants_handler(
+    State(state): State<LocalServerState>,
+    Query(params): Query<SecretaryParticipantsQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    use sqlx::Row;
+
+    let search = params.search.unwrap_or_default();
+    let rows = if search.chars().count() >= 3 {
+        let pattern = format!("%{}%", search.to_lowercase());
+        sqlx::query(
+            "SELECT fighter_id, full_name, club_name, birth_date, declared_weight,
+                    entries_json, is_confirmed, confirmed_at
+             FROM secretary_data_cache
+             WHERE tournament_id = ? AND full_name_lower LIKE ?
+             ORDER BY full_name
+             LIMIT 50"
+        )
+        .bind(params.tournament_id)
+        .bind(&pattern)
+        .fetch_all(&*state.db)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT fighter_id, full_name, club_name, birth_date, declared_weight,
+                    entries_json, is_confirmed, confirmed_at
+             FROM secretary_data_cache
+             WHERE tournament_id = ?
+             ORDER BY full_name
+             LIMIT 100"
+        )
+        .bind(params.tournament_id)
+        .fetch_all(&*state.db)
+        .await?
+    };
+
+    let result: Vec<serde_json::Value> = rows.iter().map(|row| {
+        let entries_json: Option<String> = row.get("entries_json");
+        let entries: serde_json::Value = entries_json
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(serde_json::json!([]));
+
+        serde_json::json!({
+            "fighter_id": row.get::<i32, _>("fighter_id"),
+            "full_name": row.get::<String, _>("full_name"),
+            "club_name": row.get::<Option<String>, _>("club_name").unwrap_or_default(),
+            "birth_date": row.get::<Option<String>, _>("birth_date").unwrap_or_default(),
+            "declared_weight": row.get::<Option<f64>, _>("declared_weight"),
+            "entries": entries,
+            "is_confirmed": row.get::<i32, _>("is_confirmed") != 0,
+            "confirmed_at": row.get::<Option<String>, _>("confirmed_at"),
+        })
+    }).collect();
+
+    Ok(Json(result))
+}
+
+async fn get_secretary_participant_handler(
+    State(state): State<LocalServerState>,
+    Path(fighter_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use sqlx::Row;
+
+    let row = sqlx::query(
+        "SELECT fighter_id, full_name, club_name, birth_date, declared_weight,
+                entries_json, is_confirmed, confirmed_at
+         FROM secretary_data_cache
+         WHERE fighter_id = ?"
+    )
+    .bind(fighter_id)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    match row {
+        None => Err(AppError::NotFound("Участник не найден".to_string())),
+        Some(row) => {
+            let entries_json: Option<String> = row.get("entries_json");
+            let entries: serde_json::Value = entries_json
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or(serde_json::json!([]));
+
+            Ok(Json(serde_json::json!({
+                "fighter_id": row.get::<i32, _>("fighter_id"),
+                "full_name": row.get::<String, _>("full_name"),
+                "club_name": row.get::<Option<String>, _>("club_name").unwrap_or_default(),
+                "birth_date": row.get::<Option<String>, _>("birth_date").unwrap_or_default(),
+                "declared_weight": row.get::<Option<f64>, _>("declared_weight"),
+                "entries": entries,
+                "is_confirmed": row.get::<i32, _>("is_confirmed") != 0,
+                "confirmed_at": row.get::<Option<String>, _>("confirmed_at"),
+            })))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ConfirmParticipantRequest {
+    fighter_id: i32,
+    tournament_id: i32,
+}
+
+async fn confirm_secretary_participant_handler(
+    State(state): State<LocalServerState>,
+    Json(payload): Json<ConfirmParticipantRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    sqlx::query(
+        "UPDATE secretary_data_cache
+         SET is_confirmed = 1, confirmed_at = datetime('now')
+         WHERE fighter_id = ? AND tournament_id = ?"
+    )
+    .bind(payload.fighter_id)
+    .bind(payload.tournament_id)
+    .execute(&*state.db)
+    .await?;
+
+    // Обновить флаги is_confirmed в matches_cache чтобы судьи видели изменение
+    sqlx::query(
+        "UPDATE matches_cache SET p1_confirmed = 1
+         WHERE p1_id = ? AND tournament_id = ?"
+    )
+    .bind(payload.fighter_id)
+    .bind(payload.tournament_id)
+    .execute(&*state.db)
+    .await?;
+
+    sqlx::query(
+        "UPDATE matches_cache SET p2_confirmed = 1
+         WHERE p2_id = ? AND tournament_id = ?"
+    )
+    .bind(payload.fighter_id)
+    .bind(payload.tournament_id)
+    .execute(&*state.db)
+    .await?;
+
+    // Отправить WebSocket-событие всем судьям через admin_events_channel
+    let event = serde_json::json!({
+        "type": "participant_confirmed",
+        "fighter_id": payload.fighter_id,
+        "tournament_id": payload.tournament_id,
+    });
+    let _ = state.admin_events_channel.send(event.to_string());
+
+    Ok(Json(serde_json::json!({ "status": "confirmed" })))
+}
+
+#[derive(Deserialize)]
+struct SecretaryStatsQuery {
+    tournament_id: i32,
+}
+
+async fn get_secretary_stats_handler(
+    State(state): State<LocalServerState>,
+    Query(params): Query<SecretaryStatsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use sqlx::Row;
+
+    // Общий счётчик
+    let totals: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT COUNT(*), SUM(CASE WHEN is_confirmed = 1 THEN 1 ELSE 0 END)
+         FROM secretary_data_cache WHERE tournament_id = ?"
+    )
+    .bind(params.tournament_id)
+    .fetch_optional(&*state.db)
+    .await?;
+
+    let (total, confirmed) = totals.unwrap_or((0, 0));
+
+    // Счётчик по видам спорта (из entries_json)
+    // Используем упрощённый подход: группируем по полю sport_name из entries_json
+    // Так как SQLite не поддерживает JSON_EACH без расширений — агрегируем в Rust
+    let rows = sqlx::query(
+        "SELECT entries_json, is_confirmed
+         FROM secretary_data_cache WHERE tournament_id = ? AND entries_json IS NOT NULL"
+    )
+    .bind(params.tournament_id)
+    .fetch_all(&*state.db)
+    .await?;
+
+    let mut sport_map: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
+    for row in &rows {
+        let entries_json: Option<String> = row.get("entries_json");
+        let is_confirmed: i32 = row.get("is_confirmed");
+        if let Some(json_str) = entries_json {
+            if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str) {
+                for entry in entries {
+                    if let Some(sport) = entry.get("sport_name").and_then(|v| v.as_str()) {
+                        let counter = sport_map.entry(sport.to_string()).or_insert((0, 0));
+                        counter.0 += 1;
+                        if is_confirmed != 0 {
+                            counter.1 += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let by_sport: Vec<serde_json::Value> = sport_map.iter().map(|(sport, (t, c))| {
+        serde_json::json!({
+            "sport_name": sport,
+            "total": t,
+            "confirmed": c,
+        })
+    }).collect();
+
+    Ok(Json(serde_json::json!({
+        "total": total,
+        "confirmed": confirmed,
+        "by_sport": by_sport,
+    })))
 }
 
 // Поиск спортсменов из fighters_cache (для автодополнения у судей)

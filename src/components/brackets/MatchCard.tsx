@@ -106,6 +106,10 @@ function MatchCardBase({
   const isParticipant1Loser = isCompleted && match.winner_id && !isParticipant1Winner && match.participant1;
   const isParticipant2Loser = isCompleted && match.winner_id && !isParticipant2Winner && match.participant2;
 
+  // Не прошёл регистрацию у секретаря (is_confirmed === false при наличии участника)
+  const isParticipant1NotConfirmed = match.participant1 && match.participant1.is_confirmed === false;
+  const isParticipant2NotConfirmed = match.participant2 && match.participant2.is_confirmed === false;
+
   // Текст кнопки в зависимости от статуса
   const getButtonText = () => {
     if (canStart) return 'Начать';
@@ -156,6 +160,7 @@ function MatchCardBase({
             py-1.5 px-2 flex-1 flex items-center relative select-none transition-all
             ${isParticipant1Winner ? 'bg-green-50' : ''}
             ${isParticipant1Loser ? 'bg-gray-200 opacity-60' : ''}
+            ${isParticipant1NotConfirmed && !isParticipant1Winner && !isParticipant1Loser ? 'bg-red-50' : ''}
             ${canEdit && participant1Name ? 'cursor-move hover:bg-blue-50' : ''}
             ${dragOverSlot === 'participant1' ? 'bg-blue-100 ring-2 ring-blue-500' : ''}
             ${isSelected?.(match.id, 'participant1') ? 'bg-blue-200 ring-4 ring-blue-600 shadow-lg' : ''}
@@ -326,6 +331,7 @@ function MatchCardBase({
             py-1.5 px-2 flex-1 flex items-center relative select-none transition-all
             ${isParticipant2Winner ? 'bg-green-50' : ''}
             ${isParticipant2Loser ? 'bg-gray-200 opacity-60' : ''}
+            ${isParticipant2NotConfirmed && !isParticipant2Winner && !isParticipant2Loser ? 'bg-red-50' : ''}
             ${canEdit && participant2Name ? 'cursor-move hover:bg-red-50' : ''}
             ${dragOverSlot === 'participant2' ? 'bg-red-100 ring-2 ring-red-500' : ''}
             ${isSelected?.(match.id, 'participant2') ? 'bg-red-200 ring-4 ring-red-600 shadow-lg' : ''}

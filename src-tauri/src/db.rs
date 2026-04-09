@@ -615,5 +615,55 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Таблица для кэша данных секретаря (участники + заявки для взвешивания)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS secretary_data_cache (
+            fighter_id INTEGER NOT NULL,
+            tournament_id INTEGER NOT NULL,
+            full_name TEXT NOT NULL,
+            full_name_lower TEXT NOT NULL DEFAULT '',
+            club_name TEXT,
+            birth_date TEXT,
+            declared_weight REAL,
+            entries_json TEXT,
+            is_confirmed INTEGER NOT NULL DEFAULT 0,
+            confirmed_at TEXT,
+            cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (fighter_id, tournament_id)
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_secretary_cache_tournament ON secretary_data_cache(tournament_id)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_secretary_cache_name ON secretary_data_cache(full_name_lower)")
+        .execute(pool)
+        .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_secretary_cache_confirmed ON secretary_data_cache(tournament_id, is_confirmed)")
+        .execute(pool)
+        .await?;
+
+    // Миграция: добавить поле is_confirmed в matches_cache если нет (для отображения в сетках)
+    let has_is_confirmed: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'p1_confirmed'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_is_confirmed {
+        if count == 0 {
+            println!("[DB] Adding p1_confirmed, p2_confirmed columns to matches_cache");
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN p1_confirmed INTEGER DEFAULT NULL")
+                .execute(pool)
+                .await?;
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN p2_confirmed INTEGER DEFAULT NULL")
+                .execute(pool)
+                .await?;
+        }
+    }
+
     Ok(())
 }

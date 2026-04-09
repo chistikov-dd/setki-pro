@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AuthResponse } from '../types';
-import { loginAdmin, loginByPin, logout as apiLogout, clearAllReservations, releaseTableNumber, releaseJudgeBrackets } from '../services/api';
+import { loginAdmin, loginByPin, loginAsSecretary as apiLoginAsSecretary, logout as apiLogout, clearAllReservations, releaseTableNumber, releaseJudgeBrackets } from '../services/api';
 import { ErrorFactory } from '../utils/errorHandler';
 import { logger, LOG_CATEGORIES } from '../utils/logger';
 
@@ -16,6 +16,7 @@ interface AuthState {
   loginAsAdmin: (login: string, password: string) => Promise<void>;
   loginAsAdminOffline: (login: string, userId: number) => void;
   loginAsJudge: (pinCode: string, judgeName: string, tableNumber: number) => Promise<void>;
+  loginAsSecretary: (pinCode: string, secretaryName: string, serverUrl: string) => Promise<void>;
   logout: () => void;
   clearError: () => void;
   restoreSession: () => void;
@@ -159,6 +160,35 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: false,
             isLoading: false,
             error: userFriendlyMessage,
+          });
+          throw appError;
+        }
+      },
+
+      // Login as secretary (PIN code, only LAN)
+      loginAsSecretary: async (pinCode: string, secretaryName: string, serverUrl: string) => {
+        set({ isLoading: true, error: null });
+        try {
+          const response = await apiLoginAsSecretary({ pinCode, secretaryName, serverUrl });
+
+          // Сохранить URL сервера для последующих запросов
+          const serverModeStore = (await import('./serverModeStore')).useServerModeStore.getState();
+          serverModeStore.setMode('local-client');
+          serverModeStore.setServerUrl(serverUrl);
+
+          set({
+            user: response,
+            isAuthenticated: true,
+            isLoading: false,
+            error: null,
+          });
+        } catch (error) {
+          const appError = ErrorFactory.fromTauriError(error, { secretaryName });
+          set({
+            user: null,
+            isAuthenticated: false,
+            isLoading: false,
+            error: 'Неверный PIN-код или IP сервера',
           });
           throw appError;
         }

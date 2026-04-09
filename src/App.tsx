@@ -12,11 +12,13 @@ import { getSavedCredentials, getSavedJudgeCredentials, checkUnsyncedCount } fro
 // Оптимизация: основные компоненты загружаются только при необходимости
 const AdminLogin = lazy(() => import("./components/auth/AdminLogin").then(m => ({ default: m.AdminLogin })));
 const JudgeLogin = lazy(() => import("./components/auth/JudgeLogin").then(m => ({ default: m.JudgeLogin })));
+const SecretaryLogin = lazy(() => import("./components/auth/SecretaryLogin").then(m => ({ default: m.SecretaryLogin })));
 const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard").then(m => ({ default: m.AdminDashboard })));
 const JudgeDashboard = lazy(() => import("./components/judge/JudgeDashboard").then(m => ({ default: m.JudgeDashboard })));
+const SecretaryDashboard = lazy(() => import("./components/secretary/SecretaryDashboard").then(m => ({ default: m.SecretaryDashboard })));
 const PublicDisplayPage = lazy(() => import("./pages/PublicDisplayPage").then(m => ({ default: m.PublicDisplayPage })));
 
-type AuthScreen = 'choice' | 'admin' | 'judge';
+type AuthScreen = 'choice' | 'admin' | 'judge' | 'secretary';
 
 // Loading компонент для Suspense fallback
 function LoadingSpinner() {
@@ -39,7 +41,7 @@ function App() {
   const [authScreen, setAuthScreen] = useState<AuthScreen>('choice');
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isAutoLoginInProgress, setIsAutoLoginInProgress] = useState(false);
-  const [autoLoginRole, setAutoLoginRole] = useState<'admin' | 'judge' | null>(null);
+  const [autoLoginRole, setAutoLoginRole] = useState<'admin' | 'judge' | 'secretary' | null>(null);
   const { isAuthenticated, user, loginAsAdmin, loginAsAdminOffline, loginAsJudge, logout } = useAuthStore();
   const { setMode, setServerUrl } = useServerModeStore();
 
@@ -210,7 +212,7 @@ function App() {
     );
   }
 
-  const handleSelectRole = async (role: 'admin' | 'judge') => {
+  const handleSelectRole = async (role: 'admin' | 'judge' | 'secretary') => {
     // Устанавливаем индикатор загрузки
     setIsAutoLoginInProgress(true);
     setAutoLoginRole(role);
@@ -307,8 +309,12 @@ function App() {
         }
       }
 
-      // Показываем форму входа (либо для судьи, либо если автовход не удался)
-      setAuthScreen(role);
+      // Показываем форму входа
+      if (role === 'secretary') {
+        setAuthScreen('secretary');
+      } else {
+        setAuthScreen(role);
+      }
     } finally {
       // Сбрасываем индикатор загрузки
       setIsAutoLoginInProgress(false);
@@ -338,6 +344,17 @@ function App() {
           <ConnectionStatusBanner />
           <Suspense fallback={<LoadingSpinner />}>
             <AdminDashboard />
+          </Suspense>
+        </ErrorBoundary>
+      );
+    }
+
+    // Панель секретаря (взвешивание)
+    if (user.role === 'secretary') {
+      return (
+        <ErrorBoundary>
+          <Suspense fallback={<LoadingSpinner />}>
+            <SecretaryDashboard />
           </Suspense>
         </ErrorBoundary>
       );
@@ -375,6 +392,14 @@ function App() {
       {authScreen === 'judge' && (
         <Suspense fallback={<LoadingSpinner />}>
           <JudgeLogin
+            onBack={handleBack}
+            onSuccess={handleLoginSuccess}
+          />
+        </Suspense>
+      )}
+      {authScreen === 'secretary' && (
+        <Suspense fallback={<LoadingSpinner />}>
+          <SecretaryLogin
             onBack={handleBack}
             onSuccess={handleLoginSuccess}
           />

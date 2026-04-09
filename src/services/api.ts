@@ -8,6 +8,8 @@ import type {
   MatchEvent,
   ActiveJudgeSession,
   ActiveMatch,
+  SecretaryParticipant,
+  SecretaryStats,
 } from '../types';
 
 /**
@@ -848,4 +850,76 @@ export async function clearTournamentCache(tournamentId: number): Promise<void> 
  */
 export async function cleanupSyncQueue(): Promise<number> {
   return await invoke('cleanup_sync_queue');
+}
+
+/**
+ * Вход секретаря (PIN-код + имя + IP сервера Администратора)
+ */
+export async function loginAsSecretary(data: {
+  pinCode: string;
+  secretaryName: string;
+  serverUrl: string;
+}): Promise<AuthResponse> {
+  return await invoke<AuthResponse>('login_as_secretary', {
+    pinCode: data.pinCode,
+    secretaryName: data.secretaryName,
+    serverUrl: data.serverUrl,
+  });
+}
+
+/**
+ * Скачать данные участников для секретаря (взвешивание)
+ * Выполняется на машине Администратора
+ */
+export async function downloadSecretaryData(tournamentId: number): Promise<number> {
+  return await invoke<number>('download_secretary_data', { tournamentId });
+}
+
+/**
+ * Получить список участников для секретаря с локального сервера
+ */
+export async function getSecretaryParticipants(params: {
+  tournamentId: number;
+  search?: string;
+  serverUrl: string;
+  accessToken: string;
+}): Promise<SecretaryParticipant[]> {
+  return await invoke<SecretaryParticipant[]>('get_secretary_participants', {
+    tournamentId: params.tournamentId,
+    search: params.search,
+    serverUrl: params.serverUrl,
+    accessToken: params.accessToken,
+  });
+}
+
+/**
+ * Подтвердить присутствие участника (прошёл взвешивание)
+ */
+export async function confirmSecretaryParticipant(params: {
+  fighterId: number;
+  tournamentId: number;
+  serverUrl: string;
+  accessToken: string;
+}): Promise<void> {
+  return await invoke('confirm_secretary_participant', {
+    fighterId: params.fighterId,
+    tournamentId: params.tournamentId,
+    serverUrl: params.serverUrl,
+    accessToken: params.accessToken,
+  });
+}
+
+/**
+ * Получить статистику взвешивания
+ */
+export async function getSecretaryStats(params: {
+  tournamentId: number;
+  serverUrl: string;
+  accessToken: string;
+}): Promise<SecretaryStats> {
+  return await invoke<SecretaryStats>('get_secretary_stats', {
+    tournamentId: params.tournamentId,
+    serverUrl: params.serverUrl,
+    accessToken: params.accessToken,
+  });
 }

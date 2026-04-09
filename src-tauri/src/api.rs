@@ -487,7 +487,7 @@ impl ApiClient {
     }
 
     // Получить сохранённый токен админа
-    async fn get_admin_token(&self) -> Result<Option<String>> {
+    pub async fn get_admin_token(&self) -> Result<Option<String>> {
         let record = sqlx::query_as::<_, (String,)>("SELECT token FROM auth WHERE id = 1")
             .fetch_optional(self.db.as_ref())
             .await?;
@@ -2785,5 +2785,107 @@ impl ApiClient {
 
         println!("[download_fighters] Saved {} fighters to cache", count);
         Ok(count)
+    }
+
+    // Скачать данные участников для секретаря (взвешивание)
+    pub async fn download_secretary_data(&self, tournament_id: i32) -> Result<usize> {
+        let token = self.get_admin_token().await?.unwrap_or_default();
+        let url = format!("{}/desktop/secretary/data/{}", self.base_url, tournament_id);
+
+        println!("[download_secretary_data] Downloading from {}", url);
+
+        let response = self.client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Ошибка загрузки данных секретаря: {}",
+                response.status()
+            ));
+        }
+
+        let participants: Vec<serde_json::Value> = response.json().await?;
+        let count = participants.len();
+
+        // Очистить старый кэш для этого турнира
+        sqlx::query("DELETE FROM secretary_data_cache WHERE tournament_id = ?")
+            .bind(tournament_id)
+            .execute(self.db.as_ref())
+            .await?;
+
+        for p in &participants {
+            let fighter_id = p["fighter_id"].as_i64().unwrap_or(0) as i32;
+            let full_name = p["full_name"].as_str().unwrap_or("").to_string();
+            let full_name_lower = full_name.to_lowercase();
+            let club_name = p["club_name"].as_str().map(String::from);
+            let birth_date = p["birth_date"].as_str().map(String::from);
+            let declared_weight = p["declared_weight"].as_f64();
+            let entries_json = p["entries"]
+                .as_array()
+                .map(|arr| serde_json::to_string(arr).unwrap_or_default());
+
+            sqlx::query(
+                "INSERT INTO secretary_data_cache
+                 (fighter_id, tournament_id, full_name, full_name_lower, club_name, birth_date, declared_weight, entries_json)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(fighter_id)
+            .bind(tournament_id)
+            .bind(&full_name)
+            .bind(&full_name_lower)
+            .bind(&club_name)
+            .bind(&birth_date)
+            .bind(declared_weight)
+            .bind(&entries_json)
+            .execute(self.db.as_ref())
+            .await?;
+        }
+
+        println!("[download_secretary_data] Saved {} participants to secretary_data_cache", count);
+        Ok(count)
+    }
+
+    // Вход секретаря по PIN (только локальный сервер)
+    pub async fn login_as_secretary(
+        &self,
+        pin_code: String,
+        secretary_name: String,
+    ) -> Result<AuthResponse> {
+        let url = format!("{}/desktop/auth/pin-auth", self.base_url);
+
+        #[derive(serde::Serialize)]
+        struct SecretaryLoginRequest {
+            pin_code: String,
+            judge_name: Option<String>,
+            table_number: Option<i32>,
+            role: String,
+        }
+
+        let req = SecretaryLoginRequest {
+            pin_code,
+            judge_name: Some(secretary_name.clone()),
+            table_number: None,
+            role: "secretary".to_string(),
+        };
+
+        let response = self.client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Ошибка входа секретаря: {}", response.status()));
+        }
+
+        let mut auth: AuthResponse = response.json().await?;
+        auth.role = "secretary".to_string();
+        auth.judge_name = Some(secretary_name);
+        auth.table_number = None;
+
+        Ok(auth)
     }
 }

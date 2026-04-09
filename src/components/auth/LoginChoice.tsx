@@ -1,9 +1,9 @@
 import React from 'react';
 
 interface LoginChoiceProps {
-  onSelectRole: (role: 'admin' | 'judge') => void;
+  onSelectRole: (role: 'admin' | 'judge' | 'secretary') => void;
   isAutoLoginInProgress?: boolean;
-  autoLoginRole?: 'admin' | 'judge' | null;
+  autoLoginRole?: 'admin' | 'judge' | 'secretary' | null;
 }
 
 export const LoginChoice: React.FC<LoginChoiceProps> = ({
@@ -25,7 +25,7 @@ export const LoginChoice: React.FC<LoginChoiceProps> = ({
         </div>
 
         {/* Role cards */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 lg:gap-6 mb-12 sm:mb-16 lg:mb-20">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6 mb-12 sm:mb-16 lg:mb-20">
           {/* Администратор */}
           <button
             className="group text-left bg-white rounded-xl px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10 border border-gray-400 hover:border-blue-500 hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -114,6 +114,47 @@ export const LoginChoice: React.FC<LoginChoiceProps> = ({
                   </svg>
                 </>
               )}
+            </div>
+          </button>
+
+          {/* Секретарь */}
+          <button
+            className="group text-left bg-white rounded-xl px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10 border border-gray-400 hover:border-teal-500 hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => onSelectRole('secretary')}
+            disabled={isAutoLoginInProgress}
+          >
+            {/* Icon */}
+            <div className="mb-3 sm:mb-4 lg:mb-5">
+              <div className="inline-flex p-3 sm:p-4 rounded-xl bg-teal-50 border border-teal-200">
+                {isAutoLoginInProgress && autoLoginRole === 'secretary' ? (
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-teal-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                  </svg>
+                )}
+              </div>
+            </div>
+
+            {/* Content */}
+            <h3 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 sm:mb-3 group-hover:text-teal-600 transition-colors">
+              Секретарь
+            </h3>
+            <p className="text-gray-800 text-sm sm:text-base leading-relaxed mb-4 sm:mb-5 lg:mb-6">
+              Стол взвешивания: регистрация и допуск участников
+            </p>
+
+            {/* Arrow indicator */}
+            <div className="flex items-center text-teal-600 text-sm sm:text-base font-semibold group-hover:translate-x-1 transition-transform">
+              <>
+                <span>Войти</span>
+                <svg className="w-4 h-4 sm:w-5 sm:h-5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                </svg>
+              </>
             </div>
           </button>
         </div>

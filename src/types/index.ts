@@ -37,6 +37,7 @@ export interface Participant {
   full_name: string;
   club_name?: string;
   final_weight?: number;
+  is_confirmed?: boolean; // Прошёл регистрацию у секретаря (false = красный фон в сетке)
 }
 
 export interface Match {
@@ -154,10 +155,11 @@ export interface PinLoginRequest {
 export interface AuthResponse {
   access_token: string;
   user_id: number;
-  role: 'organizer' | 'referee' | 'admin';
+  role: 'organizer' | 'referee' | 'admin' | 'secretary';
   tournament_id?: number;
   judge_name?: string; // Имя судьи (только для referee)
   table_number?: number; // Номер стола (только для referee)
+  secretary_name?: string; // Имя секретаря (только для secretary)
 }
 
 // Tournament API Responses
@@ -390,4 +392,47 @@ export interface ActiveMatch {
   status: string;
   judge_name: string | null;
   table_number: number | null;
+}
+
+// ============================================
+// Secretary Types (Взвешивание)
+// ============================================
+
+export interface SecretaryDocument {
+  id: number;
+  name: string;
+  url: string;       // URL для скачивания с LAN-сервера Администратора
+  file_type: string; // pdf, jpg, png и т.д.
+}
+
+export interface SecretaryEntry {
+  id: number;
+  category_name: string;
+  sport_name: string;
+  status: 'pending' | 'paid' | 'cancelled' | 'approved';
+  payment_status: string;
+  documents: SecretaryDocument[];
+}
+
+export interface SecretaryParticipant {
+  fighter_id: number;
+  full_name: string;
+  club_name: string;
+  birth_date: string;        // ISO date YYYY-MM-DD
+  declared_weight?: number;
+  entries: SecretaryEntry[];
+  is_confirmed: boolean;     // Прошёл регистрацию (взвешивание)
+  confirmed_at?: string;     // Время подтверждения
+}
+
+export interface SecretaryStatsBySport {
+  sport_name: string;
+  total: number;
+  confirmed: number;
+}
+
+export interface SecretaryStats {
+  total: number;
+  confirmed: number;
+  by_sport: SecretaryStatsBySport[];
 }
