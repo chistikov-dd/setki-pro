@@ -50,13 +50,15 @@ fn match_row_to_json(row: &sqlx::sqlite::SqliteRow) -> serde_json::Value {
     let winner_id:   Option<i32>    = row.get("winner_id");
     let result_type: Option<String> = row.get("result_type");
     let status:      String         = row.get("status");
-    let version:     i32            = row.get("version");
+    let version:      i32            = row.get("version");
+    let p1_confirmed: i32            = row.try_get("p1_confirmed").unwrap_or(0);
+    let p2_confirmed: i32            = row.try_get("p2_confirmed").unwrap_or(0);
 
     let participant1 = if p1_id.is_some() || p1_name.is_some() {
-        serde_json::json!({ "id": p1_id, "fighter_id": p1_id, "full_name": p1_name, "club_name": p1_club })
+        serde_json::json!({ "id": p1_id, "fighter_id": p1_id, "full_name": p1_name, "club_name": p1_club, "is_confirmed": p1_confirmed != 0 })
     } else { serde_json::Value::Null };
     let participant2 = if p2_id.is_some() || p2_name.is_some() {
-        serde_json::json!({ "id": p2_id, "fighter_id": p2_id, "full_name": p2_name, "club_name": p2_club })
+        serde_json::json!({ "id": p2_id, "fighter_id": p2_id, "full_name": p2_name, "club_name": p2_club, "is_confirmed": p2_confirmed != 0 })
     } else { serde_json::Value::Null };
 
     serde_json::json!({
@@ -532,7 +534,9 @@ async fn get_cached_brackets_with_matches(
                     p1_id, p1_name, p1_club,
                     p2_id, p2_name, p2_club,
                     score_p1, score_p2, warnings_p1, warnings_p2,
-                    winner_id, result_type, status, version
+                    winner_id, result_type, status, version,
+                    COALESCE(p1_confirmed, 0) as p1_confirmed,
+                    COALESCE(p2_confirmed, 0) as p2_confirmed
              FROM matches_cache WHERE bracket_id = ?
              ORDER BY round_number, match_number"
         )
@@ -979,7 +983,9 @@ async fn get_bracket_matches(
                     p1_id, p1_name, p1_club,
                     p2_id, p2_name, p2_club,
                     score_p1, score_p2, warnings_p1, warnings_p2,
-                    winner_id, result_type, status, version
+                    winner_id, result_type, status, version,
+                    COALESCE(p1_confirmed, 0) as p1_confirmed,
+                    COALESCE(p2_confirmed, 0) as p2_confirmed
              FROM matches_cache WHERE bracket_id = ?
              ORDER BY round_number, match_number"
         )
@@ -3104,7 +3110,9 @@ async fn get_next_match_in_bracket(
                     p1_id, p1_name, p1_club,
                     p2_id, p2_name, p2_club,
                     score_p1, score_p2, warnings_p1, warnings_p2,
-                    winner_id, result_type, status, version
+                    winner_id, result_type, status, version,
+                    COALESCE(p1_confirmed, 0) as p1_confirmed,
+                    COALESCE(p2_confirmed, 0) as p2_confirmed
              FROM matches_cache WHERE bracket_id = ?
              ORDER BY round_number, match_number"
         )
