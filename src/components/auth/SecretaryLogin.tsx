@@ -55,7 +55,7 @@ export const SecretaryLogin: React.FC<SecretaryLoginProps> = ({ onBack, onSucces
       try {
         const serverUrl = serverIp.trim().startsWith('http')
           ? serverIp.trim()
-          : `http://${serverIp.trim()}`;
+          : `http://${serverIp.trim()}:8081`;
         await loginAsSecretary(pinString, secretaryName.trim(), serverUrl);
         onSuccess?.();
       } catch {
@@ -137,7 +137,7 @@ export const SecretaryLogin: React.FC<SecretaryLoginProps> = ({ onBack, onSucces
               <Input
                 label="IP адрес сервера администратора"
                 type="text"
-                placeholder="192.168.0.101"
+                placeholder="192.168.0.101 (порт 8081 добавляется автоматически)"
                 value={serverIp}
                 onChange={(e) => setServerIp(e.target.value)}
                 disabled={isLoading}
