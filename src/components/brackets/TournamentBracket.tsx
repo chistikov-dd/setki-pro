@@ -559,20 +559,24 @@ export const TournamentBracket = memo(TournamentBracketBase, (prevProps, nextPro
   if (prevProps.categoryName !== nextProps.categoryName) return false;
   if (prevProps.bracketId !== nextProps.bracketId) return false;
 
-  // Оптимизация: сравниваем только первые 5 матчей для быстрой проверки
-  // Если хотя бы один изменился - нужен ре-рендер
-  const compareDepth = Math.min(5, prevProps.matches.length);
-  for (let i = 0; i < compareDepth; i++) {
+  // Сравниваем все матчи полностью
+  for (let i = 0; i < prevProps.matches.length; i++) {
     const prev = prevProps.matches[i];
     const next = nextProps.matches[i];
 
-    // Сравниваем критичные поля
     if (prev.id !== next.id) return false;
     if (prev.status !== next.status) return false;
+    if (prev.winner_id !== next.winner_id) return false;
+    if (prev.score_participant1 !== next.score_participant1) return false;
+    if (prev.score_participant2 !== next.score_participant2) return false;
     if (prev.participant1?.id !== next.participant1?.id) return false;
     if (prev.participant2?.id !== next.participant2?.id) return false;
     if (prev.participant1?.full_name !== next.participant1?.full_name) return false;
     if (prev.participant2?.full_name !== next.participant2?.full_name) return false;
+    if (prev.participant1?.club_name !== next.participant1?.club_name) return false;
+    if (prev.participant2?.club_name !== next.participant2?.club_name) return false;
+    if (prev.participant1?.is_confirmed !== next.participant1?.is_confirmed) return false;
+    if (prev.participant2?.is_confirmed !== next.participant2?.is_confirmed) return false;
   }
 
   // Callbacks стабильны через useCallback, не сравниваем
