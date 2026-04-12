@@ -712,30 +712,34 @@ impl ApiClient {
                     let match_id = match_data["id"].as_i64().unwrap_or(0) as i32;
 
                     // Извлекаем participant1 (поддержка нового и legacy форматов)
-                    let (p1_id, p1_name, p1_club) = if let Some(p1) = match_data.get("participant1").filter(|v| v.is_object()) {
+                    let (p1_id, p1_fighter_id, p1_name, p1_club) = if let Some(p1) = match_data.get("participant1").filter(|v| v.is_object()) {
                         (
                             p1["id"].as_i64().map(|v| v as i32),
+                            p1["fighter_id"].as_i64().map(|v| v as i32),
                             p1["full_name"].as_str().map(String::from),
                             p1["club_name"].as_str().map(String::from),
                         )
                     } else {
                         (
                             match_data["participant1_id"].as_i64().map(|v| v as i32),
+                            match_data["fighter1_id"].as_i64().map(|v| v as i32),
                             match_data["fighter1_name"].as_str().map(String::from),
                             match_data["fighter1_club"].as_str().map(String::from),
                         )
                     };
 
                     // Извлекаем participant2
-                    let (p2_id, p2_name, p2_club) = if let Some(p2) = match_data.get("participant2").filter(|v| v.is_object()) {
+                    let (p2_id, p2_fighter_id, p2_name, p2_club) = if let Some(p2) = match_data.get("participant2").filter(|v| v.is_object()) {
                         (
                             p2["id"].as_i64().map(|v| v as i32),
+                            p2["fighter_id"].as_i64().map(|v| v as i32),
                             p2["full_name"].as_str().map(String::from),
                             p2["club_name"].as_str().map(String::from),
                         )
                     } else {
                         (
                             match_data["participant2_id"].as_i64().map(|v| v as i32),
+                            match_data["fighter2_id"].as_i64().map(|v| v as i32),
                             match_data["fighter2_name"].as_str().map(String::from),
                             match_data["fighter2_club"].as_str().map(String::from),
                         )
@@ -752,9 +756,10 @@ impl ApiClient {
                     sqlx::query(
                         "INSERT OR REPLACE INTO matches_cache
                          (match_id, bracket_id, tournament_id, round_number, match_number,
-                          p1_id, p1_name, p1_club, p2_id, p2_name, p2_club,
+                          p1_id, p1_fighter_id, p1_name, p1_club,
+                          p2_id, p2_fighter_id, p2_name, p2_club,
                           score_p1, score_p2, winner_id, result_type, status, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
                     )
                     .bind(match_id)
                     .bind(bracket_id)
@@ -762,9 +767,11 @@ impl ApiClient {
                     .bind(round_number)
                     .bind(match_number)
                     .bind(p1_id)
+                    .bind(p1_fighter_id)
                     .bind(p1_name)
                     .bind(p1_club)
                     .bind(p2_id)
+                    .bind(p2_fighter_id)
                     .bind(p2_name)
                     .bind(p2_club)
                     .bind(score_p1)

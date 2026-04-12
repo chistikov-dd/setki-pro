@@ -2787,7 +2787,7 @@ async fn confirm_secretary_participant_handler(
     // Обновить флаги is_confirmed в matches_cache чтобы судьи видели изменение
     sqlx::query(
         "UPDATE matches_cache SET p1_confirmed = 1
-         WHERE p1_id = ? AND tournament_id = ?"
+         WHERE p1_fighter_id = ? AND tournament_id = ?"
     )
     .bind(payload.fighter_id)
     .bind(payload.tournament_id)
@@ -2796,7 +2796,7 @@ async fn confirm_secretary_participant_handler(
 
     sqlx::query(
         "UPDATE matches_cache SET p2_confirmed = 1
-         WHERE p2_id = ? AND tournament_id = ?"
+         WHERE p2_fighter_id = ? AND tournament_id = ?"
     )
     .bind(payload.fighter_id)
     .bind(payload.tournament_id)

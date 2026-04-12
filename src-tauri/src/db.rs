@@ -665,5 +665,23 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
         }
     }
 
+    // Миграция: добавить p1_fighter_id/p2_fighter_id для связи с секретарём
+    let has_fighter_id: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('matches_cache') WHERE name = 'p1_fighter_id'"
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some((count,)) = has_fighter_id {
+        if count == 0 {
+            println!("[DB] Adding p1_fighter_id, p2_fighter_id columns to matches_cache");
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN p1_fighter_id INTEGER DEFAULT NULL")
+                .execute(pool)
+                .await?;
+            sqlx::query("ALTER TABLE matches_cache ADD COLUMN p2_fighter_id INTEGER DEFAULT NULL")
+                .execute(pool)
+                .await?;
+        }
+    }
+
     Ok(())
 }
