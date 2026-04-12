@@ -169,29 +169,37 @@ export const JudgeDashboard: React.FC = () => {
           warnings_participant1: 0,
           warnings_participant2: 0,
           result_type: matchResponse.result_type,
-          participant1: matchResponse.participant1 || (matchResponse.participant1_id ? {
+          participant1: matchResponse.participant1 ? {
+            ...matchResponse.participant1,
+            is_confirmed: matchResponse.participant1.is_confirmed ?? matchResponse.p1_confirmed ?? false,
+          } : (matchResponse.participant1_id ? {
             id: matchResponse.participant1_id,
             fighter_id: matchResponse.participant1_id,
             full_name: matchResponse.fighter1_name || '',
-            club_name: matchResponse.fighter1_club || matchResponse.participant1?.club_name,
+            club_name: matchResponse.fighter1_club,
+            is_confirmed: matchResponse.p1_confirmed ?? false,
           } : {
-            // Всегда создаём объект участника, даже если данных нет (исправление ошибки открытия MatchScreen)
             id: 0,
             fighter_id: 0,
             full_name: '',
             club_name: undefined,
+            is_confirmed: false,
           }),
-          participant2: matchResponse.participant2 || (matchResponse.participant2_id ? {
+          participant2: matchResponse.participant2 ? {
+            ...matchResponse.participant2,
+            is_confirmed: matchResponse.participant2.is_confirmed ?? matchResponse.p2_confirmed ?? false,
+          } : (matchResponse.participant2_id ? {
             id: matchResponse.participant2_id,
             fighter_id: matchResponse.participant2_id,
             full_name: matchResponse.fighter2_name || '',
-            club_name: matchResponse.fighter2_club || matchResponse.participant2?.club_name,
+            club_name: matchResponse.fighter2_club,
+            is_confirmed: matchResponse.p2_confirmed ?? false,
           } : {
-            // Всегда создаём объект участника, даже если данных нет (исправление ошибки открытия MatchScreen)
             id: 0,
             fighter_id: 0,
             full_name: '',
             club_name: undefined,
+            is_confirmed: false,
           }),
         };
       });
