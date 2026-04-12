@@ -225,11 +225,12 @@ async fn auth_middleware(
 ) -> Result<Response, StatusCode> {
     let uri = req.uri().path();
 
-    // Пропускаем публичные endpoints (auth, health, websockets)
+    // Пропускаем публичные endpoints (auth, health, websockets, документы секретаря)
     if uri.starts_with("/api/v1/auth/")
         || uri.starts_with("/api/v1/desktop/auth/")
         || uri.starts_with("/api/v1/ws/")
         || uri.starts_with("/ws/")
+        || uri.starts_with("/api/v1/secretary/docs/")
         || uri == "/health" {
         return Ok(next.run(req).await);
     }
