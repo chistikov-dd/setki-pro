@@ -37,21 +37,24 @@ function formatBirthDate(dateStr: string): string {
 }
 
 // Статус оплаты
-function PaymentBadge({ status }: { status: string }) {
+// status — код (paid, approved, rejected, withdrawn, ...) для логики цвета
+// paymentStatus — уже готовая русская строка для отображения
+function PaymentBadge({ status, paymentStatus }: { status: string; paymentStatus?: string }) {
+  const label = paymentStatus || status;
   if (status === 'paid' || status === 'approved') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-200">
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
         </svg>
-        Оплачено
+        {label}
       </span>
     );
   }
-  if (status === 'cancelled') {
+  if (status === 'rejected' || status === 'withdrawn' || status === 'cancellation_requested') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-500 border border-gray-200">
-        Отменена
+        {label}
       </span>
     );
   }
@@ -60,7 +63,7 @@ function PaymentBadge({ status }: { status: string }) {
       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
-      Ожидает оплаты
+      {label}
     </span>
   );
 }
@@ -384,6 +387,7 @@ const ParticipantCard: React.FC<ParticipantCardProps> = ({
     const fullUrl = url.startsWith('http')
       ? url
       : `${serverUrl}/api/v1/secretary/docs/${tournamentId}/${url}`;
+    console.log('[Secretary] Opening doc:', fullUrl);
     setOpenDocUrl(fullUrl);
   };
 
@@ -452,7 +456,7 @@ const ParticipantCard: React.FC<ParticipantCardProps> = ({
                     <div className="font-medium text-gray-900 text-sm truncate">{entry.category_name}</div>
                     <div className="text-xs text-gray-500">{entry.sport_name}</div>
                   </div>
-                  <PaymentBadge status={entry.payment_status || entry.status} />
+                  <PaymentBadge status={entry.status} paymentStatus={entry.payment_status} />
                 </div>
               ))}
             </div>
@@ -524,7 +528,8 @@ interface DocumentViewerProps {
 }
 
 const DocumentViewer: React.FC<DocumentViewerProps> = ({ url, onClose }) => {
-  const isPdf = url.toLowerCase().includes('.pdf');
+  const isPdf = url.toLowerCase().split('?')[0].endsWith('.pdf');
+  const [loadError, setLoadError] = React.useState(false);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-black/80" onClick={onClose}>
@@ -533,7 +538,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ url, onClose }) => {
         className="flex items-center justify-between px-4 py-3 bg-gray-900 shrink-0"
         onClick={e => e.stopPropagation()}
       >
-        <span className="text-white text-sm font-medium truncate max-w-xs">{url.split('/').pop()}</span>
+        <span className="text-white text-sm font-medium truncate max-w-xs">{url.split('/').pop()?.split('?')[0]}</span>
         <button
           onClick={onClose}
           className="flex items-center gap-1.5 text-gray-300 hover:text-white text-sm px-3 py-1.5 rounded-lg hover:bg-white/10 transition-colors"
@@ -547,11 +552,20 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ url, onClose }) => {
 
       {/* Содержимое */}
       <div className="flex-1 overflow-auto" onClick={e => e.stopPropagation()}>
-        {isPdf ? (
+        {loadError ? (
+          <div className="flex flex-col items-center justify-center h-full text-white gap-3">
+            <svg className="w-12 h-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-lg font-medium">Не удалось загрузить документ</p>
+            <p className="text-sm text-gray-400 max-w-sm text-center">Возможно, данные устарели. Попросите администратора повторно скачать данные для секретаря.</p>
+          </div>
+        ) : isPdf ? (
           <iframe
             src={url}
             className="w-full h-full border-0"
             title="Документ"
+            onError={() => setLoadError(true)}
           />
         ) : (
           <div className="flex items-center justify-center h-full p-4">
@@ -559,6 +573,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ url, onClose }) => {
               src={url}
               alt="Документ"
               className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              onError={() => setLoadError(true)}
             />
           </div>
         )}

@@ -2921,6 +2921,8 @@ async fn get_secretary_doc_handler(
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type)
                 .header(header::CACHE_CONTROL, "max-age=86400")
+                .header("Access-Control-Allow-Origin", "*")
+                .header("X-Frame-Options", "ALLOWALL")
                 .body(Body::from(bytes))
                 .unwrap()
         }
