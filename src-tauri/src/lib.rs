@@ -27,6 +27,8 @@ struct AppState {
     mdns_service_fullname: Arc<StdMutex<Option<String>>>,
     // File logger для отладки
     logger: Arc<logger::FileLogger>,
+    // Путь к директории данных (~/.setki-keeper/data)
+    data_dir: std::path::PathBuf,
 }
 
 // Вспомогательная функция: преобразует строку matches_cache в JSON
@@ -247,8 +249,11 @@ async fn download_secretary_data(
     tournament_id: i32,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
+    let docs_dir = state.data_dir.join("docs").join(tournament_id.to_string());
+    std::fs::create_dir_all(&docs_dir).map_err(|e| e.to_string())?;
+
     state.api_client
-        .download_secretary_data(tournament_id)
+        .download_secretary_data(tournament_id, docs_dir)
         .await
         .map_err(|e| e.to_string())
 }
@@ -712,8 +717,10 @@ async fn start_local_server(
 
     // Запустить сервер в фоновом режиме с graceful shutdown
     let logger_clone = Arc::clone(&state.logger);
+    let docs_base_dir = state.data_dir.join("docs");
+    std::fs::create_dir_all(&docs_base_dir).ok();
     tokio::spawn(async move {
-        if let Err(e) = local_server::start_server(db_pool, port, shutdown_rx, logger_clone).await {
+        if let Err(e) = local_server::start_server(db_pool, port, shutdown_rx, logger_clone, docs_base_dir).await {
             eprintln!("Local server error: {}", e);
         }
     });
@@ -3803,7 +3810,7 @@ pub fn run() {
 
             // Инициализировать БД
             let pool = tauri::async_runtime::block_on(async {
-                db::init_db(app_data_dir).await
+                db::init_db(app_data_dir.clone()).await
                     .expect("Failed to initialize database")
             });
 
@@ -3831,6 +3838,7 @@ pub fn run() {
                 mdns_daemon: Arc::new(StdMutex::new(None)),
                 mdns_service_fullname: Arc::new(StdMutex::new(None)),
                 logger: file_logger.clone(),
+                data_dir: app_data_dir,
             };
 
             app.manage(app_state);

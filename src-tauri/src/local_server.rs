@@ -54,6 +54,8 @@ pub struct LocalServerState {
     pub admin_events_channel: BroadcastTx,
     // Логгер для записи в файл
     pub logger: Arc<crate::logger::FileLogger>,
+    // Директория с документами секретаря (~/.setki-keeper/data/docs)
+    pub docs_base_dir: std::path::PathBuf,
 }
 
 // Request/Response types
@@ -317,6 +319,7 @@ pub async fn start_server(
     port: u16,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     logger: Arc<crate::logger::FileLogger>,
+    docs_base_dir: std::path::PathBuf,
 ) -> Result<(), anyhow::Error> {
     // Создаём broadcast канал для административных событий (capacity 500 для 20+ судей)
     let (admin_tx, _) = broadcast::channel::<String>(500);
@@ -329,6 +332,7 @@ pub async fn start_server(
         match_channels: Arc::new(RwLock::new(HashMap::new())),
         admin_events_channel: admin_tx,
         logger: Arc::clone(&logger),
+        docs_base_dir,
     };
 
     let app = Router::new()
@@ -362,6 +366,7 @@ pub async fn start_server(
         .route("/api/v1/secretary/participants/:fighter_id", get(get_secretary_participant_handler))
         .route("/api/v1/secretary/confirm", post(confirm_secretary_participant_handler))
         .route("/api/v1/secretary/stats", get(get_secretary_stats_handler))
+        .route("/api/v1/secretary/docs/:tournament_id/:filename", get(get_secretary_doc_handler))
 
         // Применяем auth_middleware ко всем HTTP endpoints
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
@@ -2841,19 +2846,27 @@ async fn get_secretary_stats_handler(
     .fetch_all(&*state.db)
     .await?;
 
+    // Считаем уникальных людей по виду спорта (не заявки)
+    // Один человек с заявками в нескольких категориях одного спорта — считается 1 раз
     let mut sport_map: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
     for row in &rows {
         let entries_json: Option<String> = row.get("entries_json");
         let is_confirmed: i32 = row.get("is_confirmed");
         if let Some(json_str) = entries_json {
             if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str) {
+                // Собираем уникальные виды спорта для этого участника
+                let mut seen_sports: std::collections::HashSet<String> = std::collections::HashSet::new();
                 for entry in entries {
                     if let Some(sport) = entry.get("sport_name").and_then(|v| v.as_str()) {
-                        let counter = sport_map.entry(sport.to_string()).or_insert((0, 0));
-                        counter.0 += 1;
-                        if is_confirmed != 0 {
-                            counter.1 += 1;
-                        }
+                        seen_sports.insert(sport.to_string());
+                    }
+                }
+                // Добавляем участника в каждый уникальный вид спорта один раз
+                for sport in seen_sports {
+                    let counter = sport_map.entry(sport).or_insert((0, 0));
+                    counter.0 += 1;
+                    if is_confirmed != 0 {
+                        counter.1 += 1;
                     }
                 }
             }
@@ -2873,6 +2886,51 @@ async fn get_secretary_stats_handler(
         "confirmed": confirmed,
         "by_sport": by_sport,
     })))
+}
+
+// Отдача файлов документов секретаря (скачанных Администратором)
+async fn get_secretary_doc_handler(
+    State(state): State<LocalServerState>,
+    Path((tournament_id, filename)): Path<(i32, String)>,
+) -> impl IntoResponse {
+    use axum::http::{header, StatusCode};
+    use axum::response::Response;
+    use axum::body::Body;
+
+    // Защита от path traversal
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::empty())
+            .unwrap();
+    }
+
+    let file_path = state.docs_base_dir.join(tournament_id.to_string()).join(&filename);
+
+    match std::fs::read(&file_path) {
+        Ok(bytes) => {
+            let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+            let content_type = match ext.as_str() {
+                "pdf"  => "application/pdf",
+                "jpg" | "jpeg" => "image/jpeg",
+                "png"  => "image/png",
+                "webp" => "image/webp",
+                _      => "application/octet-stream",
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CACHE_CONTROL, "max-age=86400")
+                .body(Body::from(bytes))
+                .unwrap()
+        }
+        Err(_) => {
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())
+                .unwrap()
+        }
+    }
 }
 
 // Поиск спортсменов из fighters_cache (для автодополнения у судей)

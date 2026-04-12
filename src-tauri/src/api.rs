@@ -2788,7 +2788,11 @@ impl ApiClient {
     }
 
     // Скачать данные участников для секретаря (взвешивание)
-    pub async fn download_secretary_data(&self, tournament_id: i32) -> Result<usize> {
+    pub async fn download_secretary_data(
+        &self,
+        tournament_id: i32,
+        docs_dir: std::path::PathBuf,
+    ) -> Result<usize> {
         let token = self.get_admin_token().await?.unwrap_or_default();
         let url = format!("{}/desktop/secretary/data/{}", self.base_url, tournament_id);
 
@@ -2823,9 +2827,46 @@ impl ApiClient {
             let club_name = p["club_name"].as_str().map(String::from);
             let birth_date = p["birth_date"].as_str().map(String::from);
             let declared_weight = p["declared_weight"].as_f64();
-            let entries_json = p["entries"]
-                .as_array()
-                .map(|arr| serde_json::to_string(arr).unwrap_or_default());
+
+            // Скачать документы и заменить URL на локальные имена файлов
+            let mut entries = p["entries"].as_array().cloned().unwrap_or_default();
+            for entry in entries.iter_mut() {
+                if let Some(docs) = entry.get_mut("documents").and_then(|d| d.as_array_mut()) {
+                    for doc in docs.iter_mut() {
+                        if let (Some(url), Some(doc_id), Some(file_type)) = (
+                            doc.get("url").and_then(|v| v.as_str()).map(String::from),
+                            doc.get("id").and_then(|v| v.as_i64()),
+                            doc.get("file_type").and_then(|v| v.as_str()).map(String::from),
+                        ) {
+                            let ext = if file_type == "unknown" { "bin" } else { &file_type };
+                            let filename = format!("{}_{}.{}", fighter_id, doc_id, ext);
+                            let local_path = docs_dir.join(&filename);
+
+                            // Скачать файл если ещё не скачан
+                            if !local_path.exists() {
+                                match self.client.get(&url).send().await {
+                                    Ok(resp) if resp.status().is_success() => {
+                                        if let Ok(bytes) = resp.bytes().await {
+                                            let _ = std::fs::write(&local_path, &bytes);
+                                            println!("[download_secretary_data] Saved doc: {}", filename);
+                                        }
+                                    }
+                                    _ => {
+                                        println!("[download_secretary_data] Failed to download: {}", url);
+                                    }
+                                }
+                            }
+
+                            // Заменяем URL на имя файла (LAN-сервер будет отдавать по имени)
+                            if let Some(doc_obj) = doc.as_object_mut() {
+                                doc_obj.insert("url".to_string(), serde_json::Value::String(filename));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let entries_json = Some(serde_json::to_string(&entries).unwrap_or_default());
 
             sqlx::query(
                 "INSERT INTO secretary_data_cache

@@ -345,6 +345,7 @@ export const SecretaryDashboard: React.FC = () => {
             onConfirm={handleConfirm}
             isConfirming={isConfirming}
             serverUrl={effectiveServerUrl}
+            tournamentId={tournamentId ?? 0}
           />
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -367,10 +368,11 @@ interface ParticipantCardProps {
   onConfirm: () => void;
   isConfirming: boolean;
   serverUrl: string;
+  tournamentId: number;
 }
 
 const ParticipantCard: React.FC<ParticipantCardProps> = ({
-  participant, onConfirm, isConfirming, serverUrl
+  participant, onConfirm, isConfirming, serverUrl, tournamentId
 }) => {
   const [openDocUrl, setOpenDocUrl] = useState<string | null>(null);
 
@@ -378,8 +380,10 @@ const ParticipantCard: React.FC<ParticipantCardProps> = ({
   const birthDateFormatted = formatBirthDate(participant.birth_date);
 
   const handleOpenDoc = (url: string) => {
-    // Формируем полный URL если нужно
-    const fullUrl = url.startsWith('http') ? url : `${serverUrl}${url}`;
+    // Если URL — имя файла (без http), строим путь к LAN-серверу
+    const fullUrl = url.startsWith('http')
+      ? url
+      : `${serverUrl}/api/v1/secretary/docs/${tournamentId}/${url}`;
     setOpenDocUrl(fullUrl);
   };
 
