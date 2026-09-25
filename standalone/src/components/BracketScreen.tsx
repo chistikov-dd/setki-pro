@@ -76,7 +76,7 @@ export function BracketScreen({ bracket, onOpenMatch, onBack }: BracketScreenPro
         ) : error ? (
           <div className="flex items-center justify-center h-full text-red-600">{error}</div>
         ) : (
-          <TournamentBracketView matches={matches} onOpenMatch={handleOpenMatch} />
+          <TournamentBracketView matches={matches} onOpenMatch={handleOpenMatch} onMatchesChanged={load} />
         )}
       </div>
     </div>

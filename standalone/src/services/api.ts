@@ -156,3 +156,58 @@ export async function cancelMatch(matchId: number): Promise<void> {
 export async function getNextMatchInBracket(bracketId: number, currentMatchId: number): Promise<any | null> {
   return await invoke<any | null>('get_next_match_in_bracket', { bracketId, currentMatchId });
 }
+
+// ====== Редактирование сетки (offline, без ролей/истории) ======
+
+/**
+ * Установить участника в слот матча (slot: 1 | 2). Работает только для
+ * матчей со статусом 'scheduled'. Используется и для добавления в пустой
+ * слот, и для замены существующего участника.
+ */
+export async function setMatchParticipant(
+  matchId: number,
+  slot: 1 | 2,
+  fullName: string,
+  clubName?: string
+): Promise<void> {
+  return await invoke('edit_match_participant', {
+    matchId,
+    slot,
+    action: 'set',
+    fullName,
+    clubName: clubName || null,
+  });
+}
+
+/**
+ * Очистить слот участника (сделать TBD). Работает только для матчей
+ * со статусом 'scheduled'.
+ */
+export async function clearMatchParticipant(matchId: number, slot: 1 | 2): Promise<void> {
+  return await invoke('edit_match_participant', {
+    matchId,
+    slot,
+    action: 'clear',
+    fullName: null,
+    clubName: null,
+  });
+}
+
+/**
+ * Поменять местами (или переместить, если целевой слот пуст) участников
+ * между двумя слотами — в одном матче или в разных. Оба матча должны
+ * иметь статус 'scheduled'.
+ */
+export async function swapMatchParticipants(
+  matchIdA: number,
+  slotA: 1 | 2,
+  matchIdB: number,
+  slotB: 1 | 2
+): Promise<void> {
+  return await invoke('swap_match_participants', {
+    matchIdA,
+    slotA,
+    matchIdB,
+    slotB,
+  });
+}

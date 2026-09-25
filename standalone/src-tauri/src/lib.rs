@@ -3,7 +3,7 @@ mod db;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{Manager, State};
 
 struct AppState {
     db_pool: Arc<SqlitePool>,
@@ -1107,48 +1107,181 @@ async fn get_next_match_in_bracket(
 }
 
 // ============================================
+// Команды: редактирование участников сетки (offline, без ролей/истории)
+// ============================================
+//
+// В standalone-версии нет ролей и нет отдельной таблицы истории правок
+// (bracket_participant_edits из основного проекта) — единственное ограничение,
+// как и в основном проекте, это то, что редактировать можно только матчи со
+// статусом 'scheduled' (ещё не начатые). Все операции — простые UPDATE по
+// matches_cache, синхронизация с сервером/сетью не нужна (её просто нет).
+
+/// Установить или очистить участника в слоте (p1/p2) матча.
+/// action = "set" — записать имя/клуб (fighter_id не из реальной базы,
+/// поэтому p*_id/p*_fighter_id используют синтетический отрицательный id,
+/// чтобы не путать с настоящими участниками турнира).
+/// action = "clear" — сделать слот пустым (TBD).
+#[tauri::command]
+async fn edit_match_participant(
+    match_id: i32,
+    slot: i32,
+    action: String,
+    full_name: Option<String>,
+    club_name: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    edit_match_participant_core(&state.db_pool, match_id, slot, &action, full_name, club_name).await
+}
+
+/// Синтетический id для вручную добавленных (не из исходного файла турнира)
+/// участников — отрицательный, чтобы никогда не совпасть с реальным id.
+fn synthetic_participant_id(match_id: i32, slot: i32) -> i32 {
+    -(match_id * 10 + slot)
+}
+
+async fn edit_match_participant_core(
+    pool: &SqlitePool,
+    match_id: i32,
+    slot: i32,
+    action: &str,
+    full_name: Option<String>,
+    club_name: Option<String>,
+) -> Result<(), String> {
+    if slot != 1 && slot != 2 {
+        return Err("Некорректный слот участника (ожидается 1 или 2)".to_string());
+    }
+
+    let status: Option<String> = sqlx::query_scalar("SELECT status FROM matches_cache WHERE match_id = ?")
+        .bind(match_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = status.ok_or_else(|| "Матч не найден".to_string())?;
+    if status != "scheduled" {
+        return Err("Редактировать можно только матчи, которые ещё не начались".to_string());
+    }
+
+    match action {
+        "clear" => {
+            let query = if slot == 1 {
+                "UPDATE matches_cache SET p1_id = NULL, p1_fighter_id = NULL, p1_name = NULL, p1_club = NULL, updated_at = datetime('now') WHERE match_id = ?"
+            } else {
+                "UPDATE matches_cache SET p2_id = NULL, p2_fighter_id = NULL, p2_name = NULL, p2_club = NULL, updated_at = datetime('now') WHERE match_id = ?"
+            };
+            sqlx::query(query).bind(match_id).execute(pool).await.map_err(|e| e.to_string())?;
+        }
+        "set" => {
+            let name = full_name
+                .filter(|n| !n.trim().is_empty())
+                .ok_or_else(|| "Укажите имя участника".to_string())?;
+            let synthetic_id = synthetic_participant_id(match_id, slot);
+
+            let query = if slot == 1 {
+                "UPDATE matches_cache SET p1_id = ?, p1_fighter_id = ?, p1_name = ?, p1_club = ?, updated_at = datetime('now') WHERE match_id = ?"
+            } else {
+                "UPDATE matches_cache SET p2_id = ?, p2_fighter_id = ?, p2_name = ?, p2_club = ?, updated_at = datetime('now') WHERE match_id = ?"
+            };
+            sqlx::query(query)
+                .bind(synthetic_id)
+                .bind(synthetic_id)
+                .bind(&name)
+                .bind(&club_name)
+                .bind(match_id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        other => return Err(format!("Неизвестное действие редактирования: {}", other)),
+    }
+
+    Ok(())
+}
+
+/// Поменять местами участников в двух слотах (может быть один и тот же матч
+/// с разными слотами, либо два разных матча). Если целевой слот пуст —
+/// фактически происходит перемещение, а не обмен.
+#[tauri::command]
+async fn swap_match_participants(
+    match_id_a: i32,
+    slot_a: i32,
+    match_id_b: i32,
+    slot_b: i32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    swap_match_participants_core(&state.db_pool, match_id_a, slot_a, match_id_b, slot_b).await
+}
+
+async fn swap_match_participants_core(
+    pool: &SqlitePool,
+    match_id_a: i32,
+    slot_a: i32,
+    match_id_b: i32,
+    slot_b: i32,
+) -> Result<(), String> {
+    if (slot_a != 1 && slot_a != 2) || (slot_b != 1 && slot_b != 2) {
+        return Err("Некорректный слот участника (ожидается 1 или 2)".to_string());
+    }
+
+    for match_id in [match_id_a, match_id_b] {
+        let status: Option<String> = sqlx::query_scalar("SELECT status FROM matches_cache WHERE match_id = ?")
+            .bind(match_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = status.ok_or_else(|| "Матч не найден".to_string())?;
+        if status != "scheduled" {
+            return Err("Редактировать можно только матчи, которые ещё не начались".to_string());
+        }
+    }
+
+    async fn get_slot(
+        pool: &SqlitePool,
+        match_id: i32,
+        slot: i32,
+    ) -> Result<(Option<i32>, Option<i32>, Option<String>, Option<String>), sqlx::Error> {
+        let query = if slot == 1 {
+            "SELECT p1_id, p1_fighter_id, p1_name, p1_club FROM matches_cache WHERE match_id = ?"
+        } else {
+            "SELECT p2_id, p2_fighter_id, p2_name, p2_club FROM matches_cache WHERE match_id = ?"
+        };
+        sqlx::query_as(query).bind(match_id).fetch_one(pool).await
+    }
+
+    async fn set_slot(
+        pool: &SqlitePool,
+        match_id: i32,
+        slot: i32,
+        data: (Option<i32>, Option<i32>, Option<String>, Option<String>),
+    ) -> Result<(), sqlx::Error> {
+        let query = if slot == 1 {
+            "UPDATE matches_cache SET p1_id = ?, p1_fighter_id = ?, p1_name = ?, p1_club = ?, updated_at = datetime('now') WHERE match_id = ?"
+        } else {
+            "UPDATE matches_cache SET p2_id = ?, p2_fighter_id = ?, p2_name = ?, p2_club = ?, updated_at = datetime('now') WHERE match_id = ?"
+        };
+        sqlx::query(query)
+            .bind(data.0)
+            .bind(data.1)
+            .bind(data.2)
+            .bind(data.3)
+            .bind(match_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    let a_data = get_slot(pool, match_id_a, slot_a).await.map_err(|e| e.to_string())?;
+    let b_data = get_slot(pool, match_id_b, slot_b).await.map_err(|e| e.to_string())?;
+
+    set_slot(pool, match_id_a, slot_a, b_data).await.map_err(|e| e.to_string())?;
+    set_slot(pool, match_id_b, slot_b, a_data).await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// ============================================
 // Утилиты окна / приложения
 // ============================================
-
-#[derive(Serialize)]
-struct MonitorInfo {
-    name: Option<String>,
-    position_x: i32,
-    position_y: i32,
-    width: u32,
-    height: u32,
-    is_primary: bool,
-}
-
-#[tauri::command]
-async fn get_available_monitors(app: AppHandle) -> Result<Vec<MonitorInfo>, String> {
-    let monitors = app
-        .available_monitors()
-        .map_err(|e| format!("Failed to get monitors: {}", e))?;
-
-    let primary_monitor = app
-        .primary_monitor()
-        .map_err(|e| format!("Failed to get primary monitor: {}", e))?;
-
-    let primary_name = primary_monitor.as_ref().and_then(|m| m.name());
-
-    let monitor_list: Vec<MonitorInfo> = monitors
-        .iter()
-        .map(|monitor| {
-            let is_primary = monitor.name() == primary_name;
-            MonitorInfo {
-                name: monitor.name().cloned(),
-                position_x: monitor.position().x,
-                position_y: monitor.position().y,
-                width: monitor.size().width,
-                height: monitor.size().height,
-                is_primary,
-            }
-        })
-        .collect();
-
-    Ok(monitor_list)
-}
 
 #[tauri::command]
 async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
@@ -1194,7 +1327,8 @@ pub fn run() {
             undo_finished_match,
             cancel_match,
             get_next_match_in_bracket,
-            get_available_monitors,
+            edit_match_participant,
+            swap_match_participants,
             exit_app,
         ])
         .run(tauri::generate_context!())
@@ -1601,5 +1735,165 @@ mod tests {
                 .unwrap();
         assert_eq!(p1_id, None, "участник матча 1001 должен быть убран из финала");
         assert_eq!(p2_id, Some(4), "участник матча 1002 должен остаться нетронутым");
+    }
+
+    // ===== 6. Редактирование участников сетки (offline, без ролей/истории) =====
+
+    #[tokio::test]
+    async fn edit_match_participant_set_fills_empty_slot() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        // Матч 1003 (финал) изначально без участников — заполняем слот 1.
+        edit_match_participant_core(
+            &pool,
+            1003,
+            1,
+            "set",
+            Some("Новый Участник".to_string()),
+            Some("Клуб Х".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let (p1_name, p1_club): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT p1_name, p1_club FROM matches_cache WHERE match_id = 1003")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(p1_name.as_deref(), Some("Новый Участник"));
+        assert_eq!(p1_club.as_deref(), Some("Клуб Х"));
+    }
+
+    #[tokio::test]
+    async fn edit_match_participant_set_replaces_existing_slot() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        edit_match_participant_core(&pool, 1001, 1, "set", Some("Замена".to_string()), None)
+            .await
+            .unwrap();
+
+        let (p1_id, p1_name): (Option<i32>, Option<String>) =
+            sqlx::query_as("SELECT p1_id, p1_name FROM matches_cache WHERE match_id = 1001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(p1_name.as_deref(), Some("Замена"));
+        // Синтетический id должен отличаться от оригинального (1)
+        assert_ne!(p1_id, Some(1));
+    }
+
+    #[tokio::test]
+    async fn edit_match_participant_clear_empties_slot() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        edit_match_participant_core(&pool, 1001, 2, "clear", None, None).await.unwrap();
+
+        let (p2_id, p2_name): (Option<i32>, Option<String>) =
+            sqlx::query_as("SELECT p2_id, p2_name FROM matches_cache WHERE match_id = 1001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(p2_id, None);
+        assert_eq!(p2_name, None);
+    }
+
+    #[tokio::test]
+    async fn edit_match_participant_rejects_non_scheduled_match() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        sqlx::query("UPDATE matches_cache SET status = 'in_progress' WHERE match_id = 1001")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = edit_match_participant_core(&pool, 1001, 1, "clear", None, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("не начались"));
+    }
+
+    #[tokio::test]
+    async fn edit_match_participant_set_requires_non_empty_name() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let result = edit_match_participant_core(&pool, 1003, 1, "set", Some("   ".to_string()), None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn edit_match_participant_rejects_invalid_slot() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let result = edit_match_participant_core(&pool, 1001, 3, "clear", None, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn swap_match_participants_swaps_two_occupied_slots_across_matches() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        // 1001.p1 = Иванов (id 1), 1002.p1 = Сидоров (id 3)
+        swap_match_participants_core(&pool, 1001, 1, 1002, 1).await.unwrap();
+
+        let (m1001_p1_id, m1001_p1_name): (Option<i32>, Option<String>) =
+            sqlx::query_as("SELECT p1_id, p1_name FROM matches_cache WHERE match_id = 1001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let (m1002_p1_id, m1002_p1_name): (Option<i32>, Option<String>) =
+            sqlx::query_as("SELECT p1_id, p1_name FROM matches_cache WHERE match_id = 1002")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        assert_eq!(m1001_p1_id, Some(3));
+        assert_eq!(m1001_p1_name.as_deref(), Some("Сидоров Сидор Сидорович"));
+        assert_eq!(m1002_p1_id, Some(1));
+        assert_eq!(m1002_p1_name.as_deref(), Some("Иванов Иван Иванович"));
+    }
+
+    #[tokio::test]
+    async fn swap_match_participants_moves_participant_into_empty_slot() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        // 1003.p1 пуст, 1001.p1 занят (Иванов) -> после swap 1001.p1 должен опустеть,
+        // а 1003.p1 должен получить Иванова.
+        swap_match_participants_core(&pool, 1001, 1, 1003, 1).await.unwrap();
+
+        let (m1001_p1_id,): (Option<i32>,) =
+            sqlx::query_as("SELECT p1_id FROM matches_cache WHERE match_id = 1001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let (m1003_p1_id, m1003_p1_name): (Option<i32>, Option<String>) =
+            sqlx::query_as("SELECT p1_id, p1_name FROM matches_cache WHERE match_id = 1003")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        assert_eq!(m1001_p1_id, None);
+        assert_eq!(m1003_p1_id, Some(1));
+        assert_eq!(m1003_p1_name.as_deref(), Some("Иванов Иван Иванович"));
+    }
+
+    #[tokio::test]
+    async fn swap_match_participants_rejects_non_scheduled_match() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        sqlx::query("UPDATE matches_cache SET status = 'completed' WHERE match_id = 1001")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = swap_match_participants_core(&pool, 1001, 1, 1002, 1).await;
+        assert!(result.is_err());
     }
 }

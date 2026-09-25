@@ -1,17 +1,14 @@
 import { useEffect, useState, useRef } from 'react';
-import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { emit } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useShallow } from 'zustand/react/shallow';
 import { useMatchStore, matchStoreSelectors } from '../../stores/matchStore';
 import { useMatchTimer } from '../../hooks/useMatchTimer';
 import { useToast } from '../../hooks/useToast';
 import { useSound } from '../../hooks/useSound';
 import { useDisplayMode } from '../../hooks/useResponsive';
-import { closePublicDisplay } from '../../utils/publicDisplay';
 import { cancelMatch as apiCancelMatch } from '../../services/api';
 import { DEFAULT_SCORING_CONFIG } from '../../types';
-import type { Match, Participant } from '../../types';
+import type { Match } from '../../types';
 import { MatchTimer } from './MatchTimer';
 import { ParticipantPanel } from './ParticipantPanel';
 import { MatchEndDialog } from './MatchEndDialog';
@@ -27,35 +24,6 @@ interface MatchScreenProps {
   onExit: () => void;
 }
 
-/**
- * Custom hook для отправки обновлений в публичное табло
- */
-function useMatchUpdateEmitter(
-  redFighter: Participant | null,
-  blueFighter: Participant | null,
-  redScore: number,
-  blueScore: number,
-  remainingSeconds: number,
-  isRunning: boolean
-) {
-  const prevDataRef = useRef({ redScore, blueScore, remainingSeconds, isRunning });
-
-  useEffect(() => {
-    const prev = prevDataRef.current;
-    const hasChanged =
-      prev.redScore !== redScore ||
-      prev.blueScore !== blueScore ||
-      prev.remainingSeconds !== remainingSeconds ||
-      prev.isRunning !== isRunning;
-
-    if (hasChanged) {
-      const data = { redFighter, blueFighter, redScore, blueScore, remainingSeconds, isRunning };
-      emit('match-update', data).catch(() => {});
-      prevDataRef.current = { redScore, blueScore, remainingSeconds, isRunning };
-    }
-  }, [redFighter?.id, blueFighter?.id, redScore, blueScore, remainingSeconds, isRunning]);
-}
-
 export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const mode = useDisplayMode();
 
@@ -63,7 +31,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   const [showTimerEditDialog, setShowTimerEditDialog] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [showHelpDialog, setShowHelpDialog] = useState(false);
-  const [publicWindowOpen, setPublicWindowOpen] = useState(false);
   const [autoEndDialogShown, setAutoEndDialogShown] = useState(false);
   const [disqualificationToastShown, setDisqualificationToastShown] = useState(false);
   const [autoSelectedWinner, setAutoSelectedWinner] = useState<'red' | 'blue' | null>(null);
@@ -109,7 +76,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
   };
 
   const handleExitClick = async () => {
-    await closePublicDisplay();
     onExit();
   };
 
@@ -157,11 +123,8 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
         console.error('MatchScreen: Failed to initialize match:', error);
       });
 
-    openPublicDisplay();
-
     return () => {
       cleanup();
-      closePublicDisplay();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match.id]);
@@ -208,98 +171,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timer.isRunning]);
-
-  const openPublicDisplay = async () => {
-    if (publicWindowOpen) return;
-
-    try {
-      interface MonitorInfo {
-        name: string | null;
-        position_x: number;
-        position_y: number;
-        width: number;
-        height: number;
-        is_primary: boolean;
-      }
-
-      const monitors = await invoke<MonitorInfo[]>('get_available_monitors');
-      const secondaryMonitor = monitors.find((m) => !m.is_primary);
-
-      let windowX: number | undefined;
-      let windowY: number | undefined;
-      let windowWidth = 1920;
-      let windowHeight = 1080;
-      let centerWindow = true;
-
-      if (secondaryMonitor) {
-        windowX = secondaryMonitor.position_x;
-        windowY = secondaryMonitor.position_y;
-        windowWidth = secondaryMonitor.width;
-        windowHeight = secondaryMonitor.height;
-        centerWindow = false;
-      }
-
-      const existingWindow = await WebviewWindow.getByLabel('public-display');
-      if (existingWindow) {
-        try {
-          await existingWindow.close();
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        } catch (err) {
-          console.warn('[PublicDisplay] Не удалось закрыть старое окно:', err);
-        }
-      }
-
-      const webview = new WebviewWindow('public-display', {
-        url: '/',
-        title: 'Табло для зрителей',
-        width: windowWidth,
-        height: windowHeight,
-        x: windowX,
-        y: windowY,
-        resizable: true,
-        fullscreen: false,
-        maximized: true,
-        center: centerWindow,
-        focus: true,
-        decorations: true,
-      });
-
-      webview.once('tauri://created', () => {
-        setPublicWindowOpen(true);
-
-        const sendInitialData = () => {
-          const currentState = useMatchStore.getState();
-          const initialData = {
-            redFighter: currentState.redFighter,
-            blueFighter: currentState.blueFighter,
-            redScore: currentState.redScore,
-            blueScore: currentState.blueScore,
-            remainingSeconds: timer.remainingSeconds,
-            isRunning: timer.isRunning,
-          };
-          emit('match-update', initialData).catch(() => {});
-        };
-
-        for (let i = 0; i < 15; i++) {
-          setTimeout(sendInitialData, i * 200);
-        }
-      });
-
-      webview.once('tauri://error', (e) => {
-        console.error('[PublicDisplay] Ошибка создания окна:', e);
-        setPublicWindowOpen(false);
-      });
-
-      webview.once('tauri://destroyed', () => {
-        setPublicWindowOpen(false);
-      });
-    } catch (error) {
-      console.error('[PublicDisplay] Ошибка при открытии окна:', error);
-      setPublicWindowOpen(false);
-    }
-  };
-
-  useMatchUpdateEmitter(redFighter, blueFighter, redScore, blueScore, timer.remainingSeconds, timer.isRunning);
 
   // Global hotkeys
   useEffect(() => {
@@ -414,7 +285,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
       await apiCancelMatch(match.id);
       showToast('Матч отменён', 'success', 3000);
       setShowCancelMatchDialog(false);
-      await closePublicDisplay();
       onExit();
     } catch (error) {
       console.error('[MatchScreen] Failed to cancel match:', error);
@@ -439,7 +309,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
       }
 
       setShowEndDialog(false);
-      await closePublicDisplay();
       onExit();
     } catch (error) {
       console.error('[MatchScreen] Failed to finish match:', error);
@@ -498,15 +367,6 @@ export function MatchScreen({ match, categoryName, onExit }: MatchScreenProps) {
           <span className="text-gray-700">Категория:</span> {categoryName || 'Не указана'}
         </div>
         <div className={`flex items-center ${mode === 'hd' ? 'gap-2' : 'gap-4'}`}>
-          <Button
-            variant="secondary"
-            size={header.buttonSize}
-            onClick={openPublicDisplay}
-            disabled={publicWindowOpen}
-            className={mode === 'hd' ? 'text-[10px] sm:text-xs px-2 py-1' : undefined}
-          >
-            {publicWindowOpen ? '✓ Табло открыто' : 'Открыть табло для зрителей'}
-          </Button>
           <Button
             variant="ghost"
             size={header.buttonSize}

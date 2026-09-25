@@ -1,15 +1,11 @@
 import { useState, lazy, Suspense } from 'react';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { FileOpenScreen } from './components/FileOpenScreen';
-import { CategoryListScreen } from './components/CategoryListScreen';
 import { BracketListScreen } from './components/BracketListScreen';
 import { BracketScreen } from './components/BracketScreen';
-import { buildCategoriesFromBrackets, filterBracketsByCategory } from './utils/categoryGrouping';
-import type { Bracket, Category, LoadedTournamentFile, Match } from './types';
+import type { Bracket, LoadedTournamentFile, Match } from './types';
 
 const MatchScreen = lazy(() => import('./components/match/MatchScreen').then((m) => ({ default: m.MatchScreen })));
-const PublicDisplayPage = lazy(() => import('./pages/PublicDisplayPage').then((m) => ({ default: m.PublicDisplayPage })));
 
 function LoadingSpinner() {
   return (
@@ -24,31 +20,17 @@ function LoadingSpinner() {
 
 type Screen =
   | { name: 'file-open' }
-  | { name: 'categories' }
-  | { name: 'brackets'; category: Category }
-  | { name: 'bracket'; category: Category; bracket: Bracket }
-  | { name: 'match'; category: Category; bracket: Bracket; match: Match };
+  | { name: 'bracket-list' }
+  | { name: 'bracket'; bracket: Bracket }
+  | { name: 'match'; bracket: Bracket; match: Match };
 
 function App() {
-  const currentWindow = getCurrentWebviewWindow();
-  const isPublicDisplayWindow = currentWindow.label === 'public-display';
-
   const [tournamentData, setTournamentData] = useState<LoadedTournamentFile | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: 'file-open' });
 
-  if (isPublicDisplayWindow) {
-    return (
-      <ErrorBoundary>
-        <Suspense fallback={<LoadingSpinner />}>
-          <PublicDisplayPage />
-        </Suspense>
-      </ErrorBoundary>
-    );
-  }
-
   const handleFileLoaded = (data: LoadedTournamentFile) => {
     setTournamentData(data);
-    setScreen({ name: 'categories' });
+    setScreen({ name: 'bracket-list' });
   };
 
   const handleReopenFile = () => {
@@ -56,37 +38,24 @@ function App() {
     setScreen({ name: 'file-open' });
   };
 
-  const categories: Category[] = tournamentData ? buildCategoriesFromBrackets(tournamentData.brackets) : [];
-
   return (
     <ErrorBoundary>
       {screen.name === 'file-open' && <FileOpenScreen onLoaded={handleFileLoaded} />}
 
-      {screen.name === 'categories' && tournamentData && (
-        <CategoryListScreen
-          tournament={tournamentData.tournament}
-          categories={categories}
-          onSelectCategory={(category) => setScreen({ name: 'brackets', category })}
-          onReopenFile={handleReopenFile}
-        />
-      )}
-
-      {screen.name === 'brackets' && tournamentData && (
+      {screen.name === 'bracket-list' && tournamentData && (
         <BracketListScreen
-          category={screen.category}
-          brackets={filterBracketsByCategory(tournamentData.brackets, screen.category)}
-          onSelectBracket={(bracket) => setScreen({ name: 'bracket', category: screen.category, bracket })}
-          onBack={() => setScreen({ name: 'categories' })}
+          tournament={tournamentData.tournament}
+          brackets={tournamentData.brackets}
+          onSelectBracket={(bracket) => setScreen({ name: 'bracket', bracket })}
+          onReopenFile={handleReopenFile}
         />
       )}
 
       {screen.name === 'bracket' && (
         <BracketScreen
           bracket={screen.bracket}
-          onOpenMatch={(match) =>
-            setScreen({ name: 'match', category: screen.category, bracket: screen.bracket, match })
-          }
-          onBack={() => setScreen({ name: 'brackets', category: screen.category })}
+          onOpenMatch={(match) => setScreen({ name: 'match', bracket: screen.bracket, match })}
+          onBack={() => setScreen({ name: 'bracket-list' })}
         />
       )}
 
@@ -94,8 +63,8 @@ function App() {
         <Suspense fallback={<LoadingSpinner />}>
           <MatchScreen
             match={screen.match}
-            categoryName={screen.category.name}
-            onExit={() => setScreen({ name: 'bracket', category: screen.category, bracket: screen.bracket })}
+            categoryName={screen.bracket.category_name}
+            onExit={() => setScreen({ name: 'bracket', bracket: screen.bracket })}
           />
         </Suspense>
       )}

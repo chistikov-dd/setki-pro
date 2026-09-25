@@ -22,10 +22,16 @@ export interface Bracket {
   total_rounds: number;
   status: 'not_started' | 'in_progress' | 'completed';
   gender?: string;
+  sport_id?: number;
   sport_name?: string;
   min_weight?: number;
   max_weight?: number;
   is_published?: boolean;
+  // Матчи сетки, как они приходят прямо во вложенном виде из исходного JSON-файла
+  // турнира (LoadedTournamentFile.brackets[].matches) — используется для поиска
+  // по участнику на экране списка сеток. get_cached_brackets (Tauri-команда) их
+  // НЕ возвращает — только load_tournament_file отдаёт сырые данные с matches.
+  matches?: Match[];
 }
 
 export interface Participant {
