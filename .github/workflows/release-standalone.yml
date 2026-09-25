@@ -1,0 +1,74 @@
+name: Release Standalone Build
+
+on:
+  push:
+    tags:
+      - 'standalone-v*'  # Триггер на теги вида standalone-v1.0.0
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux (Ubuntu 22.04, но с AppImage для совместимости со старыми системами)
+          - platform: 'ubuntu-22.04'
+            args: ''
+            target: 'linux'
+          # Windows
+          - platform: 'windows-latest'
+            args: ''
+            target: 'windows'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: standalone/package-lock.json
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        working-directory: standalone
+        run: npm ci
+
+      - name: Build Desktop App
+        uses: tauri-apps/tauri-action@v0.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: standalone
+          tagName: ${{ github.ref_name }}
+          releaseName: 'SETKI KEEPER Standalone ${{ github.ref_name }}'
+          releaseBody: |
+            ## 🎯 SETKI KEEPER Standalone ${{ github.ref_name }}
+
+            Автономная офлайн-версия судейского приложения (без LAN-сервера и синхронизации).
+
+            ### Установка
+
+            **Windows:**
+            - Скачайте `.exe`-установщик
+            - Запустите установщик
+
+            **Linux:**
+            - Скачайте `.AppImage`
+            - Сделайте исполняемым: `chmod +x setki-keeper-standalone*.AppImage`
+            - Запустите: `./setki-keeper-standalone*.AppImage`
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

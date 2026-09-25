@@ -21,6 +21,8 @@ dist-ssr
 # Tauri/Rust
 src-tauri/target/
 src-tauri/WixTools/
+standalone/src-tauri/target/
+standalone/src-tauri/WixTools/
 
 # Generated logo (keep source logo.jpg)
 logo.png
@@ -35,3 +37,4 @@ logo.png
 *.njsproj
 *.sln
 *.sw?
+*.AppImage
