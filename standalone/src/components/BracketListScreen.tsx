@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent } from './ui/Card';
 import { Button } from './ui/Button';
 import { useDebounce } from '../hooks/useDebounce';
-import { getCachedBrackets } from '../services/api';
+import { getCachedBrackets, getBracketMatches } from '../services/api';
+import { normalizeMatch } from '../utils/normalizeMatch';
 import {
   filterBrackets,
   getUniqueSports,
@@ -96,28 +97,38 @@ export function BracketListScreen({
   const debouncedSearch = useDebounce(searchInput, 300);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Статус сетки на момент открытия файла быстро устаревает (матчи начинаются/завершаются
-  // без перезагрузки файла) — поэтому подгружаем live-статус из SQLite-кэша через
-  // get_cached_brackets и мержим его поверх статичных данных из tournamentData.brackets.
-  // Состав участников (matches) для поиска оставляем как есть из исходной загрузки —
-  // get_cached_brackets вложенные матчи не отдаёт, а актуализировать состав участников
-  // в реальном времени на списке сеток не критично.
-  const [liveStatusById, setLiveStatusById] = useState<Map<number, Bracket['status']>>(new Map());
+  // Статус сетки и состав/статусы её матчей на момент открытия файла быстро устаревают
+  // (матчи начинаются/завершаются без перезагрузки файла) — поэтому подгружаем live-данные
+  // из SQLite-кэша (get_cached_brackets для статуса + get_bracket_matches для матчей каждой
+  // сетки) и мержим их поверх статичных данных из tournamentData.brackets. Матчи нужны не
+  // только для поиска по участнику, но и для фильтра по стадии (getBracketCurrentStage) —
+  // без live-обновления matches фильтр "Полуфиналы/Финалы" застревал бы на состоянии
+  // сетки на момент открытия файла и переставал бы отражать реальный прогресс судейства.
+  const [liveDataById, setLiveDataById] = useState<Map<number, { status: Bracket['status']; matches: Bracket['matches'] }>>(
+    new Map()
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     getCachedBrackets()
-      .then((liveBrackets) => {
+      .then(async (liveBrackets) => {
         if (cancelled) return;
-        const map = new Map<number, Bracket['status']>();
-        for (const b of liveBrackets) {
-          map.set(b.id, b.status);
-        }
-        setLiveStatusById(map);
+        const entries: Array<[number, { status: Bracket['status']; matches: Bracket['matches'] }]> = await Promise.all(
+          liveBrackets.map(async (b) => {
+            try {
+              const rawMatches = await getBracketMatches(b.id);
+              return [b.id, { status: b.status, matches: rawMatches.map(normalizeMatch) }];
+            } catch {
+              return [b.id, { status: b.status, matches: undefined }];
+            }
+          })
+        );
+        if (cancelled) return;
+        setLiveDataById(new Map(entries));
       })
       .catch(() => {
-        // Если live-статус не удалось получить — просто остаёмся со статичными
+        // Если live-данные не удалось получить — просто остаёмся со статичными
         // данными из tournamentData.brackets (не критично для работы экрана).
       });
 
@@ -129,12 +140,13 @@ export function BracketListScreen({
   }, []);
 
   const bracketsWithLiveStatus = useMemo(() => {
-    if (liveStatusById.size === 0) return brackets;
+    if (liveDataById.size === 0) return brackets;
     return brackets.map((b) => {
-      const liveStatus = liveStatusById.get(b.id);
-      return liveStatus && liveStatus !== b.status ? { ...b, status: liveStatus } : b;
+      const live = liveDataById.get(b.id);
+      if (!live) return b;
+      return { ...b, status: live.status, matches: live.matches ?? b.matches };
     });
-  }, [brackets, liveStatusById]);
+  }, [brackets, liveDataById]);
 
   const activeFilters: BracketListFilters = { ...filters, searchQuery: debouncedSearch };
 

@@ -3,15 +3,16 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { useState, type ComponentProps } from 'react';
 import { BracketListScreen } from '../../components/BracketListScreen';
 import { DEFAULT_BRACKET_FILTERS, type BracketListFilters } from '../../utils/bracketFilters';
-import type { Bracket, Tournament } from '../../types';
+import type { Bracket, Match, Tournament } from '../../types';
 
-// getCachedBrackets вызывает invoke('get_cached_brackets') через Tauri — в jsdom его нет,
+// getCachedBrackets/getBracketMatches вызывают invoke(...) через Tauri — в jsdom его нет,
 // поэтому мокаем сервисный модуль напрямую (как это делает компонент).
 vi.mock('../../services/api', () => ({
   getCachedBrackets: vi.fn(),
+  getBracketMatches: vi.fn(),
 }));
 
-import { getCachedBrackets } from '../../services/api';
+import { getCachedBrackets, getBracketMatches } from '../../services/api';
 
 /**
  * BracketListScreen больше не управляет своим состоянием фильтров самостоятельно —
@@ -51,12 +52,29 @@ function makeBracket(overrides: Partial<Bracket>): Bracket {
   };
 }
 
+function makeMatch(overrides: Partial<Match>): Match {
+  return {
+    id: 1,
+    bracket_id: 1,
+    round_number: 1,
+    match_number: 0,
+    status: 'scheduled',
+    score_participant1: 0,
+    score_participant2: 0,
+    warnings_participant1: 0,
+    warnings_participant2: 0,
+    ...overrides,
+  };
+}
+
 const tournament: Tournament = { id: 1, title: 'Тестовый турнир' };
 
 describe('BracketListScreen', () => {
   beforeEach(() => {
     vi.mocked(getCachedBrackets).mockReset();
     vi.mocked(getCachedBrackets).mockResolvedValue([]);
+    vi.mocked(getBracketMatches).mockReset();
+    vi.mocked(getBracketMatches).mockResolvedValue([]);
     // scrollIntoView не реализован в jsdom по умолчанию.
     Element.prototype.scrollIntoView = vi.fn();
   });
@@ -124,6 +142,50 @@ describe('BracketListScreen', () => {
     );
 
     expect(await screen.findByText('Идёт')).toBeInTheDocument();
+  });
+
+  it('refreshes bracket.matches from get_bracket_matches so the stage filter reflects live progress', async () => {
+    // Регрессия: bracket.matches изначально приходят из статичной загрузки файла (или
+    // восстановления сессии) и без live-обновления навсегда остаются "как было при
+    // открытии файла" — из-за этого фильтр по стадии (Полуфиналы/Финалы), который
+    // вычисляется из bracket.matches, переставал отражать реальный прогресс судейства
+    // после того как матчи начинались/завершались на экране сетки.
+    const staleMatches: Match[] = [
+      makeMatch({ id: 1, round_number: 1, match_number: 0, status: 'scheduled' }),
+      makeMatch({ id: 2, round_number: 1, match_number: 1, status: 'scheduled' }),
+      makeMatch({ id: 3, round_number: 2, match_number: 0, status: 'scheduled' }),
+    ];
+    const bracket = makeBracket({ id: 1, status: 'not_started', matches: staleMatches });
+
+    // Live-состояние: оба полуфинала (round 1) уже завершены, финал (round 2) готов к игре.
+    const liveMatches: Match[] = [
+      makeMatch({ id: 1, round_number: 1, match_number: 0, status: 'completed' }),
+      makeMatch({ id: 2, round_number: 1, match_number: 1, status: 'completed' }),
+      makeMatch({
+        id: 3,
+        round_number: 2,
+        match_number: 0,
+        status: 'scheduled',
+        participant1: { id: 1, fighter_id: 1, full_name: 'Победитель 1' },
+        participant2: { id: 2, fighter_id: 2, full_name: 'Победитель 2' },
+      }),
+    ];
+    vi.mocked(getCachedBrackets).mockResolvedValue([{ ...bracket, status: 'in_progress' } as Bracket]);
+    vi.mocked(getBracketMatches).mockResolvedValue(liveMatches);
+
+    render(
+      <ControlledBracketListScreen
+        tournament={tournament}
+        brackets={[bracket]}
+        onSelectBracket={vi.fn()}
+        onReopenFile={vi.fn()}
+        initialFilters={{ ...DEFAULT_BRACKET_FILTERS, stage: 'final' }}
+      />
+    );
+
+    // После live-рефетча matches сетка должна пройти фильтр "Финалы" и остаться видимой —
+    // до фикса она пропадала бы из списка, т.к. фильтр вычислялся по устаревшим staleMatches.
+    expect(await screen.findByText('Категория')).toBeInTheDocument();
   });
 
   it('filters brackets by status via pill buttons', async () => {
