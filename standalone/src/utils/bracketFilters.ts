@@ -1,4 +1,5 @@
 import type { Bracket, CharacteristicSchemaField, Match } from '../types';
+import { parseAgeRangeFromCategoryName } from './parseAgeFromCategoryName';
 
 export type BracketStatusFilter = 'all' | 'not_started' | 'in_progress' | 'completed';
 
@@ -40,6 +41,30 @@ export const DEFAULT_BRACKET_FILTERS: BracketListFilters = {
 };
 
 /**
+ * Эффективный возрастной диапазон сетки для целей фильтрации/наличия данных: если у сетки
+ * заполнены явные min_age/max_age (хотя бы одно из полей) — используем их как есть (не
+ * подменяем распарсенным значением, даже частично). Если ОБА поля отсутствуют — пробуем
+ * fallback-парсинг из category_name (см. parseAgeRangeFromCategoryName) — на реальных
+ * турнирах с setki.pro min_age/max_age бывают не заполнены организатором, но возраст почти
+ * всегда закодирован в самом названии категории.
+ *
+ * Не мутирует и не переопределяет исходные Bracket.min_age/max_age — только вычисляет
+ * значение для использования внутри hasAnyAgeData/filterBrackets.
+ */
+export function getEffectiveAgeRange(bracket: Bracket): { min: number | null; max: number | null } {
+  if (bracket.min_age != null || bracket.max_age != null) {
+    return { min: bracket.min_age ?? null, max: bracket.max_age ?? null };
+  }
+
+  const parsed = parseAgeRangeFromCategoryName(bracket.category_name);
+  if (parsed) {
+    return { min: parsed.min, max: parsed.max };
+  }
+
+  return { min: null, max: null };
+}
+
+/**
  * Отфильтровать список сеток турнира по тексту поиска (название категории ИЛИ
  * имя участника во вложенных матчах), виду спорта и полу.
  *
@@ -70,11 +95,13 @@ export function filterBrackets(brackets: Bracket[], filters: BracketListFilters)
       // данным без возрастной информации).
       const filterFrom = filters.ageFrom ?? -Infinity;
       const filterTo = filters.ageTo ?? Infinity;
-      const bracketMin = bracket.min_age ?? -Infinity;
-      const bracketMax = bracket.max_age ?? Infinity;
+      const effectiveAge = getEffectiveAgeRange(bracket);
+      const bracketMin = effectiveAge.min ?? -Infinity;
+      const bracketMax = effectiveAge.max ?? Infinity;
 
-      if (bracket.min_age == null && bracket.max_age == null) {
-        // У сетки нет возрастных данных вообще — не исключаем её из результатов.
+      if (effectiveAge.min == null && effectiveAge.max == null) {
+        // У сетки нет возрастных данных вообще (ни явных полей, ни распознаваемых в
+        // названии) — не исключаем её из результатов.
       } else if (!(bracketMax >= filterFrom && bracketMin <= filterTo)) {
         return false;
       }
@@ -145,7 +172,10 @@ export function getUniqueGenders(brackets: Bracket[]): string[] {
  * (аналогично тому, как uniqueSports/uniqueGenders показываются только при наличии данных).
  */
 export function hasAnyAgeData(brackets: Bracket[]): boolean {
-  return brackets.some((bracket) => bracket.min_age != null || bracket.max_age != null);
+  return brackets.some((bracket) => {
+    const effective = getEffectiveAgeRange(bracket);
+    return effective.min != null || effective.max != null;
+  });
 }
 
 export function getGenderLabel(gender: string): string {

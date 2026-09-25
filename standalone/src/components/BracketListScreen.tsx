@@ -31,6 +31,16 @@ interface BracketListScreenProps {
    * отфильтрована и её нет среди видимых карточек — ничего не происходит (не крашим).
    */
   scrollToBracketId?: number | null;
+  /**
+   * Состояние фильтров поднято в родительский компонент (App.tsx), чтобы оно переживало
+   * размонтирование/монтирование этого экрана при переходах bracket-list -> bracket ->
+   * bracket-list (App.tsx рендерит BracketListScreen условно по screen.name, поэтому
+   * локальный useState здесь обнулялся бы при каждом возврате из сетки).
+   */
+  filters: BracketListFilters;
+  onFiltersChange: (filters: BracketListFilters) => void;
+  searchInput: string;
+  onSearchInputChange: (value: string) => void;
 }
 
 const STATUS_FILTER_OPTIONS: BracketStatusFilter[] = ['all', 'not_started', 'in_progress', 'completed'];
@@ -78,9 +88,11 @@ export function BracketListScreen({
   onSelectBracket,
   onReopenFile,
   scrollToBracketId,
+  filters,
+  onFiltersChange,
+  searchInput,
+  onSearchInputChange,
 }: BracketListScreenProps) {
-  const [filters, setFilters] = useState<BracketListFilters>(DEFAULT_BRACKET_FILTERS);
-  const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebounce(searchInput, 300);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -178,8 +190,8 @@ export function BracketListScreen({
     hasActiveCharacteristicFilters;
 
   const handleResetFilters = () => {
-    setSearchInput('');
-    setFilters(DEFAULT_BRACKET_FILTERS);
+    onSearchInputChange('');
+    onFiltersChange(DEFAULT_BRACKET_FILTERS);
   };
 
   // Парсинг значения числового инпута фильтра по возрасту: пустая строка -> null (фильтр
@@ -222,7 +234,7 @@ export function BracketListScreen({
             <input
               type="text"
               value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
+              onChange={(e) => onSearchInputChange(e.target.value)}
               placeholder="Поиск по категории или участнику..."
               className="flex-1 px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -238,7 +250,7 @@ export function BracketListScreen({
             {STATUS_FILTER_OPTIONS.map((status) => (
               <button
                 key={status}
-                onClick={() => setFilters((prev) => ({ ...prev, status }))}
+                onClick={() => onFiltersChange({ ...filters, status })}
                 className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                   filters.status === status ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
@@ -256,7 +268,7 @@ export function BracketListScreen({
             {STAGE_FILTER_OPTIONS.map((stage) => (
               <button
                 key={stage}
-                onClick={() => setFilters((prev) => ({ ...prev, stage }))}
+                onClick={() => onFiltersChange({ ...filters, stage })}
                 className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                   filters.stage === stage ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
@@ -277,10 +289,10 @@ export function BracketListScreen({
                 </span>
                 <button
                   onClick={() =>
-                    setFilters((prev) => ({
-                      ...prev,
-                      characteristics: { ...prev.characteristics, [field.key]: 'all' },
-                    }))
+                    onFiltersChange({
+                      ...filters,
+                      characteristics: { ...filters.characteristics, [field.key]: 'all' },
+                    })
                   }
                   className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                     selected === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -292,10 +304,10 @@ export function BracketListScreen({
                   <button
                     key={value}
                     onClick={() =>
-                      setFilters((prev) => ({
-                        ...prev,
-                        characteristics: { ...prev.characteristics, [field.key]: value },
-                      }))
+                      onFiltersChange({
+                        ...filters,
+                        characteristics: { ...filters.characteristics, [field.key]: value },
+                      })
                     }
                     className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                       selected === value ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -312,7 +324,7 @@ export function BracketListScreen({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
               <button
-                onClick={() => setFilters((prev) => ({ ...prev, sportId: 'all' }))}
+                onClick={() => onFiltersChange({ ...filters, sportId: 'all' })}
                 className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                   filters.sportId === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
@@ -322,7 +334,7 @@ export function BracketListScreen({
               {uniqueSports.map((sport) => (
                 <button
                   key={sport.id}
-                  onClick={() => setFilters((prev) => ({ ...prev, sportId: sport.id }))}
+                  onClick={() => onFiltersChange({ ...filters, sportId: sport.id })}
                   className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                     filters.sportId === sport.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
@@ -337,7 +349,7 @@ export function BracketListScreen({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Пол:</span>
               <button
-                onClick={() => setFilters((prev) => ({ ...prev, gender: 'all' }))}
+                onClick={() => onFiltersChange({ ...filters, gender: 'all' })}
                 className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                   filters.gender === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
@@ -347,7 +359,7 @@ export function BracketListScreen({
               {uniqueGenders.map((gender) => (
                 <button
                   key={gender}
-                  onClick={() => setFilters((prev) => ({ ...prev, gender }))}
+                  onClick={() => onFiltersChange({ ...filters, gender })}
                   className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                     filters.gender === gender ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
@@ -366,7 +378,7 @@ export function BracketListScreen({
                 min={0}
                 inputMode="numeric"
                 value={filters.ageFrom ?? ''}
-                onChange={(e) => setFilters((prev) => ({ ...prev, ageFrom: parseAgeInput(e.target.value) }))}
+                onChange={(e) => onFiltersChange({ ...filters, ageFrom: parseAgeInput(e.target.value) })}
                 placeholder="от"
                 className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -376,7 +388,7 @@ export function BracketListScreen({
                 min={0}
                 inputMode="numeric"
                 value={filters.ageTo ?? ''}
-                onChange={(e) => setFilters((prev) => ({ ...prev, ageTo: parseAgeInput(e.target.value) }))}
+                onChange={(e) => onFiltersChange({ ...filters, ageTo: parseAgeInput(e.target.value) })}
                 placeholder="до"
                 className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />

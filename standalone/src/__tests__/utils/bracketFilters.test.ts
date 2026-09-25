@@ -264,6 +264,101 @@ describe('bracketFilters', () => {
       const brackets = [makeBracket({ id: 1 }), makeBracket({ id: 2 })];
       expect(hasAnyAgeData(brackets)).toBe(false);
     });
+
+    it('returns true when a bracket has no explicit min_age/max_age but the age is recognizable in category_name', () => {
+      // Реальный сценарий tournament_68_*.json: min_age/max_age == null для ВСЕХ сеток,
+      // но возраст закодирован в названии категории ("N - M лет").
+      const brackets = [
+        makeBracket({ id: 1, category_name: 'Девочки, 10 - 11 лет, до 27 кг [B]', min_age: undefined, max_age: undefined }),
+      ];
+      expect(hasAnyAgeData(brackets)).toBe(true);
+    });
+
+    it('returns false when category_name has no recognizable age and no explicit fields either', () => {
+      const brackets = [makeBracket({ id: 1, category_name: 'Мужчины, до 100 кг' })];
+      expect(hasAnyAgeData(brackets)).toBe(false);
+    });
+  });
+
+  describe('age range filter — fallback parsing from category_name', () => {
+    // Реалистичные фикстуры на основе реальных названий из tournament_68_*.json, где
+    // min_age/max_age всегда null, а возраст присутствует только в названии категории.
+    const girls1011 = makeBracket({
+      id: 1,
+      category_name: 'Девочки, 10 - 11 лет, до 27 кг [B]',
+      min_age: undefined,
+      max_age: undefined,
+    });
+    const boys1213 = makeBracket({
+      id: 2,
+      category_name: 'Мальчики, 12 - 13 лет, до 38 кг [C]',
+      min_age: undefined,
+      max_age: undefined,
+    });
+    const men2030 = makeBracket({
+      id: 3,
+      category_name: 'Мужчины, 20 - 30 лет, до 100 кг [B]',
+      min_age: undefined,
+      max_age: undefined,
+    });
+    const seniorBoys1617 = makeBracket({
+      id: 4,
+      // Содержит похожий на возраст диапазон веса ("63-110 кг") без пробелов и без "лет" —
+      // не должен быть перепутан с возрастом при фильтрации.
+      category_name: 'Старшие юноши, 16 - 17 лет, 63-110 кг [A]',
+      min_age: undefined,
+      max_age: undefined,
+    });
+    const noAgeAtAll = makeBracket({
+      id: 5,
+      category_name: 'Мужчины, до 100 кг',
+      min_age: undefined,
+      max_age: undefined,
+    });
+
+    it('filters correctly by an age range that only exists in category_name (10-11 vs 20-30)', () => {
+      const brackets = [girls1011, boys1213, men2030, seniorBoys1617, noAgeAtAll];
+      const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 10, ageTo: 11 });
+      // girls1011 (10-11) пересекается; boys1213 (12-13), men2030 (20-30), seniorBoys1617
+      // (16-17) — не пересекаются; noAgeAtAll — без данных вообще, не исключаем.
+      expect(result.map((b) => b.id).sort()).toEqual([1, 5]);
+    });
+
+    it('does not confuse the weight range "63-110 кг" with an age range when filtering', () => {
+      const brackets = [men2030, seniorBoys1617];
+      // Если бы парсер ошибочно распознал "63-110" как возраст, seniorBoys1617 (id=4)
+      // попал бы в диапазон [16,17], а не в [63,110] — и оба теста ниже провалились бы.
+      const resultTeens = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 16, ageTo: 17 });
+      expect(resultTeens.map((b) => b.id)).toEqual([4]);
+
+      const resultAdults = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 20, ageTo: 30 });
+      expect(resultAdults.map((b) => b.id)).toEqual([3]);
+    });
+
+    it('does not exclude a bracket with no age data anywhere (neither fields nor category_name)', () => {
+      const brackets = [men2030, noAgeAtAll];
+      const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 5, ageTo: 12 });
+      // men2030 (20-30) не пересекается с [5,12] -> исключён.
+      // noAgeAtAll — нет данных вообще -> не исключаем.
+      expect(result.map((b) => b.id)).toEqual([5]);
+    });
+
+    it('prefers explicit min_age/max_age over category_name parsing when both are present', () => {
+      const bracketWithExplicitFields = makeBracket({
+        id: 6,
+        category_name: 'Девочки, 10 - 11 лет, до 27 кг [B]', // название говорит 10-11
+        min_age: 30, // но явные поля говорят 30-40 — они должны иметь приоритет
+        max_age: 40,
+      });
+      const result = filterBrackets([bracketWithExplicitFields], {
+        ...DEFAULT_BRACKET_FILTERS,
+        ageFrom: 10,
+        ageTo: 11,
+      });
+      // Если бы фильтр использовал распарсенное значение из названия (10-11), сетка
+      // прошла бы фильтр. С приоритетом явных полей (30-40) она не пересекается с [10,11].
+      expect(result).toHaveLength(0);
+    });
   });
 
   describe('getStatusFilterLabel', () => {

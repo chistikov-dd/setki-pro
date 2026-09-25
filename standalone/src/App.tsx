@@ -7,6 +7,7 @@ import { hasLoadedTournament, getTournamentMeta, getCachedBrackets, getBracketMa
 import { normalizeMatch } from './utils/normalizeMatch';
 import { DEFAULT_SCORING_CONFIG } from './types';
 import type { Bracket, LoadedTournamentFile, Match } from './types';
+import { DEFAULT_BRACKET_FILTERS, type BracketListFilters } from './utils/bracketFilters';
 
 const MatchScreen = lazy(() => import('./components/match/MatchScreen').then((m) => ({ default: m.MatchScreen })));
 
@@ -44,6 +45,13 @@ function App() {
   // проверили это на монтировании — показываем спиннер, а не FileOpenScreen, чтобы
   // он не мелькал перед восстановлением сессии.
   const [isRestoringSession, setIsRestoringSession] = useState(true);
+  // Состояние фильтров списка сеток поднято сюда (из BracketListScreen), чтобы оно
+  // переживало размонтирование/монтирование этого экрана при переходах
+  // bracket-list -> bracket -> bracket-list (screen.name меняется, и условная JSX-ветка
+  // для 'bracket-list' полностью пересоздаётся — локальный useState внутри
+  // BracketListScreen обнулялся бы при каждом возврате из сетки).
+  const [bracketFilters, setBracketFilters] = useState<BracketListFilters>(DEFAULT_BRACKET_FILTERS);
+  const [bracketSearchInput, setBracketSearchInput] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +135,10 @@ function App() {
           onSelectBracket={(bracket) => setScreen({ name: 'bracket', bracket })}
           onReopenFile={handleReopenFile}
           scrollToBracketId={lastViewedBracketId}
+          filters={bracketFilters}
+          onFiltersChange={setBracketFilters}
+          searchInput={bracketSearchInput}
+          onSearchInputChange={setBracketSearchInput}
         />
       )}
 
