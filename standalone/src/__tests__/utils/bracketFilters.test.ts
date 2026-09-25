@@ -163,40 +163,40 @@ describe('bracketFilters', () => {
         expect(filterBrackets(brackets, DEFAULT_BRACKET_FILTERS)).toHaveLength(3);
       });
 
-      it('includes brackets whose age range intersects the filter range', () => {
+      it('includes only brackets whose age range exactly matches both filter bounds', () => {
         const brackets = [
-          makeBracket({ id: 1, min_age: 10, max_age: 12 }),
-          makeBracket({ id: 2, min_age: 12, max_age: 14 }), // касается границы (12) -> пересечение
+          makeBracket({ id: 1, min_age: 9, max_age: 10 }),
+          makeBracket({ id: 2, min_age: 10, max_age: 11 }), // пересекается с [9,10] в точке 10, но НЕ совпадает точно
           makeBracket({ id: 3, min_age: 18, max_age: 35 }),
         ];
-        const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 11, ageTo: 13 });
-        expect(result.map((b) => b.id).sort()).toEqual([1, 2]);
+        const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 9, ageTo: 10 });
+        expect(result.map((b) => b.id)).toEqual([1]);
       });
 
-      it('excludes brackets fully outside the filter range', () => {
+      it('excludes brackets whose bounds do not exactly match', () => {
         const brackets = [
           makeBracket({ id: 1, min_age: 10, max_age: 12 }),
-          makeBracket({ id: 2, min_age: 18, max_age: 35 }),
+          makeBracket({ id: 2, min_age: 18, max_age: 40 }),
         ];
         const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 18, ageTo: 40 });
         expect(result.map((b) => b.id)).toEqual([2]);
       });
 
-      it('treats an open-ended filter (only ageFrom) as no upper bound', () => {
+      it('treats an open-ended filter (only ageFrom) as matching only that exact lower bound', () => {
         const brackets = [
           makeBracket({ id: 1, min_age: 10, max_age: 12 }),
           makeBracket({ id: 2, min_age: 18, max_age: 35 }),
         ];
-        const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 15, ageTo: null });
+        const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 18, ageTo: null });
         expect(result.map((b) => b.id)).toEqual([2]);
       });
 
-      it('treats an open-ended filter (only ageTo) as no lower bound', () => {
+      it('treats an open-ended filter (only ageTo) as matching only that exact upper bound', () => {
         const brackets = [
           makeBracket({ id: 1, min_age: 10, max_age: 12 }),
           makeBracket({ id: 2, min_age: 18, max_age: 35 }),
         ];
-        const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: null, ageTo: 15 });
+        const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: null, ageTo: 12 });
         expect(result.map((b) => b.id)).toEqual([1]);
       });
 
@@ -206,7 +206,7 @@ describe('bracketFilters', () => {
           makeBracket({ id: 2 }), // нет min_age/max_age вообще
         ];
         const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 20, ageTo: 30 });
-        // Сетка id=1 не пересекается с [20,30] -> исключена.
+        // Сетка id=1 не совпадает точно с [20,30] -> исключена.
         // Сетка id=2 без данных -> не исключаем её (снисходительны к отсутствию данных).
         expect(result.map((b) => b.id)).toEqual([2]);
       });
@@ -319,8 +319,8 @@ describe('bracketFilters', () => {
     it('filters correctly by an age range that only exists in category_name (10-11 vs 20-30)', () => {
       const brackets = [girls1011, boys1213, men2030, seniorBoys1617, noAgeAtAll];
       const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 10, ageTo: 11 });
-      // girls1011 (10-11) пересекается; boys1213 (12-13), men2030 (20-30), seniorBoys1617
-      // (16-17) — не пересекаются; noAgeAtAll — без данных вообще, не исключаем.
+      // girls1011 (10-11) совпадает точно; boys1213 (12-13), men2030 (20-30), seniorBoys1617
+      // (16-17) — не совпадают; noAgeAtAll — без данных вообще, не исключаем.
       expect(result.map((b) => b.id).sort()).toEqual([1, 5]);
     });
 
@@ -338,7 +338,7 @@ describe('bracketFilters', () => {
     it('does not exclude a bracket with no age data anywhere (neither fields nor category_name)', () => {
       const brackets = [men2030, noAgeAtAll];
       const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, ageFrom: 5, ageTo: 12 });
-      // men2030 (20-30) не пересекается с [5,12] -> исключён.
+      // men2030 (20-30) не совпадает с [5,12] -> исключён.
       // noAgeAtAll — нет данных вообще -> не исключаем.
       expect(result.map((b) => b.id)).toEqual([5]);
     });
@@ -356,7 +356,7 @@ describe('bracketFilters', () => {
         ageTo: 11,
       });
       // Если бы фильтр использовал распарсенное значение из названия (10-11), сетка
-      // прошла бы фильтр. С приоритетом явных полей (30-40) она не пересекается с [10,11].
+      // прошла бы фильтр. С приоритетом явных полей (30-40) она не совпадает с [10,11].
       expect(result).toHaveLength(0);
     });
   });

@@ -87,23 +87,25 @@ export function filterBrackets(brackets: Bracket[], filters: BracketListFilters)
     }
 
     if (filters.ageFrom != null || filters.ageTo != null) {
-      // Сетка проходит фильтр, если её диапазон [min_age, max_age] ПЕРЕСЕКАЕТСЯ с
-      // выбранным диапазоном фильтра (а не строго вложен в него) — стандартная проверка
-      // пересечения интервалов. Отсутствующая граница фильтра трактуется как "без
-      // ограничения" (-Infinity/+Infinity), отсутствующая граница у самой сетки —
+      // Сетка проходит фильтр, только если её возрастной диапазон ТОЧНО совпадает с
+      // заданными границами фильтра (а не просто пересекается с ним) — например,
+      // фильтр "9-10" должен показывать только категорию "9-10 лет", а не "10-11".
+      // Если задана только одна граница фильтра — проверяем точное совпадение именно
+      // этой границы, вторая не ограничивается. Отсутствующая граница у самой сетки —
       // как "неизвестно", и в этом случае сетку не исключаем (снисходительны к
       // данным без возрастной информации).
-      const filterFrom = filters.ageFrom ?? -Infinity;
-      const filterTo = filters.ageTo ?? Infinity;
       const effectiveAge = getEffectiveAgeRange(bracket);
-      const bracketMin = effectiveAge.min ?? -Infinity;
-      const bracketMax = effectiveAge.max ?? Infinity;
 
       if (effectiveAge.min == null && effectiveAge.max == null) {
         // У сетки нет возрастных данных вообще (ни явных полей, ни распознаваемых в
         // названии) — не исключаем её из результатов.
-      } else if (!(bracketMax >= filterFrom && bracketMin <= filterTo)) {
-        return false;
+      } else {
+        if (filters.ageFrom != null && effectiveAge.min !== filters.ageFrom) {
+          return false;
+        }
+        if (filters.ageTo != null && effectiveAge.max !== filters.ageTo) {
+          return false;
+        }
       }
     }
 
