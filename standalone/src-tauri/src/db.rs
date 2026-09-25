@@ -48,6 +48,8 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
             category_name TEXT,
             weight_min REAL,
             weight_max REAL,
+            age_min INTEGER,
+            age_max INTEGER,
             gender TEXT,
             sport_id INTEGER,
             sport_name TEXT,
@@ -132,6 +134,16 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     // пользователя, поэтому колонку нужно добавлять явно. Ошибка "duplicate column" (уже
     // есть в свежесозданных базах) ожидаема и игнорируется.
     let _ = sqlx::query("ALTER TABLE tournament_meta ADD COLUMN scoring_config TEXT")
+        .execute(pool)
+        .await;
+
+    // Миграция для баз, созданных до появления фильтра по возрасту: brackets_cache
+    // на диске у существующих пользователей ещё не содержит age_min/age_max (тот же
+    // паттерн, что и для scoring_config выше — CREATE TABLE IF NOT EXISTS их не добавит).
+    let _ = sqlx::query("ALTER TABLE brackets_cache ADD COLUMN age_min INTEGER")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE brackets_cache ADD COLUMN age_max INTEGER")
         .execute(pool)
         .await;
 
@@ -221,5 +233,55 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    /// Регрессия: у пользователей, запустивших версию standalone до появления фильтра по
+    /// возрасту, на диске уже лежит база с таблицей brackets_cache БЕЗ колонок
+    /// age_min/age_max (CREATE TABLE IF NOT EXISTS их не добавляет). create_tables должна
+    /// доводить такую старую базу до актуальной схемы через ALTER TABLE, а не падать при
+    /// следующей вставке/чтении сетки.
+    #[tokio::test]
+    async fn create_tables_migrates_pre_existing_brackets_cache_without_age_columns() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Симулируем старую базу: brackets_cache уже существует, но без age_min/age_max.
+        sqlx::query(
+            "CREATE TABLE brackets_cache (
+                bracket_id INTEGER PRIMARY KEY,
+                tournament_id INTEGER NOT NULL,
+                category_id INTEGER,
+                category_name TEXT,
+                weight_min REAL,
+                weight_max REAL,
+                gender TEXT,
+                sport_id INTEGER,
+                sport_name TEXT,
+                bracket_type TEXT,
+                total_rounds INTEGER,
+                status TEXT NOT NULL DEFAULT 'not_started',
+                is_published INTEGER NOT NULL DEFAULT 0,
+                characteristics_schema TEXT,
+                characteristic_filters TEXT,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        create_tables(&pool).await.unwrap();
+
+        // Раньше это падало с "table brackets_cache has no column named age_min".
+        sqlx::query(
+            "INSERT INTO brackets_cache (bracket_id, tournament_id, age_min, age_max, updated_at)
+             VALUES (1, 1, 10, 12, datetime('now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
     }
 }

@@ -9,9 +9,14 @@ import {
   getUniqueGenders,
   getGenderLabel,
   getStatusFilterLabel,
+  hasAnyAgeData,
+  getAvailableCharacteristics,
+  getCharacteristicValues,
+  getStageFilterLabel,
   DEFAULT_BRACKET_FILTERS,
   type BracketListFilters,
   type BracketStatusFilter,
+  type BracketStageFilter,
 } from '../utils/bracketFilters';
 import type { Bracket, Tournament } from '../types';
 
@@ -29,6 +34,7 @@ interface BracketListScreenProps {
 }
 
 const STATUS_FILTER_OPTIONS: BracketStatusFilter[] = ['all', 'not_started', 'in_progress', 'completed'];
+const STAGE_FILTER_OPTIONS: BracketStageFilter[] = ['all', 'semifinal', 'final'];
 
 const statusLabels: Record<Bracket['status'], string> = {
   not_started: 'Не начата',
@@ -122,19 +128,66 @@ export function BracketListScreen({
 
   const uniqueSports = useMemo(() => getUniqueSports(bracketsWithLiveStatus), [bracketsWithLiveStatus]);
   const uniqueGenders = useMemo(() => getUniqueGenders(bracketsWithLiveStatus), [bracketsWithLiveStatus]);
+  const showAgeFilter = useMemo(() => hasAnyAgeData(bracketsWithLiveStatus), [bracketsWithLiveStatus]);
+
+  // Динамические характеристики турнира (например "уровень" A/B/C) — берутся из
+  // characteristics_schema первой сетки (считается одинаковой для всего турнира) и
+  // отфильтрованы по use_as_category_tag === true. Показываем ряд pill-кнопок только
+  // для тех характеристик, у которых больше одного уникального значения в турнире —
+  // тот же паттерн, что уже используется для "Вид спорта"/"Пол" в этом компоненте.
+  const availableCharacteristics = useMemo(
+    () => getAvailableCharacteristics(bracketsWithLiveStatus),
+    [bracketsWithLiveStatus]
+  );
+  const characteristicValuesByKey = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const field of availableCharacteristics) {
+      map.set(field.key, getCharacteristicValues(bracketsWithLiveStatus, field.key));
+    }
+    return map;
+  }, [availableCharacteristics, bracketsWithLiveStatus]);
 
   const filteredBrackets = useMemo(
     () => filterBrackets(bracketsWithLiveStatus, activeFilters),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bracketsWithLiveStatus, activeFilters.sportId, activeFilters.gender, activeFilters.status, activeFilters.searchQuery]
+    [
+      bracketsWithLiveStatus,
+      activeFilters.sportId,
+      activeFilters.gender,
+      activeFilters.status,
+      activeFilters.searchQuery,
+      activeFilters.ageFrom,
+      activeFilters.ageTo,
+      activeFilters.characteristics,
+      activeFilters.stage,
+    ]
+  );
+
+  const hasActiveCharacteristicFilters = Object.values(filters.characteristics).some(
+    (value) => value !== 'all'
   );
 
   const hasActiveFilters =
-    searchInput !== '' || filters.sportId !== 'all' || filters.gender !== 'all' || filters.status !== 'all';
+    searchInput !== '' ||
+    filters.sportId !== 'all' ||
+    filters.gender !== 'all' ||
+    filters.status !== 'all' ||
+    filters.ageFrom !== null ||
+    filters.ageTo !== null ||
+    filters.stage !== 'all' ||
+    hasActiveCharacteristicFilters;
 
   const handleResetFilters = () => {
     setSearchInput('');
     setFilters(DEFAULT_BRACKET_FILTERS);
+  };
+
+  // Парсинг значения числового инпута фильтра по возрасту: пустая строка -> null (фильтр
+  // по этой границе не задан), иначе целое число (отрицательные/NaN игнорируем как null).
+  const parseAgeInput = (value: string): number | null => {
+    if (value.trim() === '') return null;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) || parsed < 0 ? null : parsed;
   };
 
   // Прокрутка к сетке, из которой только что вернулись (см. App.tsx). Если сетка
@@ -198,6 +251,63 @@ export function BracketListScreen({
             ))}
           </div>
 
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Стадия:</span>
+            {STAGE_FILTER_OPTIONS.map((stage) => (
+              <button
+                key={stage}
+                onClick={() => setFilters((prev) => ({ ...prev, stage }))}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                  filters.stage === stage ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {getStageFilterLabel(stage)}
+              </button>
+            ))}
+          </div>
+
+          {availableCharacteristics.map((field) => {
+            const values = characteristicValuesByKey.get(field.key) ?? [];
+            if (values.length <= 1) return null;
+            const selected = filters.characteristics[field.key] ?? 'all';
+            return (
+              <div key={field.key} className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">
+                  {field.label || field.key}:
+                </span>
+                <button
+                  onClick={() =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      characteristics: { ...prev.characteristics, [field.key]: 'all' },
+                    }))
+                  }
+                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                    selected === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  Все
+                </button>
+                {values.map((value) => (
+                  <button
+                    key={value}
+                    onClick={() =>
+                      setFilters((prev) => ({
+                        ...prev,
+                        characteristics: { ...prev.characteristics, [field.key]: value },
+                      }))
+                    }
+                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      selected === value ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+
           {uniqueSports.length > 1 && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
@@ -245,6 +355,31 @@ export function BracketListScreen({
                   {getGenderLabel(gender)}
                 </button>
               ))}
+            </div>
+          )}
+
+          {showAgeFilter && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Возраст:</span>
+              <input
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={filters.ageFrom ?? ''}
+                onChange={(e) => setFilters((prev) => ({ ...prev, ageFrom: parseAgeInput(e.target.value) }))}
+                placeholder="от"
+                className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-gray-400">—</span>
+              <input
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={filters.ageTo ?? ''}
+                onChange={(e) => setFilters((prev) => ({ ...prev, ageTo: parseAgeInput(e.target.value) }))}
+                placeholder="до"
+                className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
           )}
         </div>

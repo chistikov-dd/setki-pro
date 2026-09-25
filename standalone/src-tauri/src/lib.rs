@@ -79,6 +79,21 @@ fn match_row_to_json(row: &sqlx::sqlite::SqliteRow) -> serde_json::Value {
 }
 
 /// Пересчитать статус сетки на основе статусов её матчей.
+///
+/// ВАЖНО: сетка строится как полное бинарное дерево на степень двойки слотов, но
+/// реальных участников может быть меньше — тогда на нижних раундах остаются
+/// TBD-заглушки (participant1/participant2 оба NULL), которые физически некому
+/// сыграть и которые НИКОГДА не перейдут в статус "completed". Поэтому "все матчи
+/// сетки completed" — неверный критерий финального статуса: он не учитывает, что
+/// финальный (реальный) матч мог уже завершиться, пока где-то на нижних раундах
+/// висит недоигранный bye/TBD-матч.
+///
+/// Правильный критерий: сетка завершена, когда завершены ВСЕ матчи ПОСЛЕДНЕГО раунда
+/// (round_number == total_rounds сетки, либо MAX(round_number) среди её матчей — на
+/// случай, если total_rounds в БД не заполнен/некорректен). Для single_elimination
+/// последний раунд — это, как правило, один финальный матч; для round_robin/double_elimination
+/// явной отдельной логики продвижения в этом файле нет, но критерий "последний раунд по
+/// round_number завершён" остаётся корректным и для них.
 async fn update_bracket_status(bracket_id: i32, pool: &SqlitePool) -> Result<(), String> {
     let statuses: Vec<(String,)> =
         sqlx::query_as("SELECT status FROM matches_cache WHERE bracket_id = ?")
@@ -91,11 +106,43 @@ async fn update_bracket_status(bracket_id: i32, pool: &SqlitePool) -> Result<(),
         return Ok(());
     }
 
-    let total = statuses.len();
     let completed = statuses.iter().filter(|(s,)| s == "completed").count();
     let in_progress = statuses.iter().filter(|(s,)| s == "in_progress").count();
 
-    let new_status = if completed == total {
+    // total_rounds сетки, с надёжным fallback на MAX(round_number) среди её матчей —
+    // не полагаемся на то, что total_rounds всегда корректно заполнено в brackets_cache.
+    let declared_total_rounds: Option<i32> =
+        sqlx::query_scalar("SELECT total_rounds FROM brackets_cache WHERE bracket_id = ?")
+            .bind(bracket_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .flatten();
+
+    let max_round_in_matches: i32 =
+        sqlx::query_scalar("SELECT MAX(round_number) FROM matches_cache WHERE bracket_id = ?")
+            .bind(bracket_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let final_round = declared_total_rounds
+        .filter(|r| *r > 0)
+        .unwrap_or(max_round_in_matches);
+
+    let final_round_statuses: Vec<(String,)> = sqlx::query_as(
+        "SELECT status FROM matches_cache WHERE bracket_id = ? AND round_number = ?",
+    )
+    .bind(bracket_id)
+    .bind(final_round)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let final_round_completed = !final_round_statuses.is_empty()
+        && final_round_statuses.iter().all(|(s,)| s == "completed");
+
+    let new_status = if final_round_completed {
         "completed"
     } else if in_progress > 0 || completed > 0 {
         "in_progress"
@@ -223,6 +270,8 @@ async fn load_tournament_json(content: &str, pool: &SqlitePool) -> Result<Loaded
         let category_name = bracket["category_name"].as_str().unwrap_or("").to_string();
         let weight_min = bracket["min_weight"].as_f64();
         let weight_max = bracket["max_weight"].as_f64();
+        let age_min = bracket["min_age"].as_i64().map(|v| v as i32);
+        let age_max = bracket["max_age"].as_i64().map(|v| v as i32);
         let gender = bracket["gender"].as_str().unwrap_or("").to_string();
         let sport_id = bracket["sport_id"].as_i64().map(|v| v as i32);
         let sport_name = bracket["sport_name"].as_str().unwrap_or("").to_string();
@@ -244,9 +293,9 @@ async fn load_tournament_json(content: &str, pool: &SqlitePool) -> Result<Loaded
         sqlx::query(
             "INSERT OR REPLACE INTO brackets_cache
              (bracket_id, tournament_id, category_id, category_name, weight_min, weight_max,
-              gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
+              age_min, age_max, gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
               characteristics_schema, characteristic_filters, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
         )
         .bind(bracket_id)
         .bind(tournament_id)
@@ -254,6 +303,8 @@ async fn load_tournament_json(content: &str, pool: &SqlitePool) -> Result<Loaded
         .bind(&category_name)
         .bind(weight_min)
         .bind(weight_max)
+        .bind(age_min)
+        .bind(age_max)
         .bind(&gender)
         .bind(sport_id)
         .bind(&sport_name)
@@ -444,7 +495,7 @@ async fn get_cached_brackets(state: State<'_, AppState>) -> Result<Vec<serde_jso
 
     let rows = sqlx::query(
         "SELECT bracket_id, tournament_id, category_id, category_name, weight_min, weight_max,
-                gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
+                age_min, age_max, gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
                 characteristics_schema, characteristic_filters
          FROM brackets_cache ORDER BY category_name, bracket_id",
     )
@@ -467,6 +518,23 @@ async fn get_cached_brackets(state: State<'_, AppState>) -> Result<Vec<serde_jso
             let is_published: i32 = row.get("is_published");
             let weight_min: Option<f64> = row.get("weight_min");
             let weight_max: Option<f64> = row.get("weight_max");
+            let age_min: Option<i32> = row.get("age_min");
+            let age_max: Option<i32> = row.get("age_max");
+            let characteristics_schema: Option<String> = row.get("characteristics_schema");
+            let characteristic_filters: Option<String> = row.get("characteristic_filters");
+
+            // characteristics_schema/characteristic_filters хранятся в SQLite как сериализованный
+            // JSON-текст (см. load_tournament_json) — распарсиваем обратно в объект/массив здесь,
+            // один раз, так же как это уже делает export_tournament_json, чтобы фронтенду не
+            // приходилось самому парсить JSON-строки.
+            let characteristics_schema_value = characteristics_schema
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let characteristic_filters_value = characteristic_filters
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or(serde_json::Value::Null);
 
             serde_json::json!({
                 "id": bracket_id,
@@ -481,6 +549,10 @@ async fn get_cached_brackets(state: State<'_, AppState>) -> Result<Vec<serde_jso
                 "is_published": is_published != 0,
                 "min_weight": weight_min,
                 "max_weight": weight_max,
+                "min_age": age_min,
+                "max_age": age_max,
+                "characteristics_schema": characteristics_schema_value,
+                "characteristic_filters": characteristic_filters_value,
             })
         })
         .collect();
@@ -528,7 +600,7 @@ async fn export_tournament_json(
 ) -> Result<serde_json::Value, String> {
     let bracket_rows = sqlx::query(
         "SELECT bracket_id, category_id, category_name, weight_min, weight_max,
-                gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
+                age_min, age_max, gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
                 characteristics_schema, characteristic_filters
          FROM brackets_cache ORDER BY category_name, bracket_id",
     )
@@ -544,6 +616,8 @@ async fn export_tournament_json(
         let category_name: Option<String> = row.get("category_name");
         let weight_min: Option<f64> = row.get("weight_min");
         let weight_max: Option<f64> = row.get("weight_max");
+        let age_min: Option<i32> = row.get("age_min");
+        let age_max: Option<i32> = row.get("age_max");
         let gender: Option<String> = row.get("gender");
         let sport_id: Option<i32> = row.get("sport_id");
         let sport_name: Option<String> = row.get("sport_name");
@@ -627,6 +701,8 @@ async fn export_tournament_json(
             "category_name": category_name,
             "min_weight": weight_min,
             "max_weight": weight_max,
+            "min_age": age_min,
+            "max_age": age_max,
             "gender": gender,
             "sport_id": sport_id,
             "sport_name": sport_name,
@@ -1622,6 +1698,8 @@ mod tests {
                     "total_rounds": 2,
                     "status": "not_started",
                     "is_published": true,
+                    "min_age": 18,
+                    "max_age": 35,
                     "matches": [
                         {
                             "id": 1001, "round_number": 1, "match_number": 0, "status": "scheduled",
@@ -1676,6 +1754,16 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(p1_name.as_deref(), Some("Иванов Иван Иванович"));
+
+        // Возраст (min_age/max_age) должен парситься и сохраняться в brackets_cache
+        // по аналогии с min_weight/max_weight.
+        let (age_min, age_max): (Option<i32>, Option<i32>) =
+            sqlx::query_as("SELECT age_min, age_max FROM brackets_cache WHERE bracket_id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(age_min, Some(18));
+        assert_eq!(age_max, Some(35));
     }
 
     #[tokio::test]
@@ -1720,6 +1808,67 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let category_name: Option<String> = rows[0].get("category_name");
         assert_eq!(category_name.as_deref(), Some("Мужчины до 70 кг"));
+    }
+
+    /// Регрессия: get_cached_brackets (используется при восстановлении сессии после F5 —
+    /// см. App.tsx) должна возвращать characteristics_schema/characteristic_filters как
+    /// распарсенные JSON-объект/массив, а не как сериализованную строку — иначе фронтенд
+    /// после F5 теряет данные для динамического фильтра по характеристикам ("уровень" A/B/C и т.п.),
+    /// хотя изначальная загрузка файла (load_tournament_file) отдаёт их корректно.
+    #[tokio::test]
+    async fn get_cached_brackets_returns_parsed_characteristics_not_raw_string() {
+        let pool = memory_pool().await;
+
+        let json = serde_json::json!({
+            "tournament": { "id": 42, "name": "Тестовый турнир" },
+            "brackets": [
+                {
+                    "id": 100,
+                    "category_id": 1,
+                    "category_name": "Мужчины до 70 кг",
+                    "status": "not_started",
+                    "characteristics_schema": [
+                        { "key": "level", "label": "Уровень", "use_as_category_tag": true, "options": ["A", "B", "C"] }
+                    ],
+                    "characteristic_filters": [
+                        { "key": "level", "value": "A" }
+                    ],
+                    "matches": []
+                }
+            ]
+        })
+        .to_string();
+
+        load_tournament_json(&json, &pool).await.unwrap();
+
+        // Воспроизводим то же самое чтение+парсинг, что делает get_cached_brackets.
+        let rows = sqlx::query(
+            "SELECT characteristics_schema, characteristic_filters FROM brackets_cache",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+
+        let schema_text: Option<String> = rows[0].get("characteristics_schema");
+        let filters_text: Option<String> = rows[0].get("characteristic_filters");
+
+        let schema_value: serde_json::Value = schema_text
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap();
+        let filters_value: serde_json::Value = filters_text
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap();
+
+        assert!(schema_value.is_array(), "characteristics_schema должен парситься в массив");
+        assert_eq!(schema_value[0]["key"], "level");
+        assert_eq!(schema_value[0]["use_as_category_tag"], true);
+
+        assert!(filters_value.is_array(), "characteristic_filters должен парситься в массив");
+        assert_eq!(filters_value[0]["key"], "level");
+        assert_eq!(filters_value[0]["value"], "A");
     }
 
     // ===== 2b. parse_scoring_config / get_tournament_meta (восстановление сессии после F5) =====
@@ -1839,6 +1988,90 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events_after, 0);
+    }
+
+    // ===== 3b. Статус сетки (update_bracket_status) =====
+
+    /// Регрессия на баг пользователя: сетка на N слотов (степень двойки) при меньшем
+    /// числе реальных участников содержит TBD-заглушки на нижних раундах (оба участника
+    /// NULL), которые физически некому сыграть — они никогда не станут "completed".
+    /// Финальный (последний по round_number) матч, тем не менее, УЖЕ завершён и имеет
+    /// победителя. Статус сетки должен стать "completed", а не зависать в "in_progress"
+    /// из-за недоигранных TBD-матчей на более ранних раундах.
+    #[tokio::test]
+    async fn update_bracket_status_completed_when_final_round_done_despite_tbd_stub_matches() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let bracket_id: i32 = 100;
+
+        // Добавляем TBD-заглушку на первом раунде: пустой bye-матч без участников,
+        // который никогда не будет сыгран (симулирует сетку на 8 слотов при < 8 реальных
+        // участниках — часть матчей нижних раундов остаются пустыми навсегда).
+        sqlx::query(
+            "INSERT INTO matches_cache (match_id, bracket_id, tournament_id, round_number, match_number, status, updated_at)
+             VALUES (9999, ?, 42, 1, 2, 'scheduled', datetime('now'))",
+        )
+        .bind(bracket_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Играем оба матча первого раунда, продвигая победителей в финал (1003).
+        finish_match_core(&pool, 1001, Some(1), "points".to_string(), 2, 5).await.unwrap();
+        finish_match_core(&pool, 1002, Some(4), "points".to_string(), 7, 3).await.unwrap();
+
+        // Финал (1003, round_number = 2 = total_rounds) завершается с победителем.
+        finish_match_core(&pool, 1003, Some(1), "points".to_string(), 1, 6).await.unwrap();
+
+        // TBD-заглушка (9999, round_number = 1) осталась "scheduled" навечно — некому играть.
+        let (stub_status,): (String,) =
+            sqlx::query_as("SELECT status FROM matches_cache WHERE match_id = 9999")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stub_status, "scheduled");
+
+        // Тем не менее статус сетки должен быть "completed", т.к. последний раунд (финал) сыгран.
+        let (bracket_status,): (String,) =
+            sqlx::query_as("SELECT status FROM brackets_cache WHERE bracket_id = ?")
+                .bind(bracket_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bracket_status, "completed");
+    }
+
+    #[tokio::test]
+    async fn update_bracket_status_not_started_when_nothing_played() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        // Ничего не сыграно — все матчи "scheduled" (как после свежей загрузки).
+        update_bracket_status(100, &pool).await.unwrap();
+
+        let (bracket_status,): (String,) =
+            sqlx::query_as("SELECT status FROM brackets_cache WHERE bracket_id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bracket_status, "not_started");
+    }
+
+    #[tokio::test]
+    async fn update_bracket_status_in_progress_when_some_played_but_final_not_done() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        // Один полуфинал сыгран (и победитель продвинут в финал), но финал ещё не сыгран.
+        finish_match_core(&pool, 1001, Some(1), "points".to_string(), 2, 5).await.unwrap();
+
+        let (bracket_status,): (String,) =
+            sqlx::query_as("SELECT status FROM brackets_cache WHERE bracket_id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bracket_status, "in_progress");
     }
 
     // ===== 4. Автопродвижение победителя (finish_match) и undo =====
@@ -2218,6 +2451,8 @@ mod tests {
         assert_eq!(bracket["gender"], "male");
         assert_eq!(bracket["bracket_type"], "single_elimination");
         assert_eq!(bracket["is_published"], true);
+        assert_eq!(bracket["min_age"], 18);
+        assert_eq!(bracket["max_age"], 35);
 
         let matches = bracket["matches"].as_array().unwrap();
         assert_eq!(matches.len(), 3);
@@ -2311,6 +2546,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bracket_status, "in_progress");
+
+        // Возраст (min_age/max_age) тоже должен пережить полный цикл export -> reimport.
+        let (age_min, age_max): (Option<i32>, Option<i32>) =
+            sqlx::query_as("SELECT age_min, age_max FROM brackets_cache WHERE bracket_id = 100")
+                .fetch_one(&pool2)
+                .await
+                .unwrap();
+        assert_eq!(age_min, Some(18));
+        assert_eq!(age_max, Some(35));
     }
 
     #[tokio::test]

@@ -14,6 +14,25 @@ export interface Category {
   name: string;
 }
 
+/**
+ * Одно поле схемы характеристик турнира (общая для всех сеток одного турнира).
+ * Схема описывает произвольные характеристики категории (например "уровень",
+ * "пояс" и т.п.) — `use_as_category_tag` явно помечает те из них, что пригодны
+ * для категоризации/фильтрации (а не любые произвольные характеристики).
+ */
+export interface CharacteristicSchemaField {
+  key: string;
+  label?: string;
+  use_as_category_tag?: boolean;
+  options?: string[];
+}
+
+/** Конкретное значение характеристики у ОДНОЙ сетки (bracket.characteristic_filters). */
+export interface CharacteristicFilterValue {
+  key: string;
+  value: string | number;
+}
+
 export interface Bracket {
   id: number;
   category_id: number | null;
@@ -26,7 +45,15 @@ export interface Bracket {
   sport_name?: string;
   min_weight?: number;
   max_weight?: number;
+  min_age?: number;
+  max_age?: number;
   is_published?: boolean;
+  // Схема характеристик турнира (одинаковая у всех сеток одного турнира) и конкретные
+  // значения характеристик ЭТОЙ сетки. И load_tournament_file, и get_cached_brackets
+  // (Rust) уже отдают их как распарсенные JSON-объект/массив (не строки) — парсинг на
+  // фронтенде не нужен.
+  characteristics_schema?: CharacteristicSchemaField[] | null;
+  characteristic_filters?: CharacteristicFilterValue[] | null;
   // Матчи сетки, как они приходят прямо во вложенном виде из исходного JSON-файла
   // турнира (LoadedTournamentFile.brackets[].matches) — используется для поиска
   // по участнику на экране списка сеток. get_cached_brackets (Tauri-команда) их
