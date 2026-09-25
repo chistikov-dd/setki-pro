@@ -121,12 +121,19 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
             tournament_id INTEGER,
             tournament_name TEXT,
             judge_name TEXT,
-            scoring_config TEXT,
             imported_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+
+    // Миграция для баз, созданных до появления scoring_config (версии standalone <= 0.2.0):
+    // CREATE TABLE IF NOT EXISTS не добавляет колонку в уже существующую таблицу на диске
+    // пользователя, поэтому колонку нужно добавлять явно. Ошибка "duplicate column" (уже
+    // есть в свежесозданных базах) ожидаема и игнорируется.
+    let _ = sqlx::query("ALTER TABLE tournament_meta ADD COLUMN scoring_config TEXT")
+        .execute(pool)
+        .await;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_brackets_tournament ON brackets_cache(tournament_id)")
         .execute(pool)
@@ -179,5 +186,40 @@ mod tests {
         assert!(!names.contains(&"bracket_reservations".to_string()));
         assert!(!names.contains(&"judge_sessions".to_string()));
         assert!(!names.contains(&"auth".to_string()));
+    }
+
+    /// Регрессия: у пользователей, запустивших версию standalone <= 0.2.0, на диске уже
+    /// лежит база с таблицей tournament_meta БЕЗ колонки scoring_config (CREATE TABLE
+    /// IF NOT EXISTS её не добавляет). create_tables должна доводить такую старую базу
+    /// до актуальной схемы через ALTER TABLE, а не падать при следующем запуске.
+    #[tokio::test]
+    async fn create_tables_migrates_pre_existing_tournament_meta_without_scoring_config() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Симулируем старую базу: tournament_meta уже существует, но без scoring_config.
+        sqlx::query(
+            "CREATE TABLE tournament_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                tournament_id INTEGER,
+                tournament_name TEXT,
+                judge_name TEXT,
+                imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        create_tables(&pool).await.unwrap();
+
+        // Раньше это падало с "table tournament_meta has no column named scoring_config".
+        sqlx::query("INSERT INTO tournament_meta (id, tournament_id, tournament_name, scoring_config) VALUES (1, 1, 'X', '{}')")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
