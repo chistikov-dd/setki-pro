@@ -1,15 +1,19 @@
 import type { Bracket } from '../types';
 
+export type BracketStatusFilter = 'all' | 'not_started' | 'in_progress' | 'completed';
+
 export interface BracketListFilters {
   searchQuery: string;
   sportId: number | 'all';
   gender: string | 'all';
+  status: BracketStatusFilter;
 }
 
 export const DEFAULT_BRACKET_FILTERS: BracketListFilters = {
   searchQuery: '',
   sportId: 'all',
   gender: 'all',
+  status: 'all',
 };
 
 /**
@@ -27,6 +31,10 @@ export function filterBrackets(brackets: Bracket[], filters: BracketListFilters)
     }
 
     if (filters.gender !== 'all' && (bracket.gender || '') !== filters.gender) {
+      return false;
+    }
+
+    if (filters.status !== 'all' && bracket.status !== filters.status) {
       return false;
     }
 
@@ -83,5 +91,23 @@ export function getGenderLabel(gender: string): string {
       return 'Смешанные';
     default:
       return gender;
+  }
+}
+
+/**
+ * Человекочитаемая метка для значения фильтра по статусу сетки (включая 'all').
+ */
+export function getStatusFilterLabel(status: BracketStatusFilter): string {
+  switch (status) {
+    case 'all':
+      return 'Все';
+    case 'not_started':
+      return 'Не начатые';
+    case 'in_progress':
+      return 'В процессе';
+    case 'completed':
+      return 'Завершённые';
+    default:
+      return status;
   }
 }

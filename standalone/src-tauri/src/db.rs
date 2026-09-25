@@ -111,13 +111,17 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
-    // Метаданные загруженного турнира (для отображения имени/названия турнира в UI)
+    // Метаданные загруженного турнира (для отображения имени/названия турнира в UI).
+    // scoring_config хранит JSON конфигурации начисления баллов из исходного файла,
+    // чтобы её можно было положить обратно при автосохранении (export_tournament_json)
+    // без необходимости держать её только в памяти процесса.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS tournament_meta (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             tournament_id INTEGER,
             tournament_name TEXT,
             judge_name TEXT,
+            scoring_config TEXT,
             imported_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
     )

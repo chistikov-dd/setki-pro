@@ -27,6 +27,9 @@ type Screen =
 function App() {
   const [tournamentData, setTournamentData] = useState<LoadedTournamentFile | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: 'file-open' });
+  // Id сетки, которую только что просматривали — чтобы при возврате на список
+  // сеток проскроллить к её карточке, а не сбрасывать скролл наверх.
+  const [lastViewedBracketId, setLastViewedBracketId] = useState<number | null>(null);
 
   const handleFileLoaded = (data: LoadedTournamentFile) => {
     setTournamentData(data);
@@ -36,6 +39,11 @@ function App() {
   const handleReopenFile = () => {
     setTournamentData(null);
     setScreen({ name: 'file-open' });
+  };
+
+  const handleBackToBracketList = (bracket: Bracket) => {
+    setLastViewedBracketId(bracket.id);
+    setScreen({ name: 'bracket-list' });
   };
 
   return (
@@ -48,6 +56,7 @@ function App() {
           brackets={tournamentData.brackets}
           onSelectBracket={(bracket) => setScreen({ name: 'bracket', bracket })}
           onReopenFile={handleReopenFile}
+          scrollToBracketId={lastViewedBracketId}
         />
       )}
 
@@ -55,7 +64,7 @@ function App() {
         <BracketScreen
           bracket={screen.bracket}
           onOpenMatch={(match) => setScreen({ name: 'match', bracket: screen.bracket, match })}
-          onBack={() => setScreen({ name: 'bracket-list' })}
+          onBack={() => handleBackToBracketList(screen.bracket)}
         />
       )}
 

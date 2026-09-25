@@ -2,11 +2,17 @@ mod db;
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tauri::{Manager, State};
 
 struct AppState {
     db_pool: Arc<SqlitePool>,
+    /// Путь к последнему открытому .json файлу турнира — используется для
+    /// автосохранения изменений обратно на диск после каждой мутирующей команды.
+    /// None до первой успешной загрузки файла (или если приложение только что
+    /// запущено и файл ещё не открывали в этой сессии).
+    tournament_file_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
 // ============================================
@@ -153,7 +159,16 @@ async fn load_tournament_file(
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Не удалось прочитать файл: {}", e))?;
 
-    load_tournament_json(&content, &state.db_pool).await
+    let result = load_tournament_json(&content, &state.db_pool).await?;
+
+    // Запоминаем путь к файлу только после успешного парсинга — чтобы автосохранение
+    // не начало перезаписывать файл, если загрузка провалилась на середине.
+    {
+        let mut guard = state.tournament_file_path.lock().map_err(|_| "Внутренняя ошибка блокировки".to_string())?;
+        *guard = Some(PathBuf::from(&path));
+    }
+
+    Ok(result)
 }
 
 /// Основная логика парсинга JSON турнира и записи в SQLite — вынесена отдельно от
@@ -329,16 +344,19 @@ async fn load_tournament_json(content: &str, pool: &SqlitePool) -> Result<Loaded
     } else {
         default_scoring_config()
     };
+    let scoring_config_text = scoring_config.to_string();
 
     sqlx::query(
-        "INSERT INTO tournament_meta (id, tournament_id, tournament_name, imported_at)
-         VALUES (1, ?, ?, datetime('now'))
+        "INSERT INTO tournament_meta (id, tournament_id, tournament_name, scoring_config, imported_at)
+         VALUES (1, ?, ?, ?, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET tournament_id = excluded.tournament_id,
                                         tournament_name = excluded.tournament_name,
+                                        scoring_config = excluded.scoring_config,
                                         imported_at = datetime('now')",
     )
     .bind(tournament_id)
     .bind(&tournament_name)
+    .bind(&scoring_config_text)
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -476,6 +494,212 @@ async fn get_bracket_matches(
     Ok(rows.iter().map(match_row_to_json).collect())
 }
 
+// ============================================
+// Автосохранение: экспорт живого состояния SQLite обратно в JSON турнира
+// ============================================
+
+/// Собрать полный JSON турнира (в формате, который понимает `load_tournament_json`)
+/// из ТЕКУЩЕГО состояния SQLite-кэша (brackets_cache + matches_cache) — то есть
+/// с учётом всех изменений, сделанных пользователем (счёт, статусы, продвижение
+/// победителей, правки участников). Используется для round-trip-безопасного
+/// автосохранения на диск после каждой мутирующей команды.
+async fn export_tournament_json(
+    pool: &SqlitePool,
+    tournament_id: i32,
+    tournament_name: &str,
+) -> Result<serde_json::Value, String> {
+    let bracket_rows = sqlx::query(
+        "SELECT bracket_id, category_id, category_name, weight_min, weight_max,
+                gender, sport_id, sport_name, bracket_type, total_rounds, status, is_published,
+                characteristics_schema, characteristic_filters
+         FROM brackets_cache ORDER BY category_name, bracket_id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut brackets_json = Vec::with_capacity(bracket_rows.len());
+
+    for row in &bracket_rows {
+        let bracket_id: i32 = row.get("bracket_id");
+        let category_id: Option<i32> = row.get("category_id");
+        let category_name: Option<String> = row.get("category_name");
+        let weight_min: Option<f64> = row.get("weight_min");
+        let weight_max: Option<f64> = row.get("weight_max");
+        let gender: Option<String> = row.get("gender");
+        let sport_id: Option<i32> = row.get("sport_id");
+        let sport_name: Option<String> = row.get("sport_name");
+        let bracket_type: Option<String> = row.get("bracket_type");
+        let total_rounds: Option<i32> = row.get("total_rounds");
+        let status: String = row.get("status");
+        let is_published: i32 = row.get("is_published");
+        let characteristics_schema: Option<String> = row.get("characteristics_schema");
+        let characteristic_filters: Option<String> = row.get("characteristic_filters");
+
+        let characteristics_schema_value = characteristics_schema
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let characteristic_filters_value = characteristic_filters
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .unwrap_or(serde_json::Value::Null);
+
+        let match_rows = sqlx::query(
+            "SELECT match_id, bracket_id, tournament_id, round_number, match_number,
+                    p1_id, p1_name, p1_club,
+                    p2_id, p2_name, p2_club,
+                    score_p1, score_p2, warnings_p1, warnings_p2,
+                    winner_id, result_type, status, version
+             FROM matches_cache WHERE bracket_id = ?
+             ORDER BY round_number, match_number",
+        )
+        .bind(bracket_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let matches_json: Vec<serde_json::Value> = match_rows
+            .iter()
+            .map(|m| {
+                let match_id: i32 = m.get("match_id");
+                let round_number: i32 = m.get("round_number");
+                let match_number: i32 = m.get("match_number");
+                let p1_id: Option<i32> = m.get("p1_id");
+                let p1_name: Option<String> = m.get("p1_name");
+                let p1_club: Option<String> = m.get("p1_club");
+                let p2_id: Option<i32> = m.get("p2_id");
+                let p2_name: Option<String> = m.get("p2_name");
+                let p2_club: Option<String> = m.get("p2_club");
+                let score_p1: i32 = m.get("score_p1");
+                let score_p2: i32 = m.get("score_p2");
+                let winner_id: Option<i32> = m.get("winner_id");
+                let result_type: Option<String> = m.get("result_type");
+                let status: String = m.get("status");
+
+                let participant1 = if p1_id.is_some() || p1_name.is_some() {
+                    serde_json::json!({ "id": p1_id, "fighter_id": p1_id, "full_name": p1_name, "club_name": p1_club })
+                } else {
+                    serde_json::Value::Null
+                };
+                let participant2 = if p2_id.is_some() || p2_name.is_some() {
+                    serde_json::json!({ "id": p2_id, "fighter_id": p2_id, "full_name": p2_name, "club_name": p2_club })
+                } else {
+                    serde_json::Value::Null
+                };
+
+                serde_json::json!({
+                    "id": match_id,
+                    "participant1": participant1,
+                    "participant2": participant2,
+                    "round_number": round_number,
+                    "match_number": match_number,
+                    "score_participant1": score_p1,
+                    "score_participant2": score_p2,
+                    "winner_id": winner_id,
+                    "result_type": result_type,
+                    "status": status,
+                })
+            })
+            .collect();
+
+        brackets_json.push(serde_json::json!({
+            "id": bracket_id,
+            "category_id": category_id,
+            "category_name": category_name,
+            "min_weight": weight_min,
+            "max_weight": weight_max,
+            "gender": gender,
+            "sport_id": sport_id,
+            "sport_name": sport_name,
+            "bracket_type": bracket_type,
+            "total_rounds": total_rounds,
+            "status": status,
+            "is_published": is_published != 0,
+            "characteristics_schema": characteristics_schema_value,
+            "characteristic_filters": characteristic_filters_value,
+            "matches": matches_json,
+        }));
+    }
+
+    let scoring_config_text: Option<String> =
+        sqlx::query_scalar("SELECT scoring_config FROM tournament_meta WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .flatten();
+
+    let scoring_config = scoring_config_text
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or_else(default_scoring_config);
+
+    Ok(serde_json::json!({
+        "tournament": { "id": tournament_id, "name": tournament_name },
+        "brackets": brackets_json,
+        "scoring_config": scoring_config,
+    }))
+}
+
+/// Записать текущее состояние турнира обратно в исходный .json файл на диске
+/// (если он известен). Не паникует и не возвращает ошибку наружу пользователю —
+/// автосохранение не должно ронять основную операцию (например, если файл был
+/// удалён вручную); в этом случае ошибка просто логируется в stderr.
+async fn autosave_tournament(pool: &SqlitePool, file_path: &Arc<Mutex<Option<PathBuf>>>) {
+    let path = {
+        let guard = match file_path.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Автосохранение: не удалось получить блокировку пути к файлу: {}", e);
+                return;
+            }
+        };
+        guard.clone()
+    };
+
+    let Some(path) = path else {
+        // Файл ещё не был открыт в этой сессии — автосохранение не применимо.
+        return;
+    };
+
+    let meta: Option<(Option<i32>, Option<String>)> =
+        match sqlx::query_as("SELECT tournament_id, tournament_name FROM tournament_meta WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Автосохранение: не удалось прочитать tournament_meta: {}", e);
+                return;
+            }
+        };
+
+    let (tournament_id, tournament_name) = match meta {
+        Some((id, name)) => (id.unwrap_or(1), name.unwrap_or_else(|| "Турнир".to_string())),
+        None => (1, "Турнир".to_string()),
+    };
+
+    let json = match export_tournament_json(pool, tournament_id, &tournament_name).await {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Автосохранение: не удалось собрать JSON турнира: {}", e);
+            return;
+        }
+    };
+
+    let pretty = match serde_json::to_string_pretty(&json) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Автосохранение: не удалось сериализовать JSON турнира: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = std::fs::write(&path, pretty) {
+        eprintln!("Автосохранение: не удалось записать файл {}: {}", path.display(), e);
+    }
+}
+
 #[tauri::command]
 async fn start_match(match_id: i32, state: State<'_, AppState>) -> Result<(), String> {
     let pool = &state.db_pool;
@@ -495,6 +719,7 @@ async fn start_match(match_id: i32, state: State<'_, AppState>) -> Result<(), St
         .map_err(|e| e.to_string())?;
 
     update_bracket_status(bracket_id, pool).await?;
+    autosave_tournament(pool, &state.tournament_file_path).await;
 
     Ok(())
 }
@@ -538,6 +763,7 @@ async fn update_match_score(
     .map_err(|e| e.to_string())?;
 
     update_bracket_status(bracket_id, pool).await?;
+    autosave_tournament(pool, &state.tournament_file_path).await;
 
     Ok(())
 }
@@ -687,6 +913,8 @@ async fn batch_update_match(
         })
         .collect();
 
+    autosave_tournament(pool, &state.tournament_file_path).await;
+
     Ok(events)
 }
 
@@ -709,6 +937,8 @@ async fn undo_last_event(match_id: i32, state: State<'_, AppState>) -> Result<()
             .await
             .map_err(|e| e.to_string())?;
     }
+
+    autosave_tournament(pool, &state.tournament_file_path).await;
 
     Ok(())
 }
@@ -752,6 +982,7 @@ async fn cancel_match(match_id: i32, state: State<'_, AppState>) -> Result<(), S
         .map_err(|e| e.to_string())?;
 
     update_bracket_status(bracket_id, pool).await?;
+    autosave_tournament(pool, &state.tournament_file_path).await;
 
     Ok(())
 }
@@ -830,7 +1061,9 @@ async fn finish_match(
     final_blue_score: i32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    finish_match_core(&state.db_pool, match_id, winner_id, result_type, final_red_score, final_blue_score).await
+    finish_match_core(&state.db_pool, match_id, winner_id, result_type, final_red_score, final_blue_score).await?;
+    autosave_tournament(&state.db_pool, &state.tournament_file_path).await;
+    Ok(())
 }
 
 async fn finish_match_core(
@@ -998,7 +1231,9 @@ async fn finish_match_core(
 
 #[tauri::command]
 async fn undo_finished_match(match_id: i32, state: State<'_, AppState>) -> Result<(), String> {
-    undo_finished_match_core(&state.db_pool, match_id).await
+    undo_finished_match_core(&state.db_pool, match_id).await?;
+    autosave_tournament(&state.db_pool, &state.tournament_file_path).await;
+    Ok(())
 }
 
 async fn undo_finished_match_core(pool: &SqlitePool, match_id: i32) -> Result<(), String> {
@@ -1130,7 +1365,9 @@ async fn edit_match_participant(
     club_name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    edit_match_participant_core(&state.db_pool, match_id, slot, &action, full_name, club_name).await
+    edit_match_participant_core(&state.db_pool, match_id, slot, &action, full_name, club_name).await?;
+    autosave_tournament(&state.db_pool, &state.tournament_file_path).await;
+    Ok(())
 }
 
 /// Синтетический id для вручную добавленных (не из исходного файла турнира)
@@ -1209,7 +1446,9 @@ async fn swap_match_participants(
     slot_b: i32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    swap_match_participants_core(&state.db_pool, match_id_a, slot_a, match_id_b, slot_b).await
+    swap_match_participants_core(&state.db_pool, match_id_a, slot_a, match_id_b, slot_b).await?;
+    autosave_tournament(&state.db_pool, &state.tournament_file_path).await;
+    Ok(())
 }
 
 async fn swap_match_participants_core(
@@ -1306,6 +1545,7 @@ pub fn run() {
 
             app.manage(AppState {
                 db_pool: Arc::new(db_pool),
+                tournament_file_path: Arc::new(Mutex::new(None)),
             });
 
             Ok(())
@@ -1895,5 +2135,153 @@ mod tests {
 
         let result = swap_match_participants_core(&pool, 1001, 1, 1002, 1).await;
         assert!(result.is_err());
+    }
+
+    // ===== 7. Автосохранение: export_tournament_json / round-trip =====
+
+    #[tokio::test]
+    async fn export_tournament_json_produces_expected_shape() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let exported = export_tournament_json(&pool, 42, "Тестовый турнир").await.unwrap();
+
+        assert_eq!(exported["tournament"]["id"], 42);
+        assert_eq!(exported["tournament"]["name"], "Тестовый турнир");
+        assert!(exported["scoring_config"].is_object());
+
+        let brackets = exported["brackets"].as_array().unwrap();
+        assert_eq!(brackets.len(), 1);
+
+        let bracket = &brackets[0];
+        assert_eq!(bracket["id"], 100);
+        assert_eq!(bracket["category_name"], "Мужчины до 70 кг");
+        assert_eq!(bracket["sport_name"], "Грэпплинг");
+        assert_eq!(bracket["gender"], "male");
+        assert_eq!(bracket["bracket_type"], "single_elimination");
+        assert_eq!(bracket["is_published"], true);
+
+        let matches = bracket["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 3);
+
+        let match1001 = matches.iter().find(|m| m["id"] == 1001).unwrap();
+        assert_eq!(match1001["participant1"]["full_name"], "Иванов Иван Иванович");
+        assert_eq!(match1001["participant1"]["club_name"], "Клуб А");
+        assert_eq!(match1001["participant2"]["full_name"], "Петров Пётр Петрович");
+        assert_eq!(match1001["status"], "scheduled");
+
+        // Финал изначально без участников — оба поля должны быть null, а не "объект с null-полями".
+        let match1003 = matches.iter().find(|m| m["id"] == 1003).unwrap();
+        assert!(match1003["participant1"].is_null());
+        assert!(match1003["participant2"].is_null());
+    }
+
+    #[tokio::test]
+    async fn export_tournament_json_with_no_brackets_does_not_fail() {
+        let pool = memory_pool().await;
+        // Ни одна сетка не загружена — brackets_cache пуста.
+        let exported = export_tournament_json(&pool, 1, "Пустой турнир").await.unwrap();
+
+        assert_eq!(exported["tournament"]["id"], 1);
+        let brackets = exported["brackets"].as_array().unwrap();
+        assert!(brackets.is_empty());
+        // scoring_config должен быть дефолтным (в tournament_meta ничего нет)
+        assert!(exported["scoring_config"].is_object());
+    }
+
+    #[tokio::test]
+    async fn export_then_reimport_preserves_score_and_status_changes() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        // Меняем состояние турнира через существующие команды:
+        // 1) стартуем и обновляем счёт матча 1001 напрямую (как update_match_score)
+        sqlx::query(
+            "UPDATE matches_cache SET status = 'in_progress', score_p1 = 3, score_p2 = 1, updated_at = datetime('now') WHERE match_id = 1001",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        update_bracket_status(100, &pool).await.unwrap();
+
+        // 2) завершаем матч 1001 с победителем participant1 (id=1) — с автопродвижением в финал
+        // (final_red_score=1 -> score_p2, final_blue_score=5 -> score_p1)
+        finish_match_core(&pool, 1001, Some(1), "points".to_string(), 1, 5).await.unwrap();
+
+        // 3) редактируем участника в финале (слот 2, изначально пустой)
+        edit_match_participant_core(&pool, 1003, 2, "set", Some("Запасной Игрок".to_string()), Some("Клуб Р".to_string()))
+            .await
+            .unwrap();
+
+        // Экспортируем текущее состояние в JSON.
+        let exported = export_tournament_json(&pool, 42, "Тестовый турнир").await.unwrap();
+        let exported_text = serde_json::to_string_pretty(&exported).unwrap();
+
+        // Реимпортируем в свежий пул (как будто открыли файл заново после перезапуска).
+        let pool2 = memory_pool().await;
+        let reloaded = load_tournament_json(&exported_text, &pool2).await.unwrap();
+
+        assert_eq!(reloaded.tournament["id"], 42);
+        assert_eq!(reloaded.brackets.len(), 1);
+
+        // Проверяем, что счёт/статус/победитель/продвижение победителя сохранились.
+        let (status, winner_id, score_p1, score_p2): (String, Option<i32>, i32, i32) = sqlx::query_as(
+            "SELECT status, winner_id, score_p1, score_p2 FROM matches_cache WHERE match_id = 1001",
+        )
+        .fetch_one(&pool2)
+        .await
+        .unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(winner_id, Some(1));
+        assert_eq!(score_p1, 5);
+        assert_eq!(score_p2, 1);
+
+        // Продвижение в финал сохранилось.
+        let (final_p1_id, final_p1_name, final_p2_name): (Option<i32>, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT p1_id, p1_name, p2_name FROM matches_cache WHERE match_id = 1003")
+                .fetch_one(&pool2)
+                .await
+                .unwrap();
+        assert_eq!(final_p1_id, Some(1));
+        assert_eq!(final_p1_name.as_deref(), Some("Иванов Иван Иванович"));
+        // Ручная правка участника в финале тоже сохранилась.
+        assert_eq!(final_p2_name.as_deref(), Some("Запасной Игрок"));
+
+        // Статус сетки тоже актуален (in_progress, т.к. не все матчи завершены).
+        let (bracket_status,): (String,) = sqlx::query_as("SELECT status FROM brackets_cache WHERE bracket_id = 100")
+            .fetch_one(&pool2)
+            .await
+            .unwrap();
+        assert_eq!(bracket_status, "in_progress");
+    }
+
+    #[tokio::test]
+    async fn autosave_tournament_writes_file_when_path_is_known() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let tmp_dir = std::env::temp_dir();
+        let file_path = tmp_dir.join(format!("setki_autosave_test_{}.json", std::process::id()));
+        let path_state: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(Some(file_path.clone())));
+
+        autosave_tournament(&pool, &path_state).await;
+
+        let written = std::fs::read_to_string(&file_path).expect("файл должен быть записан");
+        let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(parsed["tournament"]["id"], 42);
+        assert_eq!(parsed["brackets"].as_array().unwrap().len(), 1);
+
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[tokio::test]
+    async fn autosave_tournament_does_nothing_when_path_is_unknown() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let path_state: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+
+        // Не должно паниковать и не должно возвращать ошибку (autosave_tournament -> ()).
+        autosave_tournament(&pool, &path_state).await;
     }
 }

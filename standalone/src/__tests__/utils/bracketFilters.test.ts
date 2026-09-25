@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { filterBrackets, getUniqueSports, getUniqueGenders, getGenderLabel, DEFAULT_BRACKET_FILTERS } from '../../utils/bracketFilters';
+import {
+  filterBrackets,
+  getUniqueSports,
+  getUniqueGenders,
+  getGenderLabel,
+  getStatusFilterLabel,
+  DEFAULT_BRACKET_FILTERS,
+} from '../../utils/bracketFilters';
 import type { Bracket, Match } from '../../types';
 
 function makeMatch(overrides: Partial<Match>): Match {
@@ -108,7 +115,35 @@ describe('bracketFilters', () => {
         makeBracket({ id: 2, category_name: 'Мужчины до 80 кг', sport_id: 2, gender: 'male' }),
         makeBracket({ id: 3, category_name: 'Женщины до 60 кг', sport_id: 1, gender: 'female' }),
       ];
-      const result = filterBrackets(brackets, { searchQuery: 'мужчины', sportId: 1, gender: 'male' });
+      const result = filterBrackets(brackets, {
+        ...DEFAULT_BRACKET_FILTERS,
+        searchQuery: 'мужчины',
+        sportId: 1,
+        gender: 'male',
+      });
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(1);
+    });
+
+    it('filters by status', () => {
+      const brackets = [
+        makeBracket({ id: 1, status: 'not_started' }),
+        makeBracket({ id: 2, status: 'in_progress' }),
+        makeBracket({ id: 3, status: 'completed' }),
+      ];
+
+      expect(filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, status: 'not_started' }).map((b) => b.id)).toEqual([1]);
+      expect(filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, status: 'in_progress' }).map((b) => b.id)).toEqual([2]);
+      expect(filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, status: 'completed' }).map((b) => b.id)).toEqual([3]);
+      expect(filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, status: 'all' })).toHaveLength(3);
+    });
+
+    it('combines status filter with search', () => {
+      const brackets = [
+        makeBracket({ id: 1, category_name: 'Мужчины до 70 кг', status: 'in_progress' }),
+        makeBracket({ id: 2, category_name: 'Мужчины до 80 кг', status: 'not_started' }),
+      ];
+      const result = filterBrackets(brackets, { ...DEFAULT_BRACKET_FILTERS, searchQuery: 'мужчины', status: 'in_progress' });
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe(1);
     });
@@ -152,6 +187,15 @@ describe('bracketFilters', () => {
 
     it('returns the raw value for unknown genders', () => {
       expect(getGenderLabel('other')).toBe('other');
+    });
+  });
+
+  describe('getStatusFilterLabel', () => {
+    it('translates known statuses', () => {
+      expect(getStatusFilterLabel('all')).toBe('Все');
+      expect(getStatusFilterLabel('not_started')).toBe('Не начатые');
+      expect(getStatusFilterLabel('in_progress')).toBe('В процессе');
+      expect(getStatusFilterLabel('completed')).toBe('Завершённые');
     });
   });
 });

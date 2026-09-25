@@ -1,14 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent } from './ui/Card';
 import { Button } from './ui/Button';
 import { useDebounce } from '../hooks/useDebounce';
+import { getCachedBrackets } from '../services/api';
 import {
   filterBrackets,
   getUniqueSports,
   getUniqueGenders,
   getGenderLabel,
+  getStatusFilterLabel,
   DEFAULT_BRACKET_FILTERS,
   type BracketListFilters,
+  type BracketStatusFilter,
 } from '../utils/bracketFilters';
 import type { Bracket, Tournament } from '../types';
 
@@ -17,7 +20,15 @@ interface BracketListScreenProps {
   brackets: Bracket[];
   onSelectBracket: (bracket: Bracket) => void;
   onReopenFile: () => void;
+  /**
+   * Id сетки, из которой пользователь только что вернулся (переход bracket -> bracket-list) —
+   * если задан, список при монтировании прокручивается к этой карточке. Если сетка
+   * отфильтрована и её нет среди видимых карточек — ничего не происходит (не крашим).
+   */
+  scrollToBracketId?: number | null;
 }
+
+const STATUS_FILTER_OPTIONS: BracketStatusFilter[] = ['all', 'not_started', 'in_progress', 'completed'];
 
 const statusLabels: Record<Bracket['status'], string> = {
   not_started: 'Не начата',
@@ -31,28 +42,90 @@ const statusLabels: Record<Bracket['status'], string> = {
  * промежуточный уровень только мешал). Поддерживает поиск по названию
  * категории и по именам участников, а также фильтры по виду спорта и полу.
  */
-export function BracketListScreen({ tournament, brackets, onSelectBracket, onReopenFile }: BracketListScreenProps) {
+export function BracketListScreen({
+  tournament,
+  brackets,
+  onSelectBracket,
+  onReopenFile,
+  scrollToBracketId,
+}: BracketListScreenProps) {
   const [filters, setFilters] = useState<BracketListFilters>(DEFAULT_BRACKET_FILTERS);
   const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebounce(searchInput, 300);
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Статус сетки на момент открытия файла быстро устаревает (матчи начинаются/завершаются
+  // без перезагрузки файла) — поэтому подгружаем live-статус из SQLite-кэша через
+  // get_cached_brackets и мержим его поверх статичных данных из tournamentData.brackets.
+  // Состав участников (matches) для поиска оставляем как есть из исходной загрузки —
+  // get_cached_brackets вложенные матчи не отдаёт, а актуализировать состав участников
+  // в реальном времени на списке сеток не критично.
+  const [liveStatusById, setLiveStatusById] = useState<Map<number, Bracket['status']>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getCachedBrackets()
+      .then((liveBrackets) => {
+        if (cancelled) return;
+        const map = new Map<number, Bracket['status']>();
+        for (const b of liveBrackets) {
+          map.set(b.id, b.status);
+        }
+        setLiveStatusById(map);
+      })
+      .catch(() => {
+        // Если live-статус не удалось получить — просто остаёмся со статичными
+        // данными из tournamentData.brackets (не критично для работы экрана).
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // Рефетчим при каждом монтировании экрана — то есть при первой загрузке файла
+    // и при каждом возврате из экрана сетки (App.tsx размонтирует/монтирует этот компонент).
+  }, []);
+
+  const bracketsWithLiveStatus = useMemo(() => {
+    if (liveStatusById.size === 0) return brackets;
+    return brackets.map((b) => {
+      const liveStatus = liveStatusById.get(b.id);
+      return liveStatus && liveStatus !== b.status ? { ...b, status: liveStatus } : b;
+    });
+  }, [brackets, liveStatusById]);
 
   const activeFilters: BracketListFilters = { ...filters, searchQuery: debouncedSearch };
 
-  const uniqueSports = useMemo(() => getUniqueSports(brackets), [brackets]);
-  const uniqueGenders = useMemo(() => getUniqueGenders(brackets), [brackets]);
+  const uniqueSports = useMemo(() => getUniqueSports(bracketsWithLiveStatus), [bracketsWithLiveStatus]);
+  const uniqueGenders = useMemo(() => getUniqueGenders(bracketsWithLiveStatus), [bracketsWithLiveStatus]);
 
   const filteredBrackets = useMemo(
-    () => filterBrackets(brackets, activeFilters),
+    () => filterBrackets(bracketsWithLiveStatus, activeFilters),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [brackets, activeFilters.sportId, activeFilters.gender, activeFilters.searchQuery]
+    [bracketsWithLiveStatus, activeFilters.sportId, activeFilters.gender, activeFilters.status, activeFilters.searchQuery]
   );
 
-  const hasActiveFilters = searchInput !== '' || filters.sportId !== 'all' || filters.gender !== 'all';
+  const hasActiveFilters =
+    searchInput !== '' || filters.sportId !== 'all' || filters.gender !== 'all' || filters.status !== 'all';
 
   const handleResetFilters = () => {
     setSearchInput('');
     setFilters(DEFAULT_BRACKET_FILTERS);
   };
+
+  // Прокрутка к сетке, из которой только что вернулись (см. App.tsx). Если сетка
+  // отфильтрована и её карточки нет в DOM — querySelector вернёт null и мы просто
+  // ничего не делаем.
+  useEffect(() => {
+    if (scrollToBracketId == null) return;
+    const container = listContainerRef.current;
+    if (!container) return;
+    const target = container.querySelector<HTMLElement>(`[data-bracket-id="${scrollToBracketId}"]`);
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'auto', block: 'center' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToBracketId, filteredBrackets]);
 
   return (
     <div className="h-screen w-full flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-100">
@@ -81,6 +154,21 @@ export function BracketListScreen({ tournament, brackets, onSelectBracket, onReo
                 Сбросить
               </Button>
             )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Статус:</span>
+            {STATUS_FILTER_OPTIONS.map((status) => (
+              <button
+                key={status}
+                onClick={() => setFilters((prev) => ({ ...prev, status }))}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                  filters.status === status ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {getStatusFilterLabel(status)}
+              </button>
+            ))}
           </div>
 
           {uniqueSports.length > 1 && (
@@ -135,8 +223,8 @@ export function BracketListScreen({ tournament, brackets, onSelectBracket, onReo
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
-        {brackets.length === 0 ? (
+      <div ref={listContainerRef} className="flex-1 overflow-auto p-6">
+        {bracketsWithLiveStatus.length === 0 ? (
           <p className="text-gray-500 text-center mt-12">В этом турнире нет сеток</p>
         ) : filteredBrackets.length === 0 ? (
           <div className="text-center mt-12">
@@ -150,6 +238,7 @@ export function BracketListScreen({ tournament, brackets, onSelectBracket, onReo
             {filteredBrackets.map((bracket) => (
               <Card
                 key={bracket.id}
+                data-bracket-id={bracket.id}
                 variant="bordered"
                 hoverable
                 interactive
