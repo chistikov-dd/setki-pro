@@ -203,7 +203,10 @@ describe('BracketListScreen', () => {
     );
 
     await screen.findByText('Категория А');
-    const inProgressPill = screen.getByRole('button', { name: 'В процессе' });
+    // Пилюли фильтров скрыты по умолчанию (см. "скрыть выбор фильтров") — сначала
+    // нужно их раскрыть.
+    screen.getByRole('button', { name: 'Показать фильтры' }).click();
+    const inProgressPill = await screen.findByRole('button', { name: 'В процессе' });
     inProgressPill.click();
 
     await waitFor(() => {

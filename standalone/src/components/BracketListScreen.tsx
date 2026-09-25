@@ -96,6 +96,10 @@ export function BracketListScreen({
 }: BracketListScreenProps) {
   const debouncedSearch = useDebounce(searchInput, 300);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  // Пилюли фильтров (статус/стадия/спорт/пол/возраст/характеристики) можно свернуть,
+  // чтобы они не занимали место и не мешали видеть список сеток — строка поиска и кнопка
+  // "Сбросить" при этом остаются видимыми всегда, независимо от этого состояния.
+  const [showFilters, setShowFilters] = useState(false);
 
   // Статус сетки и состав/статусы её матчей на момент открытия файла быстро устаревают
   // (матчи начинаются/завершаются без перезагрузки файла) — поэтому подгружаем live-данные
@@ -250,6 +254,9 @@ export function BracketListScreen({
               placeholder="Поиск по категории или участнику..."
               className="flex-1 px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            <Button variant="secondary" size="sm" onClick={() => setShowFilters((prev) => !prev)}>
+              {showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
+            </Button>
             {hasActiveFilters && (
               <Button variant="secondary" size="sm" onClick={handleResetFilters}>
                 Сбросить
@@ -257,154 +264,158 @@ export function BracketListScreen({
             )}
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Статус:</span>
-            {STATUS_FILTER_OPTIONS.map((status) => (
-              <button
-                key={status}
-                onClick={() => onFiltersChange({ ...filters, status })}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                  filters.status === status ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {status !== 'all' && (
-                  <span className={`inline-block w-2 h-2 rounded-full ${statusDotClasses[status]}`} />
-                )}
-                {getStatusFilterLabel(status)}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Стадия:</span>
-            {STAGE_FILTER_OPTIONS.map((stage) => (
-              <button
-                key={stage}
-                onClick={() => onFiltersChange({ ...filters, stage })}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                  filters.stage === stage ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {getStageFilterLabel(stage)}
-              </button>
-            ))}
-          </div>
-
-          {availableCharacteristics.map((field) => {
-            const values = characteristicValuesByKey.get(field.key) ?? [];
-            if (values.length <= 1) return null;
-            const selected = filters.characteristics[field.key] ?? 'all';
-            return (
-              <div key={field.key} className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">
-                  {field.label || field.key}:
-                </span>
-                <button
-                  onClick={() =>
-                    onFiltersChange({
-                      ...filters,
-                      characteristics: { ...filters.characteristics, [field.key]: 'all' },
-                    })
-                  }
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                    selected === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Все
-                </button>
-                {values.map((value) => (
+          {showFilters && (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Статус:</span>
+                {STATUS_FILTER_OPTIONS.map((status) => (
                   <button
-                    key={value}
-                    onClick={() =>
-                      onFiltersChange({
-                        ...filters,
-                        characteristics: { ...filters.characteristics, [field.key]: value },
-                      })
-                    }
-                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                      selected === value ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    key={status}
+                    onClick={() => onFiltersChange({ ...filters, status })}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      filters.status === status ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
-                    {value}
+                    {status !== 'all' && (
+                      <span className={`inline-block w-2 h-2 rounded-full ${statusDotClasses[status]}`} />
+                    )}
+                    {getStatusFilterLabel(status)}
                   </button>
                 ))}
               </div>
-            );
-          })}
 
-          {uniqueSports.length > 1 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
-              <button
-                onClick={() => onFiltersChange({ ...filters, sportId: 'all' })}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                  filters.sportId === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Все
-              </button>
-              {uniqueSports.map((sport) => (
-                <button
-                  key={sport.id}
-                  onClick={() => onFiltersChange({ ...filters, sportId: sport.id })}
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                    filters.sportId === sport.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {sport.name}
-                </button>
-              ))}
-            </div>
-          )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Стадия:</span>
+                {STAGE_FILTER_OPTIONS.map((stage) => (
+                  <button
+                    key={stage}
+                    onClick={() => onFiltersChange({ ...filters, stage })}
+                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      filters.stage === stage ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {getStageFilterLabel(stage)}
+                  </button>
+                ))}
+              </div>
 
-          {uniqueGenders.length > 1 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Пол:</span>
-              <button
-                onClick={() => onFiltersChange({ ...filters, gender: 'all' })}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                  filters.gender === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Все
-              </button>
-              {uniqueGenders.map((gender) => (
-                <button
-                  key={gender}
-                  onClick={() => onFiltersChange({ ...filters, gender })}
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                    filters.gender === gender ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {getGenderLabel(gender)}
-                </button>
-              ))}
-            </div>
-          )}
+              {availableCharacteristics.map((field) => {
+                const values = characteristicValuesByKey.get(field.key) ?? [];
+                if (values.length <= 1) return null;
+                const selected = filters.characteristics[field.key] ?? 'all';
+                return (
+                  <div key={field.key} className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm text-gray-700 font-medium whitespace-nowrap">
+                      {field.label || field.key}:
+                    </span>
+                    <button
+                      onClick={() =>
+                        onFiltersChange({
+                          ...filters,
+                          characteristics: { ...filters.characteristics, [field.key]: 'all' },
+                        })
+                      }
+                      className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                        selected === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Все
+                    </button>
+                    {values.map((value) => (
+                      <button
+                        key={value}
+                        onClick={() =>
+                          onFiltersChange({
+                            ...filters,
+                            characteristics: { ...filters.characteristics, [field.key]: value },
+                          })
+                        }
+                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                          selected === value ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
 
-          {showAgeFilter && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Возраст:</span>
-              <input
-                type="number"
-                min={0}
-                inputMode="numeric"
-                value={filters.ageFrom ?? ''}
-                onChange={(e) => onFiltersChange({ ...filters, ageFrom: parseAgeInput(e.target.value) })}
-                placeholder="от"
-                className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <span className="text-gray-400">—</span>
-              <input
-                type="number"
-                min={0}
-                inputMode="numeric"
-                value={filters.ageTo ?? ''}
-                onChange={(e) => onFiltersChange({ ...filters, ageTo: parseAgeInput(e.target.value) })}
-                placeholder="до"
-                className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+              {uniqueSports.length > 1 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Вид спорта:</span>
+                  <button
+                    onClick={() => onFiltersChange({ ...filters, sportId: 'all' })}
+                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      filters.sportId === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Все
+                  </button>
+                  {uniqueSports.map((sport) => (
+                    <button
+                      key={sport.id}
+                      onClick={() => onFiltersChange({ ...filters, sportId: sport.id })}
+                      className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                        filters.sportId === sport.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {sport.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {uniqueGenders.length > 1 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Пол:</span>
+                  <button
+                    onClick={() => onFiltersChange({ ...filters, gender: 'all' })}
+                    className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                      filters.gender === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Все
+                  </button>
+                  {uniqueGenders.map((gender) => (
+                    <button
+                      key={gender}
+                      onClick={() => onFiltersChange({ ...filters, gender })}
+                      className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                        filters.gender === gender ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {getGenderLabel(gender)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {showAgeFilter && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-gray-700 font-medium whitespace-nowrap">Возраст:</span>
+                  <input
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
+                    value={filters.ageFrom ?? ''}
+                    onChange={(e) => onFiltersChange({ ...filters, ageFrom: parseAgeInput(e.target.value) })}
+                    placeholder="от"
+                    className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="text-gray-400">—</span>
+                  <input
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
+                    value={filters.ageTo ?? ''}
+                    onChange={(e) => onFiltersChange({ ...filters, ageTo: parseAgeInput(e.target.value) })}
+                    placeholder="до"
+                    className="w-20 px-2 py-1 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
