@@ -148,6 +148,15 @@ fn default_scoring_config() -> serde_json::Value {
     })
 }
 
+/// Распарсить сериализованный scoring_config (как хранится в tournament_meta.scoring_config)
+/// в JSON-значение, откатываясь на дефолтную конфигурацию если строка отсутствует или
+/// повреждена. Общая логика для export_tournament_json (автосохранение) и
+/// get_tournament_meta (восстановление сессии после F5/Ctrl+R).
+fn parse_scoring_config(text: Option<&str>) -> serde_json::Value {
+    text.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or_else(default_scoring_config)
+}
+
 /// Прочитать и распарсить локальный JSON-файл турнира (тот же формат, что отдаёт
 /// эндпоинт /desktop/tournaments/{id}/download в основном проекте), и сохранить
 /// сетки+матчи в локальный SQLite кэш той же (урезанной) схемы.
@@ -388,21 +397,30 @@ struct TournamentMeta {
     tournament_id: Option<i32>,
     tournament_name: Option<String>,
     judge_name: Option<String>,
+    /// Конфигурация начисления баллов (распарсенная из tournament_meta.scoring_config).
+    /// Нужна для восстановления сессии после F5/Ctrl+R (перезагрузка webview без
+    /// перезапуска процесса Tauri) — MatchScreen требует scoring_config, а при таком
+    /// reload React-состояние обнуляется, но SQLite-кэш остаётся на диске/в памяти.
+    /// Если в БД ничего нет — отдаём дефолтную конфигурацию (как и export_tournament_json).
+    scoring_config: serde_json::Value,
 }
 
 #[tauri::command]
 async fn get_tournament_meta(state: State<'_, AppState>) -> Result<Option<TournamentMeta>, String> {
-    let row: Option<(Option<i32>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT tournament_id, tournament_name, judge_name FROM tournament_meta WHERE id = 1",
+    let row: Option<(Option<i32>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT tournament_id, tournament_name, judge_name, scoring_config FROM tournament_meta WHERE id = 1",
     )
     .fetch_optional(state.db_pool.as_ref())
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok(row.map(|(tournament_id, tournament_name, judge_name)| TournamentMeta {
-        tournament_id,
-        tournament_name,
-        judge_name,
+    Ok(row.map(|(tournament_id, tournament_name, judge_name, scoring_config_text)| {
+        TournamentMeta {
+            tournament_id,
+            tournament_name,
+            judge_name,
+            scoring_config: parse_scoring_config(scoring_config_text.as_deref()),
+        }
     }))
 }
 
@@ -629,10 +647,7 @@ async fn export_tournament_json(
             .map_err(|e| e.to_string())?
             .flatten();
 
-    let scoring_config = scoring_config_text
-        .as_deref()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .unwrap_or_else(default_scoring_config);
+    let scoring_config = parse_scoring_config(scoring_config_text.as_deref());
 
     Ok(serde_json::json!({
         "tournament": { "id": tournament_id, "name": tournament_name },
@@ -1705,6 +1720,49 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let category_name: Option<String> = rows[0].get("category_name");
         assert_eq!(category_name.as_deref(), Some("Мужчины до 70 кг"));
+    }
+
+    // ===== 2b. parse_scoring_config / get_tournament_meta (восстановление сессии после F5) =====
+
+    #[test]
+    fn parse_scoring_config_returns_default_when_text_is_none() {
+        let parsed = parse_scoring_config(None);
+        assert_eq!(parsed, default_scoring_config());
+    }
+
+    #[test]
+    fn parse_scoring_config_returns_default_when_text_is_invalid_json() {
+        let parsed = parse_scoring_config(Some("not valid json"));
+        assert_eq!(parsed, default_scoring_config());
+    }
+
+    #[test]
+    fn parse_scoring_config_parses_valid_json() {
+        let parsed = parse_scoring_config(Some(r#"{"sport_id": 7, "actions": [], "warnings": {"enabled": false, "max_count": 1}}"#));
+        assert_eq!(parsed["sport_id"], 7);
+        assert_eq!(parsed["warnings"]["enabled"], false);
+    }
+
+    /// Регрессия: после load_tournament_json (загрузка файла) tournament_meta должна
+    /// содержать scoring_config, читаемый тем же способом, что использует команда
+    /// get_tournament_meta — это то, что позволяет восстановить MatchScreen после
+    /// F5/Ctrl+R (перезагрузка webview без перезапуска процесса Tauri), не имея под
+    /// рукой исходного JSON-файла турнира.
+    #[tokio::test]
+    async fn tournament_meta_scoring_config_survives_load_and_is_parseable() {
+        let pool = memory_pool().await;
+        load_tournament_json(&sample_tournament_json(), &pool).await.unwrap();
+
+        let scoring_config_text: Option<String> =
+            sqlx::query_scalar("SELECT scoring_config FROM tournament_meta WHERE id = 1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+                .flatten();
+
+        let scoring_config = parse_scoring_config(scoring_config_text.as_deref());
+        assert!(scoring_config.is_object());
+        assert!(scoring_config["actions"].is_array());
     }
 
     // ===== 3. Матчи: старт, счёт, события, undo последнего события =====

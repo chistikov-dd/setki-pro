@@ -2,30 +2,13 @@ import { useEffect, useState, useCallback } from 'react';
 import { Button } from './ui/Button';
 import { TournamentBracketView } from './brackets/TournamentBracketView';
 import { getBracketMatches } from '../services/api';
+import { normalizeMatch } from '../utils/normalizeMatch';
 import type { Bracket, Match } from '../types';
 
 interface BracketScreenProps {
   bracket: Bracket;
   onOpenMatch: (match: Match) => void;
   onBack: () => void;
-}
-
-function normalizeMatch(raw: any): Match {
-  return {
-    id: raw.id,
-    bracket_id: raw.bracket_id,
-    participant1: raw.participant1 ?? undefined,
-    participant2: raw.participant2 ?? undefined,
-    winner_id: raw.winner_id ?? undefined,
-    round_number: raw.round_number,
-    match_number: raw.match_number,
-    status: raw.status,
-    score_participant1: raw.score_participant1 ?? 0,
-    score_participant2: raw.score_participant2 ?? 0,
-    warnings_participant1: raw.warnings_participant1 ?? 0,
-    warnings_participant2: raw.warnings_participant2 ?? 0,
-    result_type: raw.result_type ?? undefined,
-  };
 }
 
 export function BracketScreen({ bracket, onOpenMatch, onBack }: BracketScreenProps) {

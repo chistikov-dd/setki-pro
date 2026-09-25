@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { Bracket, LoadedTournamentFile, MatchEvent } from '../types';
+import type { Bracket, LoadedTournamentFile, MatchEvent, ScoringConfig } from '../types';
 
 /**
  * Открыть системный диалог выбора файла и загрузить турнир из локального JSON.
@@ -46,9 +46,16 @@ export async function hasLoadedTournament(): Promise<boolean> {
 }
 
 /**
- * Получить метаданные загруженного турнира (имя турнира, опциональное имя судьи).
+ * Получить метаданные загруженного турнира (имя турнира, опциональное имя судьи,
+ * а также scoring_config — нужна для восстановления сессии после F5/Ctrl+R, когда
+ * React-состояние обнуляется, но SQLite-кэш в Tauri-процессе остаётся загруженным).
  */
-export async function getTournamentMeta(): Promise<{ tournament_id: number | null; tournament_name: string | null; judge_name: string | null } | null> {
+export async function getTournamentMeta(): Promise<{
+  tournament_id: number | null;
+  tournament_name: string | null;
+  judge_name: string | null;
+  scoring_config: ScoringConfig;
+} | null> {
   return await invoke('get_tournament_meta');
 }
 

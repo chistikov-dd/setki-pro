@@ -36,6 +36,30 @@ const statusLabels: Record<Bracket['status'], string> = {
   completed: 'Завершена',
 };
 
+// Цветовая семантика согласована с остальным приложением — см. MatchCard.tsx,
+// где идущий матч подсвечивается оранжевым (border-orange-500 / shadow-orange-200).
+const statusBadgeClasses: Record<Bracket['status'], string> = {
+  not_started: 'bg-gray-100 text-gray-600',
+  in_progress: 'bg-orange-100 text-orange-700',
+  completed: 'bg-green-100 text-green-700',
+};
+
+const statusDotClasses: Record<Bracket['status'], string> = {
+  not_started: 'bg-gray-400',
+  in_progress: 'bg-orange-500',
+  completed: 'bg-green-500',
+};
+
+function StatusBadge({ status }: { status: Bracket['status'] }) {
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClasses[status]}`}
+    >
+      {statusLabels[status]}
+    </span>
+  );
+}
+
 /**
  * Единый экран списка сеток турнира (без промежуточного экрана "категорий" —
  * в подавляющем большинстве турниров категория 1:1 с сеткой, поэтому
@@ -162,10 +186,13 @@ export function BracketListScreen({
               <button
                 key={status}
                 onClick={() => setFilters((prev) => ({ ...prev, status }))}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
                   filters.status === status ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
+                {status !== 'all' && (
+                  <span className={`inline-block w-2 h-2 rounded-full ${statusDotClasses[status]}`} />
+                )}
                 {getStatusFilterLabel(status)}
               </button>
             ))}
@@ -246,7 +273,7 @@ export function BracketListScreen({
               >
                 <CardContent>
                   <h2 className="text-base font-semibold text-gray-900 mb-1">{bracket.category_name}</h2>
-                  <p className="text-sm text-gray-500">{statusLabels[bracket.status]}</p>
+                  <StatusBadge status={bracket.status} />
                   {bracket.sport_name && (
                     <p className="text-xs text-gray-400 mt-1">{bracket.sport_name}</p>
                   )}
